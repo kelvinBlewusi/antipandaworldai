@@ -2526,6 +2526,10 @@ checks and taps.
     Center for what a tool does), 224/238, 1.02 s. Runs 5ab3b0c8,
     b4bf6e69 (front door), a1f03c0f, c63c7322, b6637485, 27680c18,
     0cff6f60.
+  - With `draft_text` and the edit tool requiring `products` and
+    `changes` (its edits had put the values in `said`), 240 cases: agent
+    230/240 (one case timed out), median 1.04 s, slowest tenth 1.42 s;
+    front door 225/240, 1.32 s. Runs a055f494, c7c74598.
   - Cost at full price $2.92 per 1,000 messages (11.3k prompt tokens a
     call against the front door's two 2.5k calls); about 70% of those
     tokens are Gemini cache hits, billed at a reduced rate the ledger
