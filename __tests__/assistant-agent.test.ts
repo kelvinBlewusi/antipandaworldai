@@ -61,6 +61,12 @@ describe("the tools", () => {
     expect(names).toEqual(expect.arrayContaining(["live_change", "bulk", "content_change", "fix_rejected", "add_size", "add_photos", "draft_text", "clarify", "reply", "cannot"]));
   });
 
+  it("asks for a draft edit's values in changes, never in said (10 Oct runs: \"Price: 130gh, Sizes: …\" landed in said)", () => {
+    const edit = ACTION_TOOLS.find((t) => t.name === "edit")!;
+    const item = (edit.parameters as { properties: { edits: { items: { required?: string[] } } } }).properties.edits.items;
+    expect(item.required).toEqual(["products", "changes"]);
+  });
+
   it("puts a call back in the chat's own action shape", () => {
     expect(actionJson("live_change", { product: "kettle", end_sale: true })).toEqual({ type: "live_change", product: "kettle", sale: "end" });
     expect(actionJson("live_change", { product: "kettle", stock: 10, end_sale: false })).toEqual({ type: "live_change", product: "kettle", stock: 10 });

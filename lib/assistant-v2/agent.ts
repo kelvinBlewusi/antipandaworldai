@@ -66,8 +66,8 @@ export const ACTION_TOOLS: GeminiTool[] = [
   // Drafts
   tool("edit", "Change drafts in their batch (only the drafts listed in the context). Only what they asked to change, every value from the message.", {
     edits: arr(obj({
-      products: arr(int("A draft number."), "The drafts it applies to."),
-      said: str("Their words for which draft, or empty."),
+      products: arr(int("A draft number."), "The drafts it applies to (\"Product 1 …\" is [1]; the only draft is [1])."),
+      said: str("Only their words naming which draft (\"the wig\"), never the values; leave it out when they gave the number or there is one draft."),
       changes: obj({
         price: num("New price."), quantity: int("New quantity."),
         variations: arr(obj({ said: str("Their words."), option: str("The one category option they mean, e.g. \"Large\" is L.") }), "The full list of variations the draft should have."),
@@ -75,7 +75,7 @@ export const ACTION_TOOLS: GeminiTool[] = [
         sale: bool("A sale price with dates (read from the message)."), other: str("Another field they want changed."),
       }),
       ask: bool("True when their words fit more than one draft and they didn't say all."),
-    }), "One entry per change."),
+    }, ["products", "changes"]), "One entry per draft changed: its values go in changes (price, variations, colour…), never in said."),
   }, ["edits"]),
   tool("submit", "Send drafts to Jumia.", { all: bool("All the drafts."), products: arr(int("A draft number."), "The drafts to send, when not all.") }),
   tool("polish", "Make polished photos for a draft.", { product: int("The draft number, if they named one.") }),
