@@ -18,7 +18,6 @@ import { cn } from "@/lib/utils";
 import { BuyCreditsButton } from "@/components/billing/buy-credits-button";
 import { matchingCommands, slashCommand, slashToText, unfinishedFill, type PaletteCommand } from "@/components/assistant/chat-commands";
 import { ProductForm } from "@/components/assistant/product-form";
-import { waitPhrases, waitTopic, type WaitTopic } from "@/components/assistant/waiting-phrases";
 import { RichMessage } from "@/components/assistant/rich-message";
 import { richBlocks } from "@/lib/whatsapp/rich-blocks";
 import { CategoryDeck } from "@/components/ui/category-deck";
@@ -53,7 +52,6 @@ const POLL_WAITING_MS = 1200;
 /** How long the waiting line shows after a message with no reply yet. */
 const WAIT_MS = 90_000;
 /** How long each waiting phrase stays before the next. */
-const PHRASE_MS = 1700;
 
 const SUGGESTIONS = [
   "I want to list 3 products",
@@ -109,7 +107,6 @@ export function ListingAssistant({ firstName, productForm }: {
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [sending, setSending] = useState(false);
   const [waitingSince, setWaitingSince] = useState<number | null>(null);
-  const [waitingOn, setWaitingOn] = useState<WaitTopic>("general");
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   // At 0 credits: the bot says to top up once, then the chat locks until the balance is above 0 (owner, 2026-10-07).
@@ -142,6 +139,7 @@ export function ListingAssistant({ firstName, productForm }: {
   const scroller = useRef<HTMLDivElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const textArea = useRef<HTMLTextAreaElement>(null);
+  const composer = useRef<HTMLDivElement>(null);
 
   /** Merge what the server has into the list: its copy replaces a message's placeholder. */
   const merge = useCallback((incoming: Message[]) => {
@@ -275,7 +273,6 @@ export function ListingAssistant({ firstName, productForm }: {
     const id = newId();
     const local: Message = { ...placeholder, id, clientId: id, direction: "inbound", at: new Date().toISOString(), local: true, retry: body };
     setMessages((prev) => [...prev, local]);
-    setWaitingOn(waitTopic(body.label ?? body.text, { photos: Boolean(body.mediaId || body.mediaIds?.length) }));
     setWaitingSince(Date.now());
     const res = await fetch("/api/listing-assistant/message", {
       method: "POST",
@@ -533,7 +530,7 @@ export function ListingAssistant({ firstName, productForm }: {
 
         {messages.map((m) => <Bubble key={m.id} m={m} onTap={tap} onResend={resend} disabled={sending || locked} onMedia={onMedia} />)}
 
-        {waiting && <WaitingLine key={waitingSince} topic={waitingOn} />}
+        {waiting && <WaitingLine key={waitingSince} />}
       </div>
       </div>
       {!atBottom && (
@@ -580,12 +577,15 @@ export function ListingAssistant({ firstName, productForm }: {
         </div>
       ) : (
       <div className="border-t border-[#ebe9e1] bg-[#faf9f5] p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-6 sm:py-4">
-      <div className="relative mx-auto w-full max-w-3xl">
+      <div ref={composer} className="relative mx-auto w-full max-w-3xl">
         {(commandsOpen || (text.startsWith("/") && !/\s/.test(text))) && (
           <CommandMenu
             commands={matchingCommands(commandsOpen && !text.startsWith("/") ? "" : text)}
             onChoose={choose}
             onClose={() => { setCommandsOpen(false); if (text.startsWith("/")) setText(""); }}
+            // The + button toggles it itself. While a "/command" is typed, the message
+            // bar is theirs: its box, and the send button that runs the command.
+            keep={(t) => Boolean(t.closest("[data-commands-toggle]")) || (text.startsWith("/") && Boolean(composer.current?.contains(t)))}
           />
         )}
         {attachments.length > 0 && (
@@ -628,6 +628,7 @@ export function ListingAssistant({ firstName, productForm }: {
           <button
             type="button"
             onClick={() => setCommandsOpen((o) => !o)}
+            data-commands-toggle
             disabled={sending}
             className={cn(
               "flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-zinc-200 bg-white text-zinc-600 transition-colors hover:border-orange-300 hover:bg-orange-50 disabled:opacity-50",
@@ -684,7 +685,7 @@ export function ListingAssistant({ firstName, productForm }: {
           initialCount={form.count}
           initialPhotos={form.photos}
           onClose={() => setForm(null)}
-          onSent={() => { setWaitingOn("listing"); setWaitingSince(Date.now()); void poll(); }}
+          onSent={() => { setWaitingSince(Date.now()); void poll(); }}
         />
       )}
 
@@ -698,20 +699,12 @@ export function ListingAssistant({ firstName, productForm }: {
 }
 
 /**
- * The line under the seller's message while the reply is on its way: small
- * words that change as it works ("Opening the shop", "Counting inventory"),
- * at the timestamp's size, with a light passing over them. Gone the moment
+ * The line under the seller's message while the reply is on its way:
+ * "Thinking…" at the timestamp's size, with a light passing over it (owner,
+ * 2026-10-10: just "Thinking...", not the changing words). Gone the moment
  * the reply is there.
  */
-function WaitingLine({ topic }: { topic: WaitTopic }) {
-  const phrases = useMemo(() => waitPhrases(topic), [topic]);
-  const [i, setI] = useState(0);
-  useEffect(() => {
-    const t = setInterval(() => setI((n) => n + 1), PHRASE_MS);
-    return () => clearInterval(t);
-  }, []);
-  // Once round, then the later ones again: the first is only for the start.
-  const phrase = phrases[i < phrases.length ? i : 1 + ((i - phrases.length) % (phrases.length - 1))];
+function WaitingLine() {
   return (
     <div className="flex items-center gap-2 pl-1 text-xs" role="status" aria-live="polite">
       <span className="flex gap-0.5" aria-hidden>
@@ -720,10 +713,9 @@ function WaitingLine({ topic }: { topic: WaitTopic }) {
         <span className="h-1 w-1 animate-bounce rounded-full bg-orange-400 motion-reduce:animate-none" />
       </span>
       <span
-        key={phrase}
         className="animate-waiting-phrase bg-[linear-gradient(90deg,#a1a1aa_0%,#a1a1aa_35%,#27272a_50%,#a1a1aa_65%,#a1a1aa_100%)] bg-[length:200%_100%] bg-clip-text font-medium text-transparent motion-reduce:animate-none"
       >
-        {phrase}…
+        Thinking…
       </span>
     </div>
   );
@@ -739,10 +731,24 @@ function formButton(m: Message): number | null {
   return null;
 }
 
-/** The command menu, above the message box. */
-function CommandMenu({ commands, onChoose, onClose }: { commands: PaletteCommand[]; onChoose: (c: PaletteCommand) => void; onClose: () => void }) {
+/** The command menu, above the message box. A tap anywhere outside it closes it (owner, 2026-10-10), as its X does. */
+function CommandMenu({ commands, onChoose, onClose, keep }: {
+  commands: PaletteCommand[]; onChoose: (c: PaletteCommand) => void; onClose: () => void;
+  /** Taps outside it that don't close it. */
+  keep?: (target: Element) => boolean;
+}) {
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const down = (e: PointerEvent) => {
+      const t = e.target as Element | null;
+      if (!t || box.current?.contains(t) || keep?.(t)) return;
+      onClose();
+    };
+    document.addEventListener("pointerdown", down);
+    return () => document.removeEventListener("pointerdown", down);
+  }, [onClose, keep]);
   return (
-    <div className="absolute inset-x-0 bottom-full z-10 mb-2 overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-lg" role="menu">
+    <div ref={box} className="absolute inset-x-0 bottom-full z-10 mb-2 overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-lg" role="menu">
       <div className="flex items-center justify-between border-b border-zinc-100 px-3 py-2">
         <span className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Commands</span>
         <button type="button" onClick={onClose} aria-label="Close commands" className="text-zinc-400 hover:text-zinc-600">
