@@ -1935,9 +1935,14 @@ journey" — then "AI for all sellers and remove daily limit".
   later the same day, see "Labels and alerts for every pack that has
   them"). Order alerts run every 10 minutes for Pro and up and send inside
   WhatsApp's 24 hours; outside it they wait for app_settings
-  `order_alert_template` (not set: Meta's `jumia_new_order` was still in
-  review). When Meta approves it: set
-  `{"name":"jumia_new_order","language":"en"}` and send one test.
+  `order_alert_template`. Meta approved `jumia_new_order` on 10 Oct
+  (owner: "template id 1080436151465743 active now"); the setting is
+  `{"name":"jumia_new_order","language":"en"}`. **One test**: set
+  app_settings `template_test` to `{"userId":"<an admin>"}` and POST
+  /api/worker/template-test (Bearer CRON_SECRET, by pg_net with the vault's
+  `cron_secret`): it sends the template once to that admin's WhatsApp with
+  values saying it's a test ("TEST-0000", …) and an "orders" button, and
+  answers with what WhatsApp said (net._http_response).
   Order-update messages have no template and only go inside the 24 hours.
 
 ### Labels and alerts for every pack that has them (owner, 2026-10-07)
@@ -2443,6 +2448,14 @@ measuring, is this.
   turns look right; keep `interpret` only as the fallback when the front
   door fails fast, or retire it too.
 
+### Small chat changes (owner, 2026-10-10)
+
+- The commands card (+ or a typed "/") closes on a tap anywhere outside it,
+  as its X does (`CommandMenu`'s pointerdown listener). The + button toggles
+  it itself; while a "/command" is typed the whole message bar counts as
+  inside, so tapping its box or the send button doesn't wipe the command.
+- The waiting line is just "Thinking…" (see "Web chat waiting line").
+
 ### Agent mode: the pilot with function calling (owner, 2026-10-10: "let's build the agent mode pilot with function calling")
 
 Asked whether to rebuild on Google ADK or move to Cloud Run: no ADK (its
@@ -2790,16 +2803,15 @@ orders is counted from the orders).
   - Next candidates: the health report, orders to pack, payout history and
     breakdown.
 - **Web chat waiting line**: while a reply is on its way, a small line
-  under the seller's message rotates phrases picked by what they asked
-  (components/assistant/waiting-phrases.ts `waitTopic`: stock → "Counting
-  inventory", orders → "Opening the order book"…). It has a light sweep
-  and is gone the moment the reply lands, so it adds no time.
+  under the seller's message says "Thinking…" with a light sweep, gone the
+  moment the reply lands, so it adds no time (`WaitingLine` in
+  listing-assistant.tsx). It rotated phrases picked by the question until
+  10 Oct (owner: "be just 'Thinking...'"); waiting-phrases.ts is gone.
 - **Font**: the whole site uses the device's own UI font (tailwind `sans` =
   the chat's stack). The Inter Tight import in app/layout.tsx is gone. The
   wordmarks still load their own Inter Tight 800.
 - Tests:
-  - __tests__/live-additions.test.ts, rich-answers.test.ts,
-    waiting-phrases.test.ts.
+  - __tests__/live-additions.test.ts, rich-answers.test.ts.
   - The kettle test in jumia-shop-more now expects colour refused on an
     approved product.
   - 6 test-set cases: fix-rejected-*, add-size, add-colour, add-photos.
