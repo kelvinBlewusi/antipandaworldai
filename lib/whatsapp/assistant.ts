@@ -67,7 +67,7 @@ import { getJumiaConnectionKind } from "@/lib/jumia/credentials";
 import { currentPack, featureAccess, featureMinPackName, type FeatureId } from "@/lib/billing/features";
 import {
   BULK_MAX, BULK_PARTS_MAX, MAX_GROUP, answerFees, answerListings, answerOrderStatus, answerPayouts, answerProductInfo, answerProductText, answerProducts,
-  answerSales, answerStock,
+  answerSales, answerStock, htmlToText, sendLong,
   proposeAddSize, proposeBulkChange, proposeContentChange, proposeLiveChange, type AddSizeRequest, type BulkScope, type ContentRequest,
 } from "@/lib/whatsapp/shop";
 import { fixRejected } from "@/lib/whatsapp/fix-rejected";
@@ -215,6 +215,8 @@ export type AssistantAction =
   | { type: "live_change"; product: string; change: LiveChange; fromContext?: boolean; others?: string[]; all?: boolean }
   | { type: "product_info"; product: string }
   | { type: "product_text"; product: string }
+  /** Drafts' own text as drafted (name, price, sizes, highlights, description), from the listing rows. */
+  | { type: "draft_text"; seqs: number[] }
   /** Products Jumia's quality check rejected: the list (no product), or one's fix; `reason` is Jumia's, pasted by the seller. */
   | { type: "fix_rejected"; product: string | null; reason: string | null }
   /** A new size (or colour) for a live product, with its stock and price (lib/whatsapp/shop.ts proposeAddSize). */
@@ -309,7 +311,7 @@ export function capabilities(listingCost = LIVE_LISTING_CREDIT_COST): string {
   return [
     `- List products on Jumia from WhatsApp: the seller says how many (1 to ${MAX_BATCH_SIZE}), sends each product's photos with the price and notes as the caption, and AI drafts each listing (name, description, category, details) for them to check and submit. Two ways to send: all at once, or guided step by step.`,
     "- Ask for what Jumia needs that the photos don't show: a missing price, weight or other required detail, the variation, the category when unsure.",
-    "- Edit drafts in chat before they're submitted: price, quantity, variations or sizes, name, brand, colour, a sale price with its dates. Anything else in the editor on the review page.",
+    "- Show drafts in chat as drafted (name, price, sizes, highlights, description), and edit them before they're submitted: price, quantity, variations or sizes, name, brand, colour, a sale price with its dates. Anything else in the editor on the review page.",
     "- Chatting is free on every pack. Every pack, free credits included: listing, orders (see, pack, ready to ship, cancel), reading their shop (products, stock, sales, reports, payouts, fees), image polish and the shop health report; only the commands below that cost credits are charged. Only these need a pack: changes to live Jumia products from the chat, Jumia QC rejection alerts and guided fixes and shipping label PDFs on WhatsApp (Standard and up); order alerts on WhatsApp and the extension's fee calculator (Pro and up). Everything pauses at 0 credits.",
     "- Submit to Jumia and report back when each product goes live or is rejected; fix common rejections itself (banned words, restricted brands) and guide the seller through the rest with Fix & resubmit. After Jumia accepts a listing, its quality-check verdict is followed up (and the credits returned if QC rejects it) with the Standard pack and up.",
     "- Orders: \"orders\" shows orders waiting to be packed; pack them, mark them ready to ship, or cancel, here or on WhatsApp; where any order is, by its number; orders and sales for today, the week, the month or 90 days. Shipping label PDFs only on WhatsApp (Standard pack and up). Pro and up also: alerts for new Jumia orders on WhatsApp, grouped and quiet at night, and a message when orders are delivered, returned, fail delivery or are cancelled.",
@@ -628,6 +630,7 @@ export function buildPrompt(stage: Stage, message: string, ctx: PromptContext): 
     '{"type":"warehouse_shipped","po":"<purchase order number from the message>","tracking":"<tracking number from the message>","carrier":"<from',
     '  the message>" or null} - tell Jumia a delivery order to its warehouse has shipped',
     '{"type":"credits"} - their credit balance (sent with a Buy credits button)',
+    '{"type":"draft_text","products":[<draft numbers>]} - show drafts as drafted: name, price, sizes, highlights and description ("show me the highlights you wrote for the first one"). Drafts only; a product already on Jumia is product_text.',
     `{"type":"polish","product":<the product number from the message> or null} - polish a product's photos: ${PRODUCT_SHOT_COUNT} new product photos made from theirs (main on white, angle, lifestyle, detail), ${POLISH_CREDIT_COST} credits each`,
     `{"type":"research","needs":[<up to ${MAX_NEEDS} of the reads below>]} - read their shop from Jumia and answer the question with what it shows,`,
     '  organised as they ask. For a list or question no single action above answers: their newest or oldest products, a full list of',
@@ -1014,6 +1017,21 @@ const FILLER = new Set([
   "rest", "apart", "from", "except", "each", "both", "stuff", "things", "thing", "remaining",
 ]);
 const BULK_WORDS = /\b(all|every|everything|other|others|rest|remaining)\b/i;
+const NAME_GAPS = new RegExp("[^\\p{L}\\p{N}]+", "gu");
+const nameKey = (t: string) => t.toLowerCase().replace(NAME_GAPS, " ").trim();
+/**
+ * Whether `said` is the product named `name`: the whole name, or its name
+ * before the " - " details ("3-Piece Thong Bodysuit" for "3-Piece Thong
+ * Bodysuit - Adjustable Straps, Tummy Control"), three words or more. Pure.
+ */
+export function sameName(name: string, said: string): boolean {
+  const s = nameKey(said);
+  if (!s) return false;
+  if (nameKey(name) === s) return true;
+  const head = nameKey(name.split(/\s[-–—]\s/)[0] ?? "");
+  return head.split(" ").length >= 3 && head === s;
+}
+
 /** Whether the words name a product at all. */
 export function namesAProduct(words: string): boolean {
   return words.toLowerCase().split(/[^a-z0-9]+/).some((w) => w.length >= 2 && !FILLER.has(w));
@@ -1435,6 +1453,11 @@ function parseActionRaw(
   const known = new Set(products.map((p) => p.seq));
   const seqsOf = (v: unknown): number[] =>
     Array.isArray(v) ? Array.from(new Set(v.map(Number).filter((n) => known.has(n)))) : [];
+  // A draft's own name given to a read of their Jumia shop is that draft:
+  // "show me the highlights you wrote for the first one" read draft 1's name
+  // as a live product and showed a different bodysuit (owner, 2026-10-10).
+  const draftNamed = (product: string): number | null =>
+    products.find((p) => p.listing.title && sameName(p.listing.title, product))?.seq ?? null;
 
   switch (parsed.type) {
     case "restart": case "review": case "orders": case "credits": case "help":
@@ -1451,6 +1474,8 @@ function parseActionRaw(
     case "product_info":
     case "info": {
       const product = typeof parsed.product === "string" ? parsed.product.trim().slice(0, 120) : "";
+      const draft = draftNamed(product);
+      if (draft != null) return { type: "draft_text", seqs: [draft] };
       if (!namesAProduct(product)) return ask("Which product? Tell me its name as it shows on Jumia, e.g. \"is the Hisense fridge live?\".");
       return productBacked(product, message) || productBacked(product, context)
         ? { type: "product_info", product } : ask("Which product? Tell me its name as it shows on Jumia, e.g. \"is the Hisense fridge live?\".");
@@ -1461,8 +1486,17 @@ function parseActionRaw(
       const a = cannotAnswer(String(parsed.what ?? ""));
       return a ? { type: "reply", text: a.text, link: a.link && a.link in links ? a.link : null } : { type: "unclear" };
     }
+    case "draft_text": {
+      // Reading a draft changes nothing: any of theirs, said or not; the only one when none is named.
+      const seqs = seqsOf(Array.isArray(parsed.products) ? parsed.products : [parsed.products ?? parsed.product]).slice(0, 3);
+      if (seqs.length > 0) return { type: "draft_text", seqs };
+      if (products.length === 1) return { type: "draft_text", seqs: [products[0].seq] };
+      return products.length > 1 ? ask(`Which draft? Say its number (1 to ${products.length}), e.g. "show me draft 1".`) : { type: "unclear" };
+    }
     case "product_text": {
       const product = typeof parsed.product === "string" ? parsed.product.trim().slice(0, 120) : "";
+      const draft = draftNamed(product);
+      if (draft != null) return { type: "draft_text", seqs: [draft] };
       return namesAProduct(product) && (productBacked(product, message) || productBacked(product, context))
         ? { type: "product_text", product } : ask("Which product? Tell me its name as it shows on Jumia, e.g. \"show me the neck fan's description\".");
     }
@@ -2162,6 +2196,19 @@ export async function creditsReply(userId: string, phone: string): Promise<void>
   );
 }
 
+/** A draft as drafted, for "show me the highlights you wrote for the first one". Pure. */
+export function draftTextLines(p: ProductFacts, currency: string, of: number): string[] {
+  const l = p.listing;
+  const highlights = htmlToText(l.highlights ?? "");
+  const description = htmlToText(l.description ?? "");
+  return [
+    `*Draft ${p.seq}${of > 1 ? ` of ${of}` : ""}: ${l.title ?? "(no name yet)"}*`,
+    `Price: ${l.selling_price != null ? `${currency} ${l.selling_price}` : "not set yet"}${p.variations.length ? ` · ${p.variations.join(", ")}` : ""}`,
+    "", "*Highlights:*", highlights || "(none written yet)",
+    "", "*Description:*", description || "(none written yet)",
+  ];
+}
+
 /**
  * handled: the assistant replied. default: nothing it should do here, so
  * the usual reply for this step goes out. failed: the AI couldn't be
@@ -2421,6 +2468,14 @@ async function carryOut(
       return answerProductInfo(userId, phone, action.product);
     case "product_text":
       return answerProductText(userId, phone, action.product);
+    case "draft_text": {
+      const shown = products.filter((p) => action.seqs.includes(p.seq));
+      if (!batchId || shown.length === 0) return "default";
+      const currency = await shopCurrencyForUser(userId).catch(() => "GHS");
+      await sendLong(phone, shown.map((p) => draftTextLines(p, currency, products.length).join("\n")).join("\n\n———\n\n"));
+      await sendCtaUrlIfConfigured(phone, `To change ${shown.length === 1 ? "it" : "them"}, tell me here (e.g. "change draft ${shown[0].seq}'s name to …"), or edit on the review page:`, "Review listings", whatsappListingsUrl(batchId));
+      return `draft text ${shown.map((p) => p.seq).join(", ")}`;
+    }
     case "fix_rejected":
       return fixRejected(userId, phone, action.product, action.reason);
     case "add_size":
