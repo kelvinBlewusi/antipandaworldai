@@ -80,6 +80,8 @@ export const ACTION_TOOLS: GeminiTool[] = [
   tool("submit", "Send drafts to Jumia.", { all: bool("All the drafts."), products: arr(int("A draft number."), "The drafts to send, when not all.") }),
   tool("polish", "Make polished photos for a draft.", { product: int("The draft number, if they named one.") }),
   tool("review", "Open their drafts or listings page."),
+  tool("draft_text", "Show drafts as drafted: name, price, sizes, highlights and description (\"show me the highlights you wrote for the first one\", \"what did you write for draft 2\"). Drafts only: a product already on Jumia is product_text.",
+    { products: arr(int("A draft number."), "The drafts to show (\"the first one\" is 1).") }, ["products"]),
   // Live products
   tool("live_change", "Change one or several products already on Jumia: exactly one of stock, price, sale_price, end_sale or active. Offered for a confirm tap.", {
     product: PRODUCT, products: arr(str("A product."), "Several products, the same change."),
@@ -207,7 +209,7 @@ export function agentSystem(listingCost = 2): string {
     "- A lookup is never an answer: stock, prices, counts and lists come from the tools that read them (product_info, stock, shop, research). Never tell them a product isn't in their shop.",
     "- Every number and word you put in a tool's arguments must be in their message (or, for which product, the recent conversation). Never guess or invent a value.",
     "- You don't have their products' descriptions, highlights, prices, stock or sales: never write them yourself; use the tool that reads them.",
-    "- Drafts are only the ones listed under \"Drafts in their batch\". A product already in their shop is changed with live_change, bulk or content_change, even while drafts wait.",
+    "- Drafts are only the ones listed under \"Drafts in their batch\": shown with draft_text, changed with edit, by their numbers. A product already in their shop is read with product_text or product_info and changed with live_change, bulk or content_change, even while drafts wait.",
     "- A change to a product (\"change the drone to 10\", \"restock the kettle\", \"set X to 50 pcs\") is a change, never listing new products. Changing a name, description or highlights with no new text means writing it (content_change with rewrite).",
     "- While a batch's products are being sent, their details (sizes, pieces, prices, SKUs, \"those are 3 different products\") are step: no lookup.",
     "- A product's name on its own after you listed products: product_info. An order number: order_status. How much they made or sold: sales. What PandaWorld listed for them (\"from this chat\"): research with pandaworld_listings.",

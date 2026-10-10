@@ -61,6 +61,9 @@ jest.mock("@/lib/whatsapp/shop", () => ({
   answerFees:        async (...a: unknown[]) => { shopCalls.push(["answerFees", ...a.slice(2)]); return "fees"; },
   proposeBulkChange: async (...a: unknown[]) => { shopCalls.push(["proposeBulkChange", ...a.slice(2)]); return "bulk"; },
   proposeContentChange: async (...a: unknown[]) => { shopCalls.push(["proposeContentChange", ...a.slice(2)]); return "content"; },
+  answerProductText: async (...a: unknown[]) => { shopCalls.push(["answerProductText", ...a.slice(2)]); return "text"; },
+  sendLong:          async (_to: string, body: string) => { sent.push({ kind: "text", body }); },
+  htmlToText:        (html: string) => html.replace(/<li>/g, "• ").replace(/<[^>]+>/g, " ").replace(/[ \t]+/g, " ").trim(),
   MAX_GROUP: 20,
   BULK_MAX: 200,
 }));
@@ -73,7 +76,7 @@ jest.mock("@/lib/jumia/categories", () => ({
 
 import {
   agentFor, answerLiveValue, assistantEnabled, assistantFor, assistantLinks, cleanReply, countBacked, fitsDraft, isStateQuestion, looksLikeQuestion, messageNumbers,
-  changeToAsked, draftNumberIn, frontDoorFor, isProductName, namesAProduct, recentConversation, saidIsValues, saleWindow, splitProducts, parseAction, plainQuickEdit, runAssistant, verifyChanges, type ProductFacts,
+  changeToAsked, draftNumberIn, draftTextLines, frontDoorFor, isProductName, sameName, namesAProduct, recentConversation, saidIsValues, saleWindow, splitProducts, parseAction, plainQuickEdit, runAssistant, verifyChanges, type ProductFacts,
 } from "@/lib/whatsapp/assistant";
 import { assistantGate } from "@/lib/whatsapp/assistant-limits";
 import { parseVariations } from "@/lib/whatsapp/variation-question";
@@ -444,6 +447,69 @@ describe("agent mode (the pilot, owner 2026-10-10)", () => {
     expect(await runAssistant("seller", "233", session(), "show me my orders", "idle")).toBe("handled");
     expect(orderCalls.length + shopCalls.length + sent.length).toBeGreaterThan(0);
     expect((db.tables.whatsapp_assistant_log as { raw: string }[])[0].raw).toMatch(/^\[agent failed: no tool calls scripted\] \[front door\]/);
+  });
+});
+
+describe("a draft's own text (owner's WhatsApp, 2026-10-10)", () => {
+  const THONG = "3-Piece Thong Bodysuit - Adjustable Straps, Tummy Control";
+  const DRAFT1 = product(1, THONG, {
+    listing: { id: "l1", title: THONG, status: "draft", selling_price: 120, highlights: "<ul><li>Tummy control</li><li>Adjustable straps</li></ul>", description: "<p>Soft and stretchy.</p>" } as ListingRow,
+    variations: ["S", "M"],
+  });
+  const DRAFT2 = product(2, "Round Neck Short Sleeve Top & High Waist Shorts Set - Activewear, Athleisure");
+
+  it("knows a product by its whole name, or its name before the details", () => {
+    expect(sameName(THONG, "3-piece thong bodysuit - adjustable straps, tummy control")).toBe(true);
+    expect(sameName(THONG, "3-Piece Thong Bodysuit")).toBe(true);
+    expect(sameName(THONG, "Thong Bodysuit")).toBe(false);
+    expect(sameName(THONG, "Backless Thong Bodysuit")).toBe(false);
+    expect(sameName("Hisense Fridge", "Hisense Fridge")).toBe(true);
+  });
+
+  it("shows drafts by their numbers; asks which when there are several and none is named", () => {
+    const links = assistantLinks();
+    expect(parseAction('{"type":"draft_text","products":[1]}', "show me the highlights you wrote for the first one", [DRAFT1, DRAFT2], links))
+      .toEqual({ type: "draft_text", seqs: [1] });
+    expect(parseAction('{"type":"draft_text","products":[7]}', "show me draft 7", [DRAFT1, DRAFT2], links))
+      .toMatchObject({ type: "reply", text: expect.stringContaining("Which draft?") });
+    expect(parseAction('{"type":"draft_text"}', "show me what you wrote", [DRAFT1], links)).toEqual({ type: "draft_text", seqs: [1] });
+  });
+
+  it("reads a draft's own name as that draft, never a product on Jumia", () => {
+    const links = assistantLinks();
+    expect(parseAction(`{"type":"product_text","product":"${THONG}"}`, "How me highlight you write for the first one", [DRAFT1, DRAFT2], links))
+      .toEqual({ type: "draft_text", seqs: [1] });
+    expect(parseAction('{"type":"product_info","product":"3-Piece Thong Bodysuit"}', "is the 3-Piece Thong Bodysuit live?", [DRAFT1, DRAFT2], links))
+      .toEqual({ type: "draft_text", seqs: [1] });
+    expect(parseAction('{"type":"product_text","product":"Backless Thong Bodysuit"}', "show me the Backless Thong Bodysuit's description", [DRAFT1, DRAFT2], links))
+      .toEqual({ type: "product_text", product: "Backless Thong Bodysuit" });
+  });
+
+  it("lays a draft out as drafted", () => {
+    expect(draftTextLines(DRAFT1, "GHS", 2)).toEqual([
+      `*Draft 1 of 2: ${THONG}*`, "Price: GHS 120 · S, M",
+      "", "*Highlights:*", "• Tummy control • Adjustable straps",
+      "", "*Description:*", "Soft and stretchy.",
+    ]);
+    expect(draftTextLines(DRAFT2, "GHS", 1)).toContain("(none written yet)");
+  });
+
+  it("answers the owner's message with the draft, through agent mode, and a way to change it", async () => {
+    const now = new Date().toISOString();
+    db.tables.app_settings = [{ key: "assistant_agent", value: "all" }];
+    db.tables.listings = [
+      { id: "l1", user_id: "seller", whatsapp_batch_id: "b1", whatsapp_seq: 1, title: THONG, status: "draft", created_at: now, highlights: "<ul><li>Tummy control</li></ul>", description: "<p>Soft and stretchy.</p>" },
+      { id: "l2", user_id: "seller", whatsapp_batch_id: "b1", whatsapp_seq: 2, title: "Round Neck Short Sleeve Top & High Waist Shorts Set", status: "draft", created_at: now },
+    ];
+    // What the agent did on 10 Oct: the draft's name, read as a product on Jumia.
+    toolReplies.push([{ name: "product_text", args: { product: THONG } }]);
+    const session = { phoneNumber: "233", userId: "seller", state: "awaiting_count", batchId: null, lastSubmittedBatchId: null } as WhatsAppSession;
+    expect(await runAssistant("seller", "233", session, "How me highlight you write for the first one", "idle")).toBe("handled");
+    expect(shopCalls).toEqual([]);
+    expect(sent[0].body).toContain(`*Draft 1 of 2: ${THONG}*`);
+    expect(sent[0].body).toContain("Tummy control");
+    expect(sent[0].body).toContain("Soft and stretchy.");
+    expect(sent[1]).toMatchObject({ kind: "cta", button: "Review listings" });
   });
 });
 

@@ -2538,6 +2538,30 @@ checks and taps.
     Vendor Center (the message names it), and asks "how many?" in a reply
     to "I want to list some products" instead of restart.
 
+### A draft's own text in chat (owner's WhatsApp, 2026-10-10)
+
+"How me highlight you write for the first one", right after the bot
+mentioned their 2 open drafts, was read by the agent as `product_text` of
+draft 1's name ("3-Piece Thong Bodysuit - Adjustable Straps, Tummy
+Control"). That action reads products already on Jumia, so it showed a
+different live product (the Backless Thong Bodysuit). Nothing in the chat
+could show a draft's own text.
+
+- **`draft_text`** (lib/whatsapp/assistant.ts): `{"type":"draft_text",
+  "products":[<draft numbers>]}`, up to 3. Reading changes nothing, so any
+  of their drafts goes, said or not; the only draft when none is named;
+  "Which draft?" when there are several. Carried out with `draftTextLines`
+  (name, price, sizes, highlights, description, from the listing row) and
+  a Review listings button. Works for drafts borrowed between batches.
+- **Guard in the shared parser**: a `product_text` or `product_info` whose
+  product is a draft's name (`sameName`: the whole name, or the name
+  before " - ", three words or more) becomes `draft_text`. Reads only;
+  changes are never redirected.
+- In the agent's tools, the front door's draft actions and example (the
+  router's drafts area now includes "showing"), the old prompt, and
+  `capabilities()`. Test cases `draft-text-first-one` (the owner's message,
+  with the live bodysuit in the catalog) and `draft-text-description`.
+
 ### What sellers can and can't ask of Jumia (owner, 2026-10-09)
 
 "The system understands what is capable and doable and what is not and
