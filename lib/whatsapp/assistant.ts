@@ -17,7 +17,8 @@
  *   - Taps, plain numbers, a command's own words, "done" and a plain "2:
  *     price 150" never reach it (aiReadable in intake.ts): they mean one
  *     thing. Nor do messages while connecting Jumia (codes).
- *   - The AI only picks an action (interpret): our code checks every part
+ *   - The AI only picks an action (agent mode, lib/assistant-v2/agent.ts,
+ *     or the front door when the agent can't): our code checks every part
  *     of it and does the work, with the same rules as the rest of the bot.
  *     Every price, quantity and word it sets must be in the seller's own
  *     message (a variation may also be one of the category's options, so
@@ -41,8 +42,6 @@
 
 import { createServerClient } from "@/lib/supabase/server";
 import { isAdmin } from "@/lib/auth/is-admin";
-import { callGeminiBackend } from "@/lib/ai/gemini-client";
-import { withAiUsageContext } from "@/lib/ai/usage";
 import { availableCredits, isUnmetered, listingCreditCost } from "@/lib/billing/extension-credits";
 import { LABEL_CREDIT_COST, LIVE_CHANGE_CREDIT_COST, LIVE_LISTING_CREDIT_COST, NOTICE_CREDIT_COST, POLISH_CREDIT_COST, REPORT_CREDIT_COST } from "@/lib/billing/credit-packs";
 
@@ -60,7 +59,6 @@ import {
 import { sendHelp } from "@/lib/whatsapp/help";
 import { appUrl } from "@/lib/whatsapp/app-url";
 import { CHROME_WEB_STORE_URL, COMMUNITY_WHATSAPP_URL } from "@/lib/constants/support";
-import { siteGuide } from "@/lib/whatsapp/site-guide";
 import { jumiaCountryByCode } from "@/lib/marketing/countries";
 import { sellerCountry } from "@/lib/jumia/unlistable-categories";
 import { getJumiaConnectionKind } from "@/lib/jumia/credentials";
@@ -76,8 +74,8 @@ import {
   proposeWarehouseShipped, type ReportKind,
 } from "@/lib/whatsapp/shop-insights";
 import { shopProducts, type LiveChange, type ShopProduct } from "@/lib/jumia/shop";
-import { MAX_NEEDS, answerResearch, parseNeeds, type ResearchNeed } from "@/lib/whatsapp/shop-research";
-import { canList, cannotAnswer, cannotList, capability, capabilityAnswer } from "@/lib/jumia/capabilities";
+import { answerResearch, parseNeeds, type ResearchNeed } from "@/lib/whatsapp/shop-research";
+import { cannotAnswer, capability, capabilityAnswer } from "@/lib/jumia/capabilities";
 import { INTERACTIVE_BODY_MAX, splitForText } from "@/lib/whatsapp/text-limits";
 import { assistantGate, assistantSwitchedOn } from "@/lib/whatsapp/assistant-limits";
 import { blankCodes, noteSellerMessage, sellerMemory } from "@/lib/whatsapp/seller-memory";
@@ -89,7 +87,7 @@ import { parseVariations, saveVariations, sizeNamedIn, variationOptions, VARIATI
 import { carryPriceToVariants, carrySaleToVariants, carryStockToVariants, chatPrice, shopCurrencyForUser } from "@/lib/whatsapp/listing-edits";
 import type { ListingRow } from "@/lib/supabase/types";
 import {
-  CAPABILITY_ACTION, FRONT_DOOR_LIMITS, FRONT_DOOR_ROUTER, NOT_YET_ACTION, NOT_YET_EXAMPLES, frontDoor, namesInMessage, type Clarify, type FrontDoorInput,
+  FRONT_DOOR_LIMITS, FRONT_DOOR_ROUTER, frontDoor, namesInMessage, type Clarify, type FrontDoorInput,
 } from "@/lib/assistant-v2/front-door";
 import { agentModelSpec, agentRead, agentSystem, catalogLookups, geminiAgentCall } from "@/lib/assistant-v2/agent";
 
@@ -124,16 +122,6 @@ export async function assistantEnabled(_userId: string): Promise<boolean> {
 /** Whether the assistant reads this message (both channels, everyone, unless switched off). */
 export async function assistantFor(userId: string, _phone: string): Promise<boolean> {
   return assistantEnabled(userId);
-}
-
-/**
- * Whether this seller's messages are read through the front door
- * (lib/assistant-v2/front-door.ts) instead of the one big prompt and its
- * word rules. app_settings `assistant_front_door`: "all", "admins" (the
- * owner first, 2026-10-08), or a list of user ids. Off without the row.
- */
-export async function frontDoorFor(userId: string): Promise<boolean> {
-  return switchedOnFor("assistant_front_door", userId);
 }
 
 /**
@@ -277,41 +265,6 @@ const ORDER_STATUSES: Record<string, string> = {
 
 /** An order status in the seller's or the AI's words ("cancelled", "ready to ship") as Jumia names it. */
 const asOrderStatus = (v: unknown) => (typeof v === "string" ? ORDER_STATUSES[v.toLowerCase().trim().replace(/[\s-]+/g, "_")] ?? null : null);
-
-const STATUS_WORDS: Record<string, string> = {
-  draft:            "draft, not sent yet",
-  awaiting_review:  "draft, not sent yet",
-  failed:           "held, not sent",
-  processing:       "sent, with Jumia",
-  pending_approval: "sent, waiting for Jumia's review",
-  live:             "live on Jumia",
-};
-
-function productLine(p: ProductFacts, currency: string): string {
-  const l = p.listing;
-  const parts = [
-    `${p.seq}. "${l.title ?? "(no name yet)"}" (${STATUS_WORDS[l.status] ?? l.status})`,
-    `price ${l.selling_price != null ? `${currency} ${l.selling_price}` : "not set"}`,
-    `quantity ${l.quantity ?? "not set"}`,
-    l.brand ? `brand ${l.brand}` : null,
-    l.color ? `colour ${l.color}` : null,
-    l.category_path ? `category ${l.category_path.split(">").pop()!.trim()}` : null,
-    `variation(s): ${p.variations.length > 0 ? p.variations.join(", ") : "none"}`,
-    p.options.length > 0
-      ? `its category's variation options: ${p.options.slice(0, 120).join(", ")}${p.options.length > 120 ? ", ..." : ""}`
-      : null,
-  ];
-  return parts.filter(Boolean).join(" · ");
-}
-
-const STAGE_TEXT: Record<Stage, string> = {
-  review: "The products below are drafted and waiting for the seller to check them and submit them to Jumia.",
-  sent:   "The seller has just submitted the products below to Jumia. They're no longer drafts: once live, their stock, price, sale and on/off are changed with live_change, and their name, description, highlights or brand with content_change.",
-  idle:   "The seller is between batches: no products are being listed right now. To start, they say how many products they're listing.",
-  starting: "The seller has just started listing a batch and hasn't sent any photo yet. A message about the first product (price, sizes, colours, condition) is step.",
-  collecting: "The seller is in the middle of sending a batch's photos and notes. A message describing the product they're on (price, sizes, colours, material, stock, brand, condition, category, a sale) is its notes: step. Anything else (a question, a greeting, something about another product, a live product, their shop or PandaWorld) is not a note: handle it.",
-  drafting: "The seller's batch is being drafted by AI right now (about a minute; each product is sent to them as it's ready). A detail for those products (a price, a size, a category) is step; anything else, handle it.",
-};
 
 /**
  * What PandaWorld does, for the AI's replies: every line is something the
@@ -502,243 +455,6 @@ export async function openDraftBatch(userId: string, now = new Date()): Promise<
     .order("created_at", { ascending: false }).limit(1);
   const row = ((data ?? []) as { whatsapp_batch_id: string | null; chat_channel: string | null }[])[0];
   return row?.whatsapp_batch_id ? { batchId: row.whatsapp_batch_id, channel: row.chat_channel === "web" ? "web" : "whatsapp" } : null;
-}
-
-export interface PromptContext {
-  products: ProductFacts[];
-  currency: string;
-  seller:   string[];
-  links:    Record<string, AssistantLink>;
-  hintSeq?: number;
-  /** The last messages, oldest first: "Seller: …" / "Bot: …". */
-  conversation?: string[];
-  /** What a listing costs this seller (their country's price). */
-  listingCost?: number;
-  /** The Listing Assistant on the website (lib/whatsapp/channel.ts), not WhatsApp. */
-  web?: boolean;
-  /** Which product of the batch they're on ("product 2 of 3"). */
-  position?: string;
-  /** The bot's question still waiting for an answer, if any. */
-  waitingFor?: string;
-  /** What the assistant remembers about the seller from before (lib/whatsapp/seller-memory.ts). */
-  memory?: string;
-  /** Products the bot just listed for them ("those", "the last 10"). */
-  listed?: { count: number; what: string } | null;
-}
-
-export function buildPrompt(stage: Stage, message: string, ctx: PromptContext): string {
-  const { products, currency, seller, links, hintSeq, conversation = [], listingCost, web, position, waitingFor, memory, listed } = ctx;
-  return [
-    web
-      ? "You are PandaWorld's Jumia Listing Assistant, a chat on the PandaWorld website. PandaWorld lists sellers' products on Jumia (Africa's online marketplace) and helps them run their Jumia shop."
-      : "You are PandaWorld's assistant on WhatsApp. PandaWorld lists sellers' products on Jumia (Africa's online marketplace) and helps them run their Jumia shop.",
-    ...(web ? [
-      "This chat works like the WhatsApp bot: the seller uploads product photos with the image button, adds the price and notes as text, and you draft, edit and submit them to Jumia.",
-      "Orders work here too: the orders action shows the ones waiting, with buttons to pack them, mark them ready to ship or cancel them. Here, NOT available: shipping labels and new-order alerts, which are on WhatsApp only: for those, capability with labels or order_alerts.",
-    ] : []),
-    "You choose ONE action as JSON, and PandaWorld's code checks it and carries it out.",
-    "",
-    `Where the seller is (context, not a limit on what the message is about): ${STAGE_TEXT[stage]}${position ? ` They're on ${position}.` : ""}`,
-    ...(waitingFor ? [`The bot's last question is still open: it asked for ${waitingFor}. A message that answers it (even just a number or a word) is step.`] : []),
-    ...(listed ? [`You just listed ${listed.count} of their Jumia products for them (${listed.what}). "Those", "them", "all of them" or "the last N" mean these: a change to them is bulk with "scope":"listed".`] : []),
-    ...(products.length > 0 ? ["", "Products in this batch (the number is the product number):", ...products.map((p) => productLine(p, currency))] : []),
-    ...(seller.length > 0 ? ["", "About this seller:", ...seller] : []),
-    ...(memory ? ["", "What you remember about this seller from earlier (use it to understand them; never quote it as notes):", memory] : []),
-    "",
-    "What PandaWorld can do (all true; never claim anything else):",
-    capabilities(listingCost),
-    "",
-    "Not possible from here (Jumia's API doesn't allow it, or it isn't built): answer these with cannot:",
-    cannotList(),
-    "",
-    "What the chat does, by key (for capability):",
-    canList(),
-    "",
-    siteGuide(),
-    "",
-    "Links you can send (put the key in \"link\"; the seller gets a button):",
-    ...Object.entries(links).map(([key, l]) => `- ${key}: ${l.what}`),
-    "",
-    ...(conversation.length > 0 ? ["Recent conversation (oldest first; \"Bot\" is you):", ...conversation, ""] : []),
-    `The seller's new message: "${message.replace(/"/g, "'").slice(0, 600)}"`,
-    ...(hintSeq != null ? [`(They started it with product number ${hintSeq}.)`] : []),
-    "",
-    "Rules:",
-    "- Read every message afresh, for what the seller wants now. It may carry on the current step, be about a draft, an earlier product, a live product, their orders or shop, PandaWorld, or something new. Where they are and the bot's last question are context, not a limit: never force a message into the current step.",
-    "- Read the new message with the recent conversation and what you remember: a short reply (\"yes\", \"five\", \"do it\", \"why?\", \"the 43 one\") answers the bot's last message.",
-    "- If one of the actions below does what they ask, return it. Never reply that you can or will check or do something: do it with the action.",
-    "- Never promise anything for later (to remember, to message them, to make sure, to look into it): you only do the actions here, now. If something went wrong, say plainly what you can do now.",
-    "- A product they name that isn't one of the drafts above is a product already in their Jumia shop: use live_change, product_info, stock or fees for it, never edit.",
-    "- A question about a product (is it live, on, active, approved, in stock, on sale?) is product_info, never live_change: only change a product when they ask for the change.",
-    "- A change to many products by a rule (all, every, everything, a percentage) is bulk; to products they name one by one, live_change.",
-    "- \"How many products are on / off / live\" is shop (the overview), never product_info.",
-    "- Products already in their shop (\"the last 10 products I uploaded\", \"a list of my products\", \"my newest items\") are research, never list or restart: those are only for listing new products now.",
-    "- Sellers make typos (\"ordrs\" is orders, \"payed\" is paid, \"tun on\" is turn on) and write in many languages.",
-    "- Insight, stats, analytics or how their shop is performing, without asking for a report or health check: shop (the overview, free). \"How is my shop doing?\" and a report or health check they ask for: health_report.",
-    "- A message that changes a product (\"change the drone to 10\", \"restock the kettle to 20\", \"set X to 50 pcs\") is live_change (an edit for a draft above), never a count of products to list, even right after you asked how many products they're listing. \"Restock\" and \"pcs\" mean stock.",
-    "- A bare number right after your own list of options picks that option (\"4\" after a list whose 4th line is shop insight is shop), not a count of products.",
-    "- About themselves (their pack, credits, WhatsApp number, Jumia connection, shop), answer only from \"About this seller\", word for word where it gives a number or name. If it isn't there, say it isn't shown here and where to look (Settings).",
-    "- Asked what pack they're on or what it includes: name the pack (or \"no pack yet, your free credits\"), then list what's on and what isn't from \"About this seller\", one short line each, and what the next pack adds.",
-    "",
-    "- Your own messages are WhatsApp text: *bold* with single asterisks, never ** or # headings. Choices as \"• \" lines, never numbered (a number on its own is how many products they're listing).",
-    "",
-    "Reply with ONLY one JSON object, no markdown, one of:",
-    '{"type":"edit","edits":[{"products":[<numbers>],"said":"<their words for which product (the wig), or null; never the new values>","changes":{...},"ask":false}]} - change drafts above. One entry per different change.',
-    '  "changes" holds ONLY what the seller asked to change: "price" (number), "quantity" (whole number), "variations" (the full list',
-    '  the product should have afterwards, plus its current ones if they are adding. Where the product\'s category lists variation options, each',
-    '  one as {"said":"<the seller\'s words, copied>","option":"<the ONE option from that list they mean>"}: "Large" is L, "free size" is One Size,',
-    '  "size 42" is EU 42, whatever list it is; only what they named, never the whole list. Otherwise the seller\'s words), "title", "brand", "color"',
-    '  (text copied exactly from the message), "sale": true (a sale or discount price), "other": "<the field>" (anything else they want changed).',
-    "  Every number and word must come from the seller's message. Never guess or invent a value.",
-    '  "products": the products the seller means, found from the product number or from how they describe it ("the fridge" = the',
-    "  product whose name is a fridge). Several if they say all, both or each.",
-    '  "ask": true when the change is clear but their words fit more than one product and they did not say all of them: then "products"',
-    "  lists every product it could be. With one product only, it is that one.",
-    '{"type":"submit","products":"all" or [<numbers>]} - send drafts to Jumia',
-    '{"type":"list","count":<number>} - the seller wants to list new products now and says how many. Add up kinds:',
-    '  "2 shirts and a fridge" is 3. Without a number, use restart.',
-    '{"type":"restart"} - they want to list something (no number given), start a new batch, or start over',
-    '{"type":"review"} - see or open their drafts or listings',
-    '{"type":"orders"} - their Jumia orders waiting to be packed',
-    '{"type":"live_change","product":"<their words for the product>","stock":<number>} - change a product already in their Jumia shop',
-    '  (never one of the drafts above). Instead of "stock", exactly one of: "price":<number>, "sale_price":<number> (put it on sale at',
-    '  that price; the dates are read from the message), "sale":"end" (end its sale), "active":true or false (turn it on or off).',
-    '  The same change to several products: "products":["<words for one>","<words for another>"] instead of "product". "all":true',
-    '  when they say all or every one of something ("all the hard hats").',
-    '  Values from the message, or from the seller\'s own recent messages when this one names the products. "product" may come from the',
-    '  recent conversation when the message says "it", "them" or nothing.',
-    '{"type":"product_info","product":"<their words>"} - where one of their Jumia products is: on or off, quality check, price, sale, stock',
-    '{"type":"product_text","product":"<their words>"} - one of their Jumia products\' name, description and highlights as Jumia has them now, to read or edit',
-    '{"type":"fix_rejected","product":"<their words>" or null,"reason":"<Jumia\'s reason as they pasted it>" or null} - fix products Jumia\'s quality check',
-    '  rejected: null product to see them and pick one; "fix the neck fan" for one.',
-    '{"type":"add_size","product":"<their words>","size":"<the new size or colour, copied>","stock":<number> or null,"price":<number> or null} - a new',
-    '  size or colour for a product already on Jumia, with its stock and price from the message',
-    '{"type":"add_photos","product":"<their words>"} - more photos for a product already on Jumia (they send them next)',
-    '{"type":"fees","product":"<their words>","price":<number from the message> or null} - what Jumia takes and what they receive when it sells',
-    '{"type":"stock","product":"<their words>" or null,"filter":"out" or "low" or null} - how many are left of a product, or what is out of stock or low',
-    '{"type":"shop","filter":"all" or "inactive" or "rejected"} - their Jumia products: an overview, the ones turned off, or the ones rejected',
-    '{"type":"order_status","number":"<the order number from the message>"} - where one order is',
-    '{"type":"sales","period":"today" or "yesterday" or "week" or "month" or "quarter","status":null or one or a list of "cancelled", "delivered",',
-    '  "returned", "failed", "pending", "ready_to_ship", "shipped"} - their Jumia orders and sales; with statuses, those orders. "quarter" is',
-    '  the last 90 days, the furthest back Jumia goes: use it for "3 months", "90 days" or "ever".',
-    '{"type":"listings","period":"today" or "yesterday" or "week" or "month" or "quarter"} - how many products they listed with PandaWorld',
-    '{"type":"payouts"} - money from Jumia: the last payout, what\'s not paid yet',
-    '{"type":"payout_detail","mode":"history" or "breakdown","statement":"<a statement number from the message>" or null} - every statement of',
-    '  the last 90 days (history), or one statement\'s fees, refunds and balances (breakdown; the newest when no number)',
-    '{"type":"report","kind":"best_sellers" or "slow_movers" or "restock" or "returns","period":"week" or "month" or "quarter"} - best sellers;',
-    '  products with no sale; what runs out soon and needs restocking; returns and failed deliveries',
-    '{"type":"bulk","scope":"all" or "out_of_stock" or "low_stock" or "inactive" or "active" or "matching" or "listed","words":"<their words for the',
-    '  products, for matching>" or null, plus exactly one of: "price_pct":<+/- number> (prices up or down by that %), "sale_pct":<number>',
-    '  (a sale that % off; dates from the message), "stock":<number>, "price":<number>, "sale_price":<number>, "sale":"end", "active":true or false}',
-    '  - one change to many products by a rule. "matching" with "words" for "all the perfumes".',
-    '{"type":"content_change","product":"<their words>","name":"<new name copied from the message>" or null,"description":"<copied>" or',
-    '  null,"highlights":"<copied>" or null,"brand":"<copied>" or null,"rewrite":["name","description","highlights"] or []} - a live product\'s',
-    '  name, description, highlights or brand. "rewrite" lists what they ask you to write or improve for them. Also, with "product": "details":',
-    '  {"<the detail in their words, e.g. colour, material, weight>":"<value copied>"} for its other details, "barcode":"<digits copied>",',
-    '  "size":{"from":"<the size now, or null>","to":"<the new size name>"} for renaming one of its sizes.',
-    '{"type":"brand_check","brand":"<the brand from the message>","product":"<the kind of product>" or null} - is a brand on Jumia, allowed?',
-    '{"type":"category_info","product":"<the kind of product>"} - what Jumia needs to list it: category, details, variations, commission',
-    '{"type":"shops"} - the shops under their Jumia account',
-    '{"type":"warehouse_stock","product":"<their words>"} - what Jumia\'s warehouse holds of a product',
-    '{"type":"warehouse_order","items":[{"product":"<their words>","quantity":<number>}]} - send stock to Jumia\'s warehouse (a delivery order)',
-    '{"type":"warehouse_shipped","po":"<purchase order number from the message>","tracking":"<tracking number from the message>","carrier":"<from',
-    '  the message>" or null} - tell Jumia a delivery order to its warehouse has shipped',
-    '{"type":"credits"} - their credit balance (sent with a Buy credits button)',
-    '{"type":"draft_text","products":[<draft numbers>]} - show drafts as drafted: name, price, sizes, highlights and description ("show me the highlights you wrote for the first one"). Drafts only; a product already on Jumia is product_text.',
-    `{"type":"polish","product":<the product number from the message> or null} - polish a product's photos: ${PRODUCT_SHOT_COUNT} new product photos made from theirs (main on white, angle, lifestyle, detail), ${POLISH_CREDIT_COST} credits each`,
-    `{"type":"research","needs":[<up to ${MAX_NEEDS} of the reads below>]} - read their shop from Jumia and answer the question with what it shows,`,
-    '  organised as they ask. For a list or question no single action above answers: their newest or oldest products, a full list of',
-    '  products with prices or stock, products sorted or filtered, orders with their items, sales by product, or several of these at once.',
-    '  Reads (all read-only): {"source":"products","sort":"newest" or "oldest" or "price_high" or "price_low" or "stock_low" or "stock_high" or',
-    '  "name","filter":"all" or "active" or "inactive" or "rejected" or "pending" or "out_of_stock" or "low_stock" or "on_sale","words":"<their',
-    '  words for which products>" or null,"limit":<how many, up to 30; 10 if they don\'t say>,"since":null or a period};',
-    '  {"source":"orders","period":<period>,"status":null or one status as in sales,"limit":<up to 30>} (orders with their items);',
-    '  {"source":"product_sales","period":<period>} (units and money per product); {"source":"sales_summary","period":<period>};',
-    '  {"source":"payouts"} (statements of the last 90 days); {"source":"pandaworld_listings","period":<period>} (what they listed with',
-    '  PandaWorld). A period is "today", "yesterday", "week", "month" or "quarter".',
-    `{"type":"health_report"} - a full health check of their whole shop from live Jumia data: what's working, what isn't, what to do (${REPORT_CREDIT_COST} credits). "How is my shop doing?" is this; best sellers or returns alone are "report".`,
-    '{"type":"step"} - the message carries on what the seller is doing right now: it answers the bot\'s open question (a price, a size, a category,',
-    '  a yes or no), or, while they send a product, it describes that product (its notes). PandaWorld\'s usual steps take it. In review, a',
-    '  drafted product\'s sizes or variations (even answering the bot\'s question) are an edit, matched to its category\'s options.',
-    '{"type":"cannot","what":"<a key from Not possible from here>"} - they ask for (or whether you can do) one of those: PandaWorld gives the true answer and what it can do instead',
-    CAPABILITY_ACTION,
-    NOT_YET_ACTION,
-    '{"type":"reply","text":"<your message>","link":"<a key above, or null>"} - everything else. You write the message:',
-    "  - \"What can you do\", a hello (\"hi\", \"hello there\"), or something you can't match: in your own words (vary it, never a set",
-    "    script), a short list (4 to 6 lines starting with \"• \", never numbered) of what you can do for them, each with the words that do it",
-    "    (e.g. *orders*, *shop*, *sales week*, *report*, or how many products to list), and end by asking what they'd like to do for their Jumia shop.",
-    "  - A question about them (their shop's name, country, pack, what's on): answer it from About this seller.",
-    "  - Thanks or ok: a short, friendly line; no list.",
-    "  - Greet only if they greeted you in this message. Mention a pack only for a feature their pack doesn't have (see About this seller).",
-    "  - A question about selling on Jumia, their shop or PandaWorld: answer it from what's above. Don't state fees, commission",
-    "    rates, prices, dates or Jumia rules that aren't given above: send the link that has them instead.",
-    "  - A request for a page or link: one short line, with \"link\" set. Never write a web address in the text.",
-    "  - How to do something on PandaWorld, or where to find it (link WhatsApp, connect Jumia, the extension, the API key, buying",
-    "    credits, a page): the steps from the website guide above, in order, as \"1.\" lines with the page's own button words, and",
-    "    \"link\" set to the page or guide (the key in [brackets]). Only steps the guide gives; up to 900 characters for steps.",
-    "  - Never say PandaWorld can't do something, and never send them to Vendor Center to do it: what isn't possible is cannot,",
-    "    what PandaWorld doesn't do is not_yet, and anything outside Jumia, selling and PandaWorld is not_yet with \"outside\":true.",
-    "  Write for WhatsApp: short and warm, at most 600 characters (steps up to 900), *bold* with single asterisks, \"1.\" lines only for steps in order. A product's status is ON or OFF, in capitals.",
-    "  Reply in the language the seller wrote in.",
-    "",
-    "Examples (message → JSON):",
-    '"has jumia paid me?" or "shop statement" → {"type":"payouts"}',
-    '"any orders cancelled today?" → {"type":"sales","period":"today","status":"cancelled"}',
-    '"check cancelled orders yesterday" → {"type":"sales","period":"yesterday","status":"cancelled"}',
-    '"check for ready to ship and cancelled orders yesterday" → {"type":"sales","period":"yesterday","status":["ready_to_ship","cancelled"]}',
-    '"how many orders did I get this week" → {"type":"sales","period":"week","status":null}',
-    '"did I have orders today?" → {"type":"sales","period":"today","status":null}',
-    '"how much has my shop made in 90 days" → {"type":"sales","period":"quarter","status":null}',
-    '"returns" or "did I have returns" → {"type":"sales","period":"month","status":"returned"}',
-    '"orders to pack" or "show my orders" → {"type":"orders"}',
-    '"is the drone live?" or "is the dron active" → {"type":"product_info","product":"drone"}',
-    '"how much will I receive if the creatine sells?" → {"type":"fees","product":"creatine","price":null}',
-    '"what does jumia charge if I sell the boot at 120" → {"type":"fees","product":"boot","price":120}',
-    '"set the stock of the freezer, the blender and the chainsaw to 10" → {"type":"live_change","products":["freezer","blender","chainsaw"],"stock":10}',
-    '"also tun on the drone" → {"type":"live_change","product":"drone","active":true}',
-    '"hi there" → {"type":"reply","text":"Hi! 👋 Here\'s what I can do for your shop:\\n1. …\\n2. …\\n…\\nWhat would you like to do today?","link":null}',
-    '"what\'s my shop name?" → {"type":"reply","text":"Your Jumia shop is <the name in About this seller>.","link":null}',
-    '"how do I regenerate my key?" → {"type":"reply","text":"1. Open your Extension Dashboard.\\n2. On the API key card, tap *Regenerate key* and confirm.\\n3. Copy the new key and paste it into the extension again: the old one stops working.","link":"dashboard"}',
-    '"how many listings have I done today?" → {"type":"listings","period":"today"}',
-    '"check if I have stock for creatine" → {"type":"stock","product":"creatine","filter":null}',
-    '"what is out of stock" → {"type":"stock","product":null,"filter":"out"}',
-    '"set my wellington boot stock to 30" → {"type":"live_change","product":"wellington boot","stock":30}',
-    '"put the boots on sale at 100 from 10 Oct to 20 Oct" → {"type":"live_change","product":"boots","sale_price":100}',
-    '"turn off the blender" → {"type":"live_change","product":"blender","active":false}',
-    '"ordrs" → {"type":"orders"}',
-    '(draft 2 is a wig) "make the wig 120" → {"type":"edit","edits":[{"products":[2],"said":"wig","changes":{"price":120},"ask":false}]}',
-    '(no draft is a gold medal) "set the gold medal to 25" → {"type":"live_change","product":"gold medal","price":25}',
-    '(one draft; the bot asked for its sizes) "Price: 130gh Sizes: Large, Medium, Small. Colors: cream, black and brown" → {"type":"edit","edits":[{"products":[1],"said":null,"changes":{"price":130,"variations":[{"said":"Large","option":"L"},{"said":"Medium","option":"M"},{"said":"Small","option":"S"}],"color":"cream, black and brown"},"ask":false}]}',
-    '(a batch drafting or in review) "don\'t list this one again" → {"type":"restart"}',
-    '(the bot just said the most is 20 at a time) "let\'s do five then" → {"type":"list","count":5}',
-    '"thanks" → {"type":"reply","text":"You\'re welcome! 🙌","link":null}',
-    '"how many of my products are on and off" → {"type":"shop","filter":"all"}',
-    '"what are my best sellers this month" → {"type":"report","kind":"best_sellers","period":"month"}',
-    '"which products haven\'t sold" → {"type":"report","kind":"slow_movers","period":"month"}',
-    '"what should I restock" → {"type":"report","kind":"restock","period":"month"}',
-    '"show my payout history" → {"type":"payout_detail","mode":"history","statement":null}',
-    '"what fees did jumia take on my last statement" → {"type":"payout_detail","mode":"breakdown","statement":null}',
-    '"raise all my prices by 5%" → {"type":"bulk","scope":"all","words":null,"price_pct":5}',
-    '"10% off all perfumes this weekend" → {"type":"bulk","scope":"matching","words":"perfumes","sale_pct":10}',
-    '"turn off everything that\'s out of stock" → {"type":"bulk","scope":"out_of_stock","words":null,"active":false}',
-    '"end the sale on all products" → {"type":"bulk","scope":"all","words":null,"sale":"end"}',
-    '"rewrite the description of the wellington boot" → {"type":"content_change","product":"wellington boot","name":null,"description":null,"highlights":null,"brand":null,"rewrite":["description"]}',
-    '"change the blender\'s name to Silver Crest 3 in 1 Blender 1.5L" → {"type":"content_change","product":"blender","name":"Silver Crest 3 in 1 Blender 1.5L","description":null,"highlights":null,"brand":null,"rewrite":[]}',
-    '"is Lattafa a brand on jumia?" → {"type":"brand_check","brand":"Lattafa","product":null}',
-    '"what does jumia need to list a perfume" → {"type":"category_info","product":"perfume"}',
-    '"how many kettles are in jumia\'s warehouse" → {"type":"warehouse_stock","product":"kettles"}',
-    '"send 50 of the kettle to jumia warehouse on 20 Oct" → {"type":"warehouse_order","items":[{"product":"kettle","quantity":50}]}',
-    '"PO 123AB shipped, tracking DHL998877" → {"type":"warehouse_shipped","po":"123AB","tracking":"DHL998877","carrier":null}',
-    '"restock the foldable drone to 10" → {"type":"live_change","product":"foldable drone","stock":10}',
-    '(after you listed what\'s out of stock) "restock all back to 10" → {"type":"bulk","scope":"listed","words":null,"stock":10}',
-    '(after you listed their newest products) "change the stock of the last 10 to 20" → {"type":"bulk","scope":"listed","words":null,"stock":20}',
-    '"let\'s enter shop assistant mode" → {"type":"reply","text":"<what you can do for their shop, as • lines>","link":null}',
-    ...NOT_YET_EXAMPLES,
-    '"the full list of the last 10 products uploaded on my shop" → {"type":"research","needs":[{"source":"products","sort":"newest","filter":"all","words":null,"limit":10,"since":null}]}',
-    '"my 5 most expensive perfumes and their stock" → {"type":"research","needs":[{"source":"products","sort":"price_high","filter":"all","words":"perfumes","limit":5,"since":null}]}',
-    '"which of my products added this month have sold?" → {"type":"research","needs":[{"source":"products","sort":"newest","filter":"all","words":null,"limit":30,"since":"month"},{"source":"product_sales","period":"month"}]}',
-    '"show this week\'s orders with what was in them, and my last payout" → {"type":"research","needs":[{"source":"orders","period":"week","status":null,"limit":15},{"source":"payouts"}]}',
-  ].join("\n");
 }
 
 // ─── Checking what the AI said ────────────────────────────────────────────
@@ -1303,44 +1019,9 @@ export function contentAction(parsed: Record<string, unknown>, message: string, 
   return { type: "content_change", product, request };
 }
 
-/** "the last 10 products", "my latest uploads", "products I uploaded": products already in their shop. */
-const NEWEST_RE = /\b(?:last|latest|newest|most recent|recent(?:ly)?)\b[^.?!]{0,30}?(?<![a-z])(?:products?|items?|listings?|uploads?)\b|(?<![a-z])(?:products?|items?|listings?)\b[^.?!]{0,20}\b(?:i\s+)?(?:uploaded|added|posted|created)\b/i;
-/** Wanting to list now, not asking about what's listed: "I want to list my last 3 products". */
-const LISTING_NOW_RE = /\b(?:want to|wanna|going to|gonna|let'?s|i'?m|i am|i will|i'?ll|can i|help me|start)\s+(?:list|upload|add|post|sell)\b/i;
-
-/** How many of their newest products the message asks for (10 when it doesn't say), or null when it isn't about them. */
-export function newestProductsAsked(message: string): number | null {
-  if (!NEWEST_RE.test(message) || LISTING_NOW_RE.test(message)) return null;
-  const n = messageNumbers(message).find((x) => Number.isInteger(x) && x >= 1 && x <= 30);
-  return n ?? 10;
-}
-
 const NAME_STOP = new Set(["the", "a", "an", "of", "and", "with", "for", "in", "to", "my"]);
 const nameWords = (s: string) =>
   s.toLowerCase().replace(/…$/, "").split(new RegExp("[^\\p{L}\\p{N}]+", "u")).filter((w) => w.length >= 2 && !NAME_STOP.has(w));
-
-/**
- * Whether the message is one of these product names on its own (three or
- * more of its words, every one in the name), as a seller sends a name from
- * the bot's list. Not a question. Pure.
- */
-export function isProductName(message: string, names: string[]): boolean {
-  const t = message.trim();
-  if (!t || t.includes("?") || t.split(/\s+/).length > 20) return false;
-  const want = nameWords(t);
-  if (want.length < 3) return false;
-  return names.some((n) => {
-    const have = new Set(nameWords(n));
-    return want.every((w) => have.has(w));
-  });
-}
-
-/** Whether the message is the name of a product in their Jumia shop (the local copy). */
-async function namesShopProduct(userId: string, message: string): Promise<boolean> {
-  if (!isProductName(message, [message])) return false;
-  const { data } = await createServerClient().from("jumia_products").select("name").eq("user_id", userId);
-  return isProductName(message, ((data ?? []) as { name: string | null }[]).map((r) => r.name ?? ""));
-}
 
 export interface ParseOpts {
   context?: string;
@@ -1349,50 +1030,6 @@ export interface ParseOpts {
   /** The bot listed products for them in the last 30 minutes (session.lastListed): "those" can mean them. */
   listed?: boolean;
 }
-
-/** Words about listing or stopping a batch: only these start or stop one. */
-const LISTING_TALK = /\b(list|listing|lists|listed|upload|uploading|add|sell|post|draft|drafts|batch|start|restart|again|over|begin|new|another|more|stop|cancel|quit|abort|forget|never ?mind|nevermind|enough|end|products?|items?|photos?|pictures?)\b/i;
-
-const NOT_PLURAL = new Set(["this", "does", "goes", "was", "has", "always", "perhaps", "unless", "across", "process", "address", "business", "less", "guess", "yours", "ours", "thanks", "plus", "status", "yes", "is", "us", "its", "his", "hers", "theirs", "whereas", "news"]);
-/** Whether the message talks about listing: its words, a quantity ("a few"), or things in the plural ("shirts"). */
-export function listingTalk(message: string): boolean {
-  if (LISTING_TALK.test(message) || /\b(few|some|couple|several|bunch|lots?)\b/i.test(message)) return true;
-  return message.toLowerCase().split(/[^a-z]+/).some((w) => w.length >= 4 && w.endsWith("s") && !w.endsWith("ss") && !NOT_PLURAL.has(w));
-}
-
-/** "the last 10", "those", "all of them": products the bot listed, not one product. */
-const MANY_RE = /^(?:all|everything|every one|each|them|those|these|they|all of them|each of them|the ones?(?: above| listed)?|the list|(?:the )?(?:last|lat|latest|first|top) \d{1,3}(?: products?| items?| ones?)?|all (?:the |my )?(?:products?|items?|ones|of those|of these))$/i;
-
-/**
- * "restock the foladable drone to. 10", "Change drone to 10 psc", "set the
- * price of the kettle to 120", "change the stock of the last 10 to 20":
- * which product (or products), the field when the words say it (null when
- * "to 10" could be stock or price), and the value. Null when the message
- * isn't one of these. Pure.
- */
-export function changeToAsked(message: string): { target: string; field: "stock" | "price" | null; value: number; many: boolean; restock: boolean } | null {
-  const m = message.trim().match(/^(?:please\s+|pls\s+|kindly\s+|can you\s+|could you\s+)?(restock|change|set|update|make|put|increase|reduce|raise|lower|bring)\s+(?:back\s+)?(?:the\s+|my\s+)?(?:(stock|price|quantity|qty)\s+(?:level\s+)?(?:of\s+|for\s+)?(?:the\s+|my\s+)?)?(.+?)(?:'s|’s)?\s+(?:(stock|price|quantity|qty)\s+)?(?:back\s+)?to\s*[.:]?\s*(gh₵|ghs|₵|ngn|₦|kes|ksh|ugx|\$)?\s*(\d[\d,]*(?:\.\d+)?)\s*(pcs|psc|pieces|piece|units|unit|qty|cedis|naira)?\s*[.!]?\s*$/i);
-  if (!m) return null;
-  const [, verb, fieldBefore, rawTarget, fieldAfter, currency, number, unit] = m;
-  const target = rawTarget.replace(/^(?:the|my)\s+/i, "").replace(/\s+(?:back|again)$/i, "").trim();
-  const value = parseFloat(number.replace(/,/g, ""));
-  // "change the price to 10", "set it to 10": a field or "it", not a product; the AI reads those.
-  if (!target || !Number.isFinite(value) || /^(?:price|stock|quantity|qty|colou?rs?|sizes?|name|title|brand|it|this|that|this one|that one)$/i.test(target)) return null;
-  // A sale price needs its dates: the sale's own handling reads it.
-  if (/\bsales?\b|\bdiscount\b|\bpromo\b/i.test(message)) return null;
-  const field = (fieldBefore ?? fieldAfter ?? "").toLowerCase();
-  const restock = /^restock$/i.test(verb);
-  const isStock = restock || /^(stock|quantity|qty)$/.test(field) || /^(pcs|psc|pieces|piece|units|unit|qty)$/i.test(unit ?? "");
-  const isPrice = field === "price" || !!currency || /^(cedis|naira)$/i.test(unit ?? "");
-  return {
-    target, value, restock,
-    field: isStock && !isPrice ? "stock" : isPrice && !isStock ? "price" : null,
-    many: MANY_RE.test(target),
-  };
-}
-
-/** "How many of my products are on", "...live on Jumia, on and off": the shop's overview. */
-const SHOP_COUNT = /\bhow many\b[^.?!]*\b(products?|items?|listings?)\b[^.?!]*\b(on|off|live|active|inactive|turned|deactivated|enabled|disabled)\b|\bhow many\b[^.?!]*\b(products?|items?)\b[^.?!]*\b(do i have|have i got|in my (shop|store)|on jumia)\b/i;
 
 // ─── Honest "can't" ───────────────────────────────────────────────────────
 
@@ -1438,63 +1075,15 @@ function blockedReply(text: string, message: string): AssistantAction {
   return { type: "not_yet", what: message.trim().slice(0, 200), outside: OUTSIDE_SCOPE.test(t), blocked: text.slice(0, 500) };
 }
 
-/** The AI's reply as an action our code can carry out, or unclear. */
-export function parseAction(
-  raw: string, message: string, products: ProductFacts[], links: Record<string, AssistantLink> = {}, currency = "GHS",
-  opts: ParseOpts = {},
-): AssistantAction {
-  const action = parseActionRaw(raw, message, products, links, currency, opts);
-  // "Change Foldable Drone with HD Camera to 10" opened a form for 10
-  // products, "restock the foladable drone to. 10" offered to start a batch,
-  // and "restock all back to 10" warned about a colour (owner's web chat,
-  // 2026-10-08, after the bot had asked how many products they're listing).
-  // A change to a product is never a count.
-  // A reply that said it can't (now not_yet) is a miss too: the words below may know what it is.
-  const cant = action.type === "not_yet" && !!action.blocked;
-  const missed = action.type === "list" || action.type === "restart" || action.type === "unclear" || action.type === "help" || cant
-    || (action.type === "edit" && action.edits.length === 0);
-  const asked = missed ? changeToAsked(message) : null;
-  if (asked && !products.some((p) => namesAProduct(asked.target) && fitsDraft(asked.target, p.listing.title))) {
-    const now = opts.now ?? new Date();
-    const value = asked.field === "price" ? { price: asked.value } : asked.field === "stock" ? { stock: asked.value } : null;
-    if (asked.many) {
-      // "the last 10", "those", "all": the products just listed, or what's out of stock when they say restock.
-      if (!value) return { type: "reply", text: `Their *stock* or their *price*? Say e.g. "set their stock to ${asked.value}" or "set their price to ${asked.value}".`, link: null };
-      if (opts.listed) return bulkAction({ scope: "listed", words: null, ...value }, message, now, currency, { listed: true, many: true });
-      if (asked.restock) return bulkAction({ scope: "out_of_stock", words: null, ...value }, message, now, currency, { restock: true, many: true });
-      return { type: "reply", text: `Which products? Ask me to list them first (e.g. "my last 10 products" or "what's out of stock"), then say "set their stock to ${asked.value}".`, link: null };
-    }
-    if (!value) {
-      return { type: "reply", text: `The *stock* or the *price* of the ${asked.target}? Say "${asked.target} stock ${asked.value}" or "${asked.target} price ${asked.value}".`, link: null };
-    }
-    return liveChangeAction({ product: asked.target, ...value }, message, opts.context ?? "", now, currency);
-  }
-  // "Let's enter Shop assistant mode" offered to start a batch: only words
-  // about listing (or stopping) start or stop one; anything else gets what it can do.
-  if (action.type === "restart" && !listingTalk(message)) return { type: "help" };
-  // "the full list of the last 10products uploaded on my shop" was read as
-  // listing 10 products, as "I can't" and as the hello menu (owner's web
-  // chat, 2026-10-08): it's their newest products, read from Jumia.
-  const newest = newestProductsAsked(message);
-  if (newest != null && (action.type === "list" || action.type === "restart" || action.type === "unclear" || action.type === "reply" || cant)) {
-    return { type: "research", needs: [{ source: "products", sort: "newest", filter: "all", words: null, limit: newest, since: null }] };
-  }
-  // Owner's test, 2026-10-07: "How many of my products are on" went to a
-  // product search, and "...live on JUMIA is on and off" was answered "I
-  // can't tell you". The overview has those counts.
-  if (SHOP_COUNT.test(message) && !/\b(out of stock|low|sold|orders?|listed|list(ed)? (today|this))\b/i.test(message)
-    && (action.type === "product_info" || action.type === "reply" || action.type === "unclear" || action.type === "stock" || cant)) {
-    return { type: "shop", filter: "all" };
-  }
-  return action;
-}
-
 /**
- * The AI's reply checked for safety only (values in the message, products
- * named, nothing widened), without parseAction's word rules. The test set
- * (lib/evals/assistant-eval.ts) scores both, to see what each rule adds.
+ * The AI's reply as an action our code can carry out, or unclear: checked
+ * for safety only (every value in the message, products named, nothing
+ * widened, a reply that says it can't stopped). The word rules that used to
+ * correct the AI's choice here are gone with the old one-call reader (step 2
+ * of the plan, 11 Oct): a misread becomes a test case
+ * (lib/evals/assistant-cases.ts), never a rule.
  */
-export function parseActionUnguarded(
+export function parseAction(
   raw: string, message: string, products: ProductFacts[], links: Record<string, AssistantLink> = {}, currency = "GHS",
   opts: ParseOpts = {},
 ): AssistantAction {
@@ -1932,29 +1521,6 @@ export async function recentConversation(phone: string, current: string, max = 2
   }
 }
 
-export async function interpret(
-  userId: string,
-  stage: Stage,
-  products: ProductFacts[],
-  message: string,
-  opts: { batchId?: string | null; hintSeq?: number; conversation?: string[]; web?: boolean; position?: string; waitingFor?: string; listed?: { count: number; what: string } | null } = {},
-): Promise<{ action: AssistantAction; links: Record<string, AssistantLink>; raw: string }> {
-  const [currency, seller, model, listingCost, memory] = await Promise.all([
-    shopCurrencyForUser(userId), sellerFacts(userId), assistantModel(), listingCreditCost(userId).catch(() => LIVE_LISTING_CREDIT_COST),
-    sellerMemory(userId),
-  ]);
-  const links = assistantLinks({ batchId: opts.batchId, countrySlug: seller.countrySlug });
-  const conversation = opts.conversation ?? [];
-  const prompt = buildPrompt(stage, message, {
-    products, currency, seller: seller.lines, links, hintSeq: opts.hintSeq, conversation, listingCost, web: opts.web,
-    position: opts.position, waitingFor: opts.waitingFor, memory, listed: opts.listed ?? null,
-  });
-  const { text } = await withAiUsageContext({ feature: "assistant", userId }, () =>
-    callGeminiBackend(model, [{ text: prompt }], model.startsWith("gemini-3") ? { preferBackend: "ai-studio" } : {}));
-  const action = parseAction(text, message, products, links, currency, { context: conversation.join("\n"), stage, listed: !!opts.listed });
-  return { action, links, raw: text };
-}
-
 /** One line for a product the bot listed: where it is, as the front door reads it. */
 function listedLine(p: ShopProduct): string {
   const qc = p.qcStatus === "REJECTED" ? "rejected by quality check" : p.qcStatus === "APPROVED" ? "approved" : p.qcStatus ? "waiting for quality check" : "quality check unknown";
@@ -1977,8 +1543,8 @@ async function shopFacts(userId: string, message: string, listedSids: string[]):
 }
 
 /**
- * interpret's counterpart for the front door: the same facts, read in two
- * small steps (the area, then the action within it), with no word rules.
+ * The front door: the seller's facts, read in two small steps (the area,
+ * then the action within it), with no word rules.
  * It may answer with a question back (`clarify`) instead of an action.
  */
 export async function interpretThroughFrontDoor(
@@ -2006,7 +1572,7 @@ export async function interpretThroughFrontDoor(
 }
 
 /**
- * interpret's counterpart for agent mode: the same facts as the front door,
+ * Agent mode: the same facts as the front door,
  * read in one call with every action as a tool, looking up their products
  * (the shop's local copy) when it needs to. One to three actions, or a
  * question back. Throws when the model fails or runs out of time.
@@ -2367,14 +1933,13 @@ export async function runAssistant(
     : opts.position;
   // Agent mode reads first where it's on (every seller since 11 Oct, owner:
   // "make agent mode the main reader for everyone and keep the front door as
-  // its automatic backup"); the front door reads what it can't.
-  const [viaFrontDoor, viaAgent] = await Promise.all([frontDoorFor(userId), agentFor(userId)]);
+  // its automatic backup"); the front door reads what it can't. The old
+  // one-call reader and its word rules are gone (step 2 of the plan).
+  const viaAgent = await agentFor(userId);
   let actions: AssistantAction[];
   let links: Record<string, AssistantLink>;
   let raw: string;
   let products: ProductFacts[] = [];
-  // Read without the word rules (front door or agent): no product-name override after.
-  let unguarded = viaFrontDoor;
   try {
     const conversation = await recentConversation(phone, text);
     products = batchId ? await productFacts(await batchListings(batchId, userId)) : [];
@@ -2400,7 +1965,6 @@ export async function runAssistant(
           agentNote = `[agent found nothing to do: ${agent.raw.slice(0, 160)}] `;
         } else {
           read = agent;
-          unguarded = true;
         }
       } catch (e) {
         // Slow or refused: the front door reads it, while there's time left in the request.
@@ -2409,44 +1973,22 @@ export async function runAssistant(
         agentNote = `[agent failed: ${(e as Error).message.slice(0, 120)}] `;
       }
     }
-    if (!read && (viaFrontDoor || viaAgent)) {
-      const t0 = Date.now();
-      const door = await interpretThroughFrontDoor(userId, stage, products, text, more).catch(async (e: Error) => {
-        // Failed fast (a model refused): the chat's own reading answers instead
-        // of the review step's help (owner's WhatsApp, 2026-10-08 21:16).
-        if (Date.now() - t0 > 20_000) throw e;
-        console.warn(`[assistant] front door failed for ${userId}, reading it the usual way: ${e.message}`);
-        const usual = await interpret(userId, stage, products, text, facts);
-        return { ...usual, area: "", raw: `[front door failed: ${e.message.slice(0, 120)}] ${usual.raw}` };
-      });
+    if (!read) {
+      // The front door has its own backups (another model sorts or reads
+      // when one fails); if it still fails, the turn fails to the flow.
+      const door = await interpretThroughFrontDoor(userId, stage, products, text, more);
       if (door.action.type === "clarify") {
         await sendClarify(phone, door.action, door.area || undefined);
         await logTurn(userId, stage, text, door.action as unknown as AssistantAction, `asked: ${door.action.question}`.slice(0, 300), agentNote + door.raw);
         return "handled";
       }
-      unguarded = true;
       read = { actions: [door.action as AssistantAction], links: door.links, raw: agentNote + door.raw };
-    }
-    if (!read) {
-      const usual = await interpret(userId, stage, products, text, facts);
-      read = { actions: [usual.action], links: usual.links, raw: usual.raw };
     }
     ({ actions, links, raw } = read);
   } catch (e) {
     console.warn(`[assistant] interpreting for ${userId} failed: ${(e as Error).message}`);
     await logTurn(userId, stage, text, null, `failed: ${(e as Error).message}`);
     return "failed";
-  }
-  // A product's name on its own, as it shows in their shop ("Malta Guinness
-  // Soft Drink - 330ml Bottles, Pack of 6", from the bot's list of rejected
-  // products) got "I can only look up products related to your shop", and
-  // "Water Wave Lace Front Wig" the review step's help (owner's web chat,
-  // 2026-10-08): it's that product. The front door is told the shop's
-  // matching names instead.
-  const said = actions[0]?.type === "reply" || actions[0]?.type === "unclear" || (actions[0]?.type === "not_yet" && !!actions[0].blocked);
-  if (!unguarded && actions.length === 1 && said && stage !== "collecting" && stage !== "starting"
-    && (await namesShopProduct(userId, text).catch(() => false))) {
-    actions = [{ type: "product_info", product: text.trim().slice(0, 120) }];
   }
   console.info(`[assistant] ${userId} (${stage}): ${actions.map((a) => a.type).join(" + ")}`);
 

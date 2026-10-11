@@ -22,6 +22,7 @@ jest.mock("@/lib/ai/gemini-client", () => ({
 import { ASSISTANT_CASES, type EvalCase } from "@/lib/evals/assistant-cases";
 import { byArea, matchesShape, passes, queueRun, routing, runCase, workOnRuns } from "@/lib/evals/assistant-eval";
 import { contextText, frontDoor, namesInMessage, openQuestion } from "@/lib/assistant-v2/front-door";
+import { agentModel } from "@/lib/whatsapp/assistant";
 
 const ACTIONS = new Set([
   "edit", "submit", "list", "restart", "review", "orders", "credits", "help", "reply", "live_change", "product_info", "product_text", "fees", "stock", "shop",
@@ -89,27 +90,13 @@ describe("comparing an action with what's expected", () => {
 describe("running a case", () => {
   const byId = (id: string) => ASSISTANT_CASES.find((c) => c.id === id)!;
 
-  it("uses the chat's own prompt with the case's conversation and drafts", async () => {
-    const r = await runCase(byId("draft-price-is-product-3"), "gemini-2.5-flash-lite");
-    expect(prompts[0]).toContain("You are PandaWorld's Jumia Listing Assistant");
-    expect(prompts[0]).toContain('3. "White Maple Leaf Flower Earrings - Gold Tone"');
-    expect(prompts[0]).toContain("Bot: ✅ Price set to GH₵150 for product 1");
-    expect(prompts[0]).toContain('The seller\'s new message: "No the 150 is product 3 price"');
+  it("reads the case with its conversation and drafts, as the chat would", async () => {
+    answer = (p) => (p.includes('Reply with JSON only: {"area"') ? '{"area":"drafts"}' : '{"type":"reply","text":"ok","link":null}');
+    const r = await runCase(byId("draft-price-is-product-3"), "gemini-2.5-flash-lite", { pipeline: "front_door" });
+    expect(prompts[1]).toContain('3. "White Maple Leaf Flower Earrings - Gold Tone"');
+    expect(prompts[1]).toContain("Bot: ✅ Price set to GH₵150 for product 1");
+    expect(prompts[1]).toContain('Their new message: "No the 150 is product 3 price"');
     expect(r).toMatchObject({ id: "draft-price-is-product-3", pass: false });
-  });
-
-  it("scores the deployed checks and the AI's choice alone separately", async () => {
-    // The owner's drone message, read as a batch of 10: the AI alone fails, the word rule passes it.
-    answer = () => '{"type":"list","count":10}';
-    const r = await runCase(byId("live-change-drone-psc"), "m");
-    expect(r).toMatchObject({ pass: true, bare: false });
-    answer = () => '{"type":"live_change","product":"drone","stock":10}';
-    expect(await runCase(byId("live-change-drone-psc"), "m")).toMatchObject({ pass: true, bare: true });
-  });
-
-  it("applies the same product-name check as the chat", async () => {
-    answer = () => '{"type":"reply","text":"I\'m sorry, I can only look up products related to your shop.","link":null}';
-    expect(await runCase(byId("shop-name-malta"), "m")).toMatchObject({ pass: true, bare: false });
   });
 
   it("a call that fails twice is an error, not a wrong answer", async () => {
@@ -121,13 +108,13 @@ describe("running a case", () => {
 describe("a run", () => {
   it("is queued, worked through in groups, saved, and scored by area", async () => {
     answer = () => '{"type":"reply","text":"Hi! 👋","link":null}';
-    const id = await queueRun({ model: "gemini-2.5-flash-lite" });
+    const id = await queueRun({ model: "gemini-2.5-flash-lite", pipeline: "front_door" });
     let r = await workOnRuns(10 * 60_000);
     expect(r).toEqual({ runId: id, done: ASSISTANT_CASES.length, total: ASSISTANT_CASES.length });
     const row = (db.tables.assistant_eval_runs as Record<string, unknown>[])[0] as { status: string; passed: number; results: { pass: boolean; area: string }[] };
     expect(row.status).toBe("done");
     expect(row.results).toHaveLength(ASSISTANT_CASES.length);
-    // Every case a plain reply is right for passes (and a few the word rules turn into the right answer); the rest don't.
+    // Every case a plain reply is right for passes; the rest don't.
     const replyOk = ASSISTANT_CASES.filter((c) => c.ok.some((s) => s.type === "reply" && Object.keys(s).length === 1)).length;
     expect(row.passed).toBe(row.results.filter((x) => x.pass).length);
     expect(row.passed).toBeGreaterThanOrEqual(replyOk);
@@ -142,7 +129,7 @@ describe("a run", () => {
     jest.useFakeTimers();
     try {
       answer = () => new Promise<string>(() => {});
-      await queueRun({ model: "m" });
+      await queueRun({ model: "m", pipeline: "front_door" });
       const work = workOnRuns(100_000);
       await jest.advanceTimersByTimeAsync(100_000);
       const r = await work;
@@ -153,6 +140,23 @@ describe("a run", () => {
     } finally {
       jest.useRealTimers();
     }
+  });
+});
+
+describe("which way a run reads the cases", () => {
+  it("agent mode, the chat's main reader, unless the front door is asked for", async () => {
+    const id = await queueRun();
+    const row = (db.tables.assistant_eval_runs as Record<string, unknown>[]).find((x) => x.id === id)!;
+    expect(row).toMatchObject({ pipeline: "agent", model: await agentModel(), router_model: null });
+  });
+
+  it("an old one-call run still queued is read through the front door", async () => {
+    answer = (p) => (p.includes('Reply with JSON only: {"area"') ? '{"area":"chat"}' : '{"type":"reply","text":"Hi! 👋","link":null}');
+    db.tables.assistant_eval_runs = [{ id: "old", created_at: "2026-10-10T00:00:00Z", status: "queued", model: "m", total: ASSISTANT_CASES.length, done: 0, results: [], pipeline: "current", locked_until: null }];
+    await workOnRuns(10 * 60_000);
+    const row = (db.tables.assistant_eval_runs as Record<string, unknown>[])[0] as { status: string; results: { routed?: string }[] };
+    expect(row.status).toBe("done");
+    expect(row.results[0].routed).toBe("chat");
   });
 });
 

@@ -15,7 +15,7 @@
  *     to 10 and show me today's orders"), carried out in order.
  *
  * What doesn't: every action goes through the chat's own safety checks
- * (parseActionUnguarded: each value in the message, products named, nothing
+ * (parseAction: each value in the message, products named, nothing
  * widened), a change to Jumia is offered for a confirm tap unless it's one
  * the owner made immediate (one named product's stock, ON/OFF or end of
  * sale: lib/whatsapp/shop.ts immediateChange), and what isn't possible is
@@ -32,7 +32,7 @@ import { callGeminiWithTools, type GeminiTool, type GeminiTurn, type ThinkingLev
 import { withAiUsageContext } from "@/lib/ai/usage";
 import { siteGuide } from "@/lib/whatsapp/site-guide";
 import { canList, cannotList } from "@/lib/jumia/capabilities";
-import { capabilities, claimsInability, parseActionUnguarded, type AssistantAction } from "@/lib/whatsapp/assistant";
+import { capabilities, claimsInability, parseAction, type AssistantAction } from "@/lib/whatsapp/assistant";
 import { findProducts, type ShopProduct } from "@/lib/jumia/shop";
 import { EXAMPLES, NEVER_CANT, NOT_YET_EXAMPLES, contextText, type Clarify, type FrontDoorInput, type FrontDoorUsage } from "@/lib/assistant-v2/front-door";
 
@@ -440,7 +440,7 @@ export async function agentRead(
     // add nothing; nor does starting over beside listing (the list starts it).
     if (many && (c.name === "reply" || c.name === "step")) continue;
     if (c.name === "restart" && finals.some((f) => f.name === "list")) continue;
-    const action = parseActionUnguarded(JSON.stringify(actionJson(c.name, c.args)), said, input.drafts, input.links, input.currency, {
+    const action = parseAction(JSON.stringify(actionJson(c.name, c.args)), said, input.drafts, input.links, input.currency, {
       context, stage: input.stage, listed: !!input.listed,
     });
     const key = JSON.stringify(action);

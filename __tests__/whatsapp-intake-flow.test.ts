@@ -164,7 +164,12 @@ const aiPrompts: string[] = [];
 jest.mock("@/lib/ai/gemini-client", () => ({
   ...jest.requireActual("@/lib/ai/gemini-client"),
   callGeminiBackend: async (model: string, parts: { text?: string }[]) => {
-    aiPrompts.push(parts.map((p) => p.text ?? "").join("\n"));
+    const prompt = parts.map((p) => p.text ?? "").join("\n");
+    // The front door's sorting call: "chat" unless a test scripts the area.
+    if (prompt.startsWith("You sort one message") && !(aiReplies[0] ?? "").includes('"area"')) {
+      return { text: '{"area":"chat","also":null}', model, backend: "vertex" };
+    }
+    aiPrompts.push(prompt);
     const text = aiReplies.shift();
     if (text == null) throw new Error("no AI reply scripted");
     return { text, model, backend: "vertex" };
@@ -3701,7 +3706,7 @@ describe("the assistant, on the pilot's accounts", () => {
 
     await handleLinkedMessage(USER, PHONE, "m1", { text: "change the quantity of the fridge to 20" });
 
-    expect(aiPrompts[0]).toContain(`1. "${FRIDGE}" (draft, not sent yet)`);
+    expect(aiPrompts[0]).toContain(`1. "${FRIDGE}" · price`);
     expect(aiPrompts[0]).toContain(`2. "${SHIRT}"`);
     expect(listings()[0].quantity).toBe(20);
     expect(db.tables.variants[0].quantity).toBe(20);
@@ -3996,7 +4001,7 @@ describe("the assistant, on the pilot's accounts", () => {
       aiReplies.push('{"type":"step"}');
       await handleLinkedMessage(USER, PHONE, "m1", { text: "Price 200, sizes M and L" });
       expect(aiPrompts).toHaveLength(1);
-      expect(aiPrompts[0]).toContain("They're on product 1 of 2.");
+      expect(aiPrompts[0]).toContain("(product 1 of 2)");
       expect(session().pending_notes).toContain("Price 200");
 
       await handleLinkedMessage(USER, PHONE, "m2", { text: "colour black" });
@@ -4004,13 +4009,12 @@ describe("the assistant, on the pilot's accounts", () => {
     });
   });
 
-  // Step 2 of the reliability plan, switched on per account (owner, 2026-10-08).
+  // Step 2 of the reliability plan (owner, 2026-10-08); since 11 Oct agent
+  // mode's automatic backup, and what reads a message when agent mode is off.
   describe("through the front door", () => {
-    const frontDoorOn = () => { db.tables.app_settings = [{ key: "assistant_front_door", value: [USER] }]; };
 
     it("sorts the message, reads it in its area, and an edit to a draft is made", async () => {
       drafted([FRIDGE, SHIRT]);
-      frontDoorOn();
       aiPrompts.length = 0;
       aiReplies.push('{"area":"drafts"}', '{"type":"edit","edits":[{"products":[1],"said":"fridge","changes":{"quantity":20},"ask":false}]}');
       await handleLinkedMessage(USER, PHONE, "m1", { text: "change the quantity of the fridge to 20" });
@@ -4023,7 +4027,6 @@ describe("the assistant, on the pilot's accounts", () => {
 
     it("asks back with buttons, and a tapped answer is read with the question", async () => {
       drafted([FRIDGE, SHIRT]);
-      frontDoorOn();
       aiPrompts.length = 0;
       aiReplies.push('{"area":"drafts"}', '{"type":"clarify","question":"Change the fridge\'s quantity or its price to 20?","options":["Quantity to 20","Price to 20","20"]}');
       await handleLinkedMessage(USER, PHONE, "m1", { text: "fridge 20" });
@@ -4043,13 +4046,14 @@ describe("the assistant, on the pilot's accounts", () => {
       expect(db.tables.listings[0].quantity).toBe(20);
     });
 
-    it("is off without the switch: one call, the usual prompt", async () => {
+    it("needs no switch: the old one-call reader is gone (11 Oct)", async () => {
       drafted([FRIDGE, SHIRT]);
       aiPrompts.length = 0;
-      aiReplies.push('{"type":"edit","edits":[{"products":[1],"changes":{"quantity":20},"ask":false}]}');
+      aiReplies.push('{"area":"drafts"}', '{"type":"edit","edits":[{"products":[1],"said":"fridge","changes":{"quantity":20},"ask":false}]}');
       await handleLinkedMessage(USER, PHONE, "m1", { text: "change the quantity of the fridge to 20" });
-      expect(aiPrompts).toHaveLength(1);
-      expect(aiPrompts[0]).not.toContain('{"area"');
+      expect(aiPrompts).toHaveLength(2);
+      expect(aiPrompts[0]).toContain('Reply with JSON only: {"area"');
+      expect(db.tables.listings[0].quantity).toBe(20);
     });
   });
 });
@@ -4091,8 +4095,7 @@ describe("the AI reads every typed message first", () => {
     db.tables.listings = [{ id: "listing-1", user_id: USER, whatsapp_batch_id: "batch-1", whatsapp_seq: 1, images: ["https://cdn.test/a.jpg"], user_prompt: null, status: "draft" }];
     aiReplies.push('{"type":"reply","text":"Hi! I\'m here.","link":null}');
     await handleLinkedMessage(USER, PHONE, "m1", { text: "Hello?" });
-    expect(aiPrompts[0]).toContain("Where the seller is (context, not a limit");
-    expect(aiPrompts[0]).toContain("They're on product 1.");
+    expect(aiPrompts[0]).toContain("Where they are: They are sending a batch's products: photos with each product's details. (product 1)");
     expect(listings()[0].user_prompt).toBeNull();
     expect(sent.at(-1)!.body).toBe("Hi! I'm here.\n\n_Still on product 1: send its photos and details, then *done*._");
   });
@@ -4118,7 +4121,7 @@ describe("the AI reads every typed message first", () => {
     seedSession({ state: "awaiting_confirmation", batch_size: 1, batch_seq: null, awaiting_price_for: "listing-1" });
     aiReplies.push('{"type":"credits"}');
     await handleLinkedMessage(USER, PHONE, "m1", { text: "how much credit do I have left" });
-    expect(aiPrompts[0]).toContain("The bot's last question is still open: it asked for the selling price of a drafted product.");
+    expect(aiPrompts[0]).toContain("The bot's open question: the selling price of a drafted product.");
     expect(session().awaiting_price_for).toBe("listing-1");
     // The price, typed next, still answers it, with no AI call.
     aiPrompts.length = 0;
@@ -4133,7 +4136,7 @@ describe("the AI reads every typed message first", () => {
     aiReplies.push('{"type":"reply","text":"Once Jumia approves the helmet, tell me and I\'ll change its price.","link":null}');
     await handleLinkedMessage(USER, PHONE, "m1", { text: "Change the price of the helmet i had already submitted to 500" });
     db.tables.jumia_connections = [];
-    expect(aiPrompts[0]).toContain("has just submitted the products below to Jumia");
+    expect(aiPrompts[0]).toContain("They have just submitted their batch to Jumia.");
     expect(sent.some((m) => m.body.includes("already with Jumia"))).toBe(false);
   });
 
@@ -4162,7 +4165,7 @@ describe("the AI reads every typed message first", () => {
     await handleLinkedMessage(USER, PHONE, "m1", { text: "hi there" });
     db.tables.jumia_connections = [];
     db.tables.whatsapp_message_log = [];
-    expect(aiPrompts[0]).toContain("What you remember about this seller from earlier");
+    expect(aiPrompts[0]).toContain("What you remember about them from earlier");
     expect(aiPrompts[0]).toContain("Sells crochet hats and bodysuits");
     expect(aiPrompts[0]).toContain("Seller: [a code]");
     expect(aiPrompts[0]).not.toContain("c9758cb3");
@@ -4224,7 +4227,6 @@ describe("the AI reads every typed message first", () => {
   // be?" became "Updated product 1's price to GH₵0".
   it("a number answering the assistant's question is read with it through the front door, never as a draft's price", async () => {
     seedSession({ state: "awaiting_confirmation", batch_size: 1, batch_seq: null });
-    db.tables.app_settings = [{ key: "assistant_front_door", value: [USER] }];
     db.tables.listings = [{ id: "listing-1", user_id: USER, whatsapp_batch_id: "batch-1", whatsapp_seq: 1, title: "Crocheted Pearl Beanie", selling_price: 130, status: "draft" }];
     db.tables.whatsapp_message_log = [
       { phone_number: PHONE, direction: "outbound", message_type: "button", created_at: new Date(Date.now() - 30_000).toISOString(),

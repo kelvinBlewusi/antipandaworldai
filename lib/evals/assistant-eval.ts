@@ -3,23 +3,22 @@
  * real AI (owner, 2026-10-08: "how do we make sure that the next solution we
  * offer for the problem does not conflict the past solution we gave").
  *
- * Each case goes through what production does with a message: the same
- * prompt (buildPrompt, with the case's stage, conversation, drafts and the
- * list just shown), the same model call, the same checks (parseAction), and
- * the same product-name check runAssistant makes. The action that comes out
- * is compared with the case's acceptable answers. Scored twice: as
- * deployed ("pass"), and with the AI's choice checked for safety only,
- * without parseAction's word rules ("bare"), to see what each rule adds.
+ * Each case goes through what production does with a message, with the
+ * case's stage, conversation, drafts and the list just shown, and the
+ * action that comes out is compared with the case's acceptable answers.
+ * Two ways, as the chat reads messages since 11 Oct:
  *
- * A run can instead put the cases through the step-2 prototype, "one front
- * door" (lib/assistant-v2/front-door.ts: route to an area, then read within
- * it, and ask back rather than guess), which nothing in the chat uses. Its
- * questions back are counted apart ("asked"): not wrong, but a tap more.
+ *   - agent mode (lib/assistant-v2/agent.ts: one call with every action as
+ *     a tool, lookups of the case's catalog, up to three actions), the main
+ *     reader. It passes when every action it takes is one of the case's
+ *     answers; "bare" counts it when any one is.
+ *   - the front door (lib/assistant-v2/front-door.ts: route to an area,
+ *     then read within it, and ask back rather than guess), agent mode's
+ *     automatic backup.
  *
- * Or through agent mode (lib/assistant-v2/agent.ts: one call with every
- * action as a tool, lookups of the case's catalog, up to three actions). It
- * passes when every action it takes is one of the case's answers; "bare"
- * counts it when any one is.
+ * Questions back are counted apart ("asked"): not wrong, but a tap more.
+ * Runs of the old one-call reader (pipeline "current", gone with its word
+ * rules on 11 Oct) stay in the table for comparison.
  *
  * Runs are rows in assistant_eval_runs, worked through by
  * app/api/worker/assistant-eval (pg_cron each minute while one is queued,
@@ -29,12 +28,9 @@
  */
 
 import { createServerClient } from "@/lib/supabase/server";
-import { callGeminiBackend } from "@/lib/ai/gemini-client";
-import { withAiUsageContext } from "@/lib/ai/usage";
 import { appUrl } from "@/lib/whatsapp/app-url";
 import {
-  assistantLinks, assistantModel, buildPrompt, isProductName, parseAction, parseActionUnguarded,
-  type AssistantAction, type ProductFacts,
+  agentModel, assistantLinks, assistantModel, type ProductFacts,
 } from "@/lib/whatsapp/assistant";
 import { ASSISTANT_CASES, type EvalCase, type Shape } from "@/lib/evals/assistant-cases";
 import { frontDoor, type FrontDoorInput } from "@/lib/assistant-v2/front-door";
@@ -69,17 +65,17 @@ const LOCK_MS = 58_000;
  */
 const CASE_MS = 40_000;
 
-/** "current": the one big prompt. "front_door": sort, then read. "agent": function calling (the pilot). */
-export type Pipeline = "current" | "front_door" | "agent";
-export const PIPELINES: Pipeline[] = ["current", "front_door", "agent"];
+/** "agent": function calling, the main reader. "front_door": sort, then read, its backup. */
+export type Pipeline = "front_door" | "agent";
+export const PIPELINES: Pipeline[] = ["agent", "front_door"];
 
 export interface CaseResult {
   id: string;
   area: string;
   pass: boolean;
-  /** Passed with the AI's choice checked for safety only (no word rules). */
+  /** Agent: at least one of its actions right. Old one-call runs: the AI's choice alone, without word rules. */
   bare: boolean;
-  /** Front door: it asked the seller a question back instead of acting. */
+  /** It asked the seller a question back instead of acting. */
   asked?: boolean;
   /** Front door: the area its first call sent the message to. */
   routed?: string;
@@ -138,28 +134,7 @@ function facts(c: EvalCase): ProductFacts[] {
   }));
 }
 
-/** What the assistant makes of the case's message, as production would. */
-export async function understand(c: EvalCase, model: string): Promise<{ action: AssistantAction; bare: AssistantAction; raw: string }> {
-  const links = assistantLinks();
-  const products = facts(c);
-  const conversation = c.ctx ?? [];
-  const prompt = buildPrompt(c.stage, c.msg, {
-    products, currency: "GHS", seller: SELLER, links, conversation, web: c.web ?? true, waitingFor: c.waitingFor,
-    listed: c.listed ?? null, listingCost: 2,
-  });
-  const { text } = await withAiUsageContext({ feature: "assistant_eval" }, () =>
-    callGeminiBackend(model, [{ text: prompt }], model.startsWith("gemini-3") ? { preferBackend: "ai-studio" } : {}));
-  const opts = { context: conversation.join("\n"), stage: c.stage, listed: !!c.listed };
-  let action = parseAction(text, c.msg, products, links, "GHS", opts);
-  // The product-name check runAssistant makes against their shop.
-  if ((action.type === "reply" || action.type === "unclear") && c.stage !== "collecting" && c.stage !== "starting"
-    && c.catalog && isProductName(c.msg, c.catalog)) {
-    action = { type: "product_info", product: c.msg.trim().slice(0, 120) };
-  }
-  return { action, bare: parseActionUnguarded(text, c.msg, products, links, "GHS", opts), raw: text };
-}
-
-/** What the front door prototype makes of the case's message (no word rules, no product-name override). */
+/** What the front door makes of the case's message. */
 export async function understandFrontDoor(c: EvalCase, models: { router: string; reader: string }) {
   return frontDoor({
     stage: c.stage, message: c.msg, conversation: c.ctx ?? [], drafts: facts(c), listed: c.listed ?? null,
@@ -196,15 +171,11 @@ export async function runCase(c: EvalCase, model: string, opts: { pipeline?: Pip
         const bare = asked ? reply : actions.some((a) => passes(a, c));
         return { id: c.id, area: c.area, pass, bare, asked, got: summary(clarify ?? (actions.length === 1 ? actions[0] : actions)), raw: raw.slice(0, 600), ms: Date.now() - t0 };
       }
-      if (opts.pipeline === "front_door") {
-        const { area, action, raw } = await understandFrontDoor(c, { router: opts.router || model, reader: model });
-        // A question back is a reply with buttons: right where any reply is.
-        const asked = action.type === "clarify";
-        const pass = asked ? c.ok.some((shape) => shape.type === "reply" && Object.keys(shape).length === 1) : passes(action, c);
-        return { id: c.id, area: c.area, pass, bare: pass, asked, routed: area, got: summary(action), raw: raw.slice(0, 600), ms: Date.now() - t0 };
-      }
-      const { action, bare, raw } = await understand(c, model);
-      return { id: c.id, area: c.area, pass: passes(action, c), bare: passes(bare, c), got: summary(action), raw: raw.slice(0, 400), ms: Date.now() - t0 };
+      const { area, action, raw } = await understandFrontDoor(c, { router: opts.router || model, reader: model });
+      // A question back is a reply with buttons: right where any reply is.
+      const asked = action.type === "clarify";
+      const pass = asked ? c.ok.some((shape) => shape.type === "reply" && Object.keys(shape).length === 1) : passes(action, c);
+      return { id: c.id, area: c.area, pass, bare: pass, asked, routed: area, got: summary(action), raw: raw.slice(0, 600), ms: Date.now() - t0 };
     } catch (e) {
       lastError = (e as Error).message.slice(0, 200);
     }
@@ -217,18 +188,19 @@ export async function runCase(c: EvalCase, model: string, opts: { pipeline?: Pip
 export interface EvalRun {
   id: string; created_at: string; status: string; model: string; note: string | null; total: number; done: number;
   passed: number; passed_bare: number; errors: number; results: CaseResult[]; finished_at: string | null;
-  /** Older rows have none: the current pipeline. */
-  pipeline?: Pipeline | null; router_model?: string | null; asked?: number | null;
+  /** "current" or none: the old one-call reader (runs before 11 Oct). */
+  pipeline?: Pipeline | "current" | null; router_model?: string | null; asked?: number | null;
 }
 
 /**
- * Queue a run of the whole set (the model in use unless one is named),
- * through the chat as it is or the front door prototype (whose first call
- * uses `router`, the same model unless named). Returns its id.
+ * Queue a run of the whole set through agent mode (the main reader) or the
+ * front door (its backup, whose first call uses `router`, the same model
+ * unless named), with the model that way uses unless one is named.
+ * Returns its id.
  */
 export async function queueRun(opts: { model?: string; note?: string; pipeline?: Pipeline; router?: string } = {}): Promise<string> {
-  const model = opts.model ?? (await assistantModel());
-  const pipeline = opts.pipeline ?? "current";
+  const pipeline = opts.pipeline ?? "agent";
+  const model = opts.model ?? (pipeline === "agent" ? await agentModel() : await assistantModel());
   const { data, error } = await createServerClient()
     .from("assistant_eval_runs")
     .insert({
@@ -295,7 +267,7 @@ export async function workOnRuns(budgetMs = 100_000): Promise<{ runId: string | 
   const left = ASSISTANT_CASES.filter((c) => !done.has(c.id));
   while (left.length > 0 && Date.now() + CASE_MS < deadline) {
     const group = left.splice(0, PARALLEL);
-    results.push(...(await Promise.all(group.map((c) => capped(c, runCase(c, run.model, { pipeline: run.pipeline ?? "current", router: run.router_model }))))));
+    results.push(...(await Promise.all(group.map((c) => capped(c, runCase(c, run.model, { pipeline: run.pipeline === "agent" ? "agent" : "front_door", router: run.router_model }))))));
     await db.from("assistant_eval_runs").update({
       ...tally(results), results, locked_until: new Date(Date.now() + LOCK_MS).toISOString(),
     }).eq("id", run.id);

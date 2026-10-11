@@ -2161,7 +2161,8 @@ get info and data and organize them to fit the sellers request."
   the message says they want to list now ("I want to list my last 3").
   The owner's web chat got "I can't" and then "Let's list! How many…".
   Since any reply (the hello menu came back too) is replaced the same way.
-- **A product's name on its own is that product**: after interpret, a reply
+- **A product's name on its own is that product** (removed 11 Oct with the
+  old reader; the front door and agent mode see the shop's matching names): after interpret, a reply
   or unclear for a message that is a product name in their shop (3+ words,
   every one in a jumia_products name, no "?"; `isProductName`) becomes
   product_info. "Malta Guinness Soft Drink - 330ml Bottles, Pack of 6",
@@ -2174,7 +2175,9 @@ get info and data and organize them to fit the sellers request."
 
 ### Owner's web chat 09:34–10:04, the category drawer, the polish switch (2026-10-08)
 
-- **"Change/restock X to N" is a live change, never a count**
+- **"Change/restock X to N" is a live change, never a count** (this word
+  rule, `listingTalk`, `newestProductsAsked` and the on/off count rule went
+  with the old reader on 11 Oct)
   (`changeToAsked` in lib/whatsapp/assistant.ts, applied in parseAction
   when the AI said list, restart, unclear, help or an empty edit). After
   the bot asked "How many products are you listing today?", "Change
@@ -2231,8 +2234,9 @@ measuring, is this.
   names where those matter, plus rewordings (`src: "variant"`) to test the
   request rather than the phrase. `ok` lists every acceptable answer as a
   shape of the parsed action ("~" = contains; arrays are sets).
-- **The runner** (lib/evals/assistant-eval.ts) gives each case exactly what
-  production does: buildPrompt, the model, parseAction, and runAssistant's
+- **The runner** (lib/evals/assistant-eval.ts) gave each case exactly what
+  production did (until 11 Oct; now agent mode or the front door, see
+  "Agent mode for everyone" below): buildPrompt, the model, parseAction, and runAssistant's
   product-name check. It scores twice: "pass" (as deployed) and "bare"
   (`parseActionUnguarded`: the AI's choice with safety checks only, no word
   rules). The gap between them is what the word rules are doing; step 2
@@ -2308,7 +2312,9 @@ measuring, is this.
 
 ### Step 2 live: the front door in the chat (owner, 2026-10-08: "go ahead with building step 2")
 
-- **Switch**: app_settings `assistant_front_door`: `"admins"` (the owner
+- **Switch** (gone since 11 Oct: the front door always reads what agent
+  mode doesn't; the `assistant_front_door` row is no longer read):
+  app_settings `assistant_front_door`: `"admins"` (the owner
   first), `"all"`, or a list of user ids; off without the row
   (`frontDoorFor` in lib/whatsapp/assistant.ts). Set to `"admins"` on
   8 Oct. To roll out, set `"all"`; to stop, delete the row.
@@ -2419,7 +2425,8 @@ measuring, is this.
   - A sorting call refused at once (Vertex 404 for flash-lite, 21:16) failed
     the turn, and the review step answered. Now the reading model sorts
     when the sorting model errors (not on a timeout). If the whole front
-    door fails within 20 s, the usual `interpret` reads it.
+    door fails within 20 s, the usual `interpret` reads it (until 11 Oct;
+  now the turn fails to the usual flow).
   - 12 new cases (`src: "log 10-08 19:xx"` to `21:xx`).
 - **Rolled out to every seller (8 Oct, 23:5x UTC)**: the same hour, on the
   224-case set, the front door got 211 right (2 more got no answer in 40 s,
@@ -2443,10 +2450,9 @@ measuring, is this.
     (`FRONT_DOOR_FALLBACK`, 2.5 Flash-Lite) stays on Vertex: it sorts when
     the sorting call errors and reads when the reading call errors or is
     slow. To go back, set both to `gemini-2.5-flash` / delete the router row.
-- **Next (step 2 cleanup)**: remove the word rules in `parseAction` and the
-  old prompt (`buildPrompt`, `interpret`) once a few days of every seller's
-  turns look right; keep `interpret` only as the fallback when the front
-  door fails fast, or retire it too.
+- **Step 2 cleanup: done 11 Oct** (see "Agent mode for everyone" below).
+  The word rules in `parseAction` and the old prompt (`buildPrompt`,
+  `interpret`) are gone.
 
 ### Small chat changes (owner, 2026-10-10)
 
@@ -2485,7 +2491,7 @@ checks and taps.
     dropped; so is the same action twice.
   - Each call becomes the chat's own action JSON (`actionJson`: end_sale →
     sale "end", submit all → "all", details list → record) and goes through
-    `parseActionUnguarded`, the front door's checks: values from the
+    `parseAction` (named `parseActionUnguarded` until 11 Oct), the front door's checks: values from the
     message, products named, nothing widened. Changes to Jumia still go out
     as confirm taps, except the immediate kinds (see "Smarter and honest
     chat" below). A `clarify` goes out as the front door's buttons.
@@ -2526,7 +2532,7 @@ checks and taps.
   (`understandAgent`; lookups answered from the case's `catalog`, names
   only). A case passes when every action it takes is one of the case's
   answers; `passed_bare` counts it when any one is. /admin/assistant-tests
-  has "Agent (function calling, pilot)".
+  has "Agent mode (reads first)", the default since 11 Oct.
 - **Tests**: __tests__/assistant-agent.test.ts (tools, lookups, the loop,
   several actions, checks, timeouts) and "agent mode" in
   whatsapp-assistant.test.ts (several actions in order, a list last, asking
@@ -2657,11 +2663,10 @@ these three were approved, plus some live changes made immediate.
     mention a token, Client ID, Self Authorization, applications, the API
     key, the extension or Add Products). Fixed answers (cannot, capability)
     never pass through it.
-    - **Classic path:** `parseActionRaw` turns such a reply into `not_yet`
-      with `blocked` set. `parseAction`'s word rules still rescue it like a
-      reply (on/off counts → overview, "last 10 products" → research,
-      "change X to N" → live change), and so does the shop-product-name
-      rescue in `runAssistant`.
+    - **Classic path** (gone 11 Oct): `parseActionRaw` turned such a reply
+      into `not_yet` with `blocked` set, and the word rules rescued it like
+      a reply. `parseAction` still turns it into `not_yet`; the front door
+      and agent mode read again as below.
     - **Front door:** it reads again once, with `BLOCKED_NOTE` (the reply
       wasn't sent; choose the action, cannot, capability or not_yet), if
       the message is under 20 s in; otherwise it stays `not_yet`. `raw`
@@ -2721,6 +2726,51 @@ these three were approved, plus some live changes made immediate.
     - The test runner sends cases fast. When every call fails at once
       (400s), AI Studio answers 429 (per-minute quota) for the rest of the
       run.
+
+### Agent mode for everyone; the old reader retired (owner, 2026-10-11: "make agent mode the main reader for everyone and keep the front door as its automatic backup")
+
+The plan from here: 1. agent mode for everyone; 2. retire the old one-call
+reader and its word rules (the front door stays, as the backup); 3. one
+definition per action (part G of the plan page); 4. a weekly warning-signs
+report and a weekly test run. Steps 1 and 2 are done.
+
+- **Step 1**: app_settings `assistant_agent` = `"all"` (11 Oct, after
+  94dcc39 was live). Every seller's typed message is read by agent mode
+  first. The front door reads it when the agent fails or runs out of time
+  within 15 s, or finds nothing to do (every call failed the checks).
+  `raw` in whatsapp_assistant_log starts `[agent …]`, or
+  `[agent failed: …] [front door]` / `[agent found nothing to do: …] [front door]`.
+  To go back to the front door alone, set `"admins"` or delete the row.
+- **Step 2** (lib/whatsapp/assistant.ts):
+  - Gone: `buildPrompt` and its pieces (`STAGE_TEXT`, `PromptContext`,
+    `productLine`), `interpret`, `frontDoorFor` (the front door has no
+    switch; it is what reads a message when agent mode doesn't),
+    `isProductName` and runAssistant's product-name override
+    (`namesShopProduct`), and the word rules that corrected the AI's choice
+    in parseAction: `changeToAsked` ("change X to 10"), `listingTalk`
+    (restart only on listing words), `newestProductsAsked` ("the last 10
+    products"), the on/off count rule (`SHOP_COUNT`).
+  - `parseAction` is now the safety checks only (what `parseActionUnguarded`
+    was): every value in the message, products named, nothing widened, a
+    reply that says it can't stopped. Agent mode and the front door call it.
+  - What a word rule used to catch is a test case now
+    (lib/evals/assistant-cases.ts): a misread from a real conversation
+    becomes a case with its right answer, never a rule.
+  - `ASSISTANT_MODEL` stays as the default reading model for
+    `assistantModel()` (the front door's reader) and `agentModel()`.
+  - intake.ts `answersAssistantQuestion`: a bare number after the
+    assistant's own question always goes to it (it needed the front door or
+    agent switch before).
+- **Test runs** (lib/evals/assistant-eval.ts): pipelines `"agent"` (the
+  default for `queueRun`, with `agentModel()`) and `"front_door"`. Old runs
+  of the one-call reader (`pipeline` "current" or null) stay in the table as
+  "Old reader"; one still queued would be read through the front door.
+  /admin/assistant-tests no longer offers "The chat as it is".
+- **Tests**: the mocks in whatsapp-assistant.test.ts and
+  whatsapp-intake-flow.test.ts answer the front door's sorting call with
+  `{"area":"chat"}` unless a test scripts an `"area"`, so a test's scripted
+  reply is the reading call's. Prompt checks now look at the front door's
+  reading prompt. The word-rule tests became "the AI's choice stands" tests.
 
 ### A batch Jumia turned down (owner's WhatsApp, 2026-10-11)
 

@@ -12,14 +12,13 @@ export const dynamic = "force-dynamic";
 // wrong with what it should have done. A change to the assistant ships only
 // if no case that passed before fails (owner, 2026-10-08).
 //
-// "Front door" runs put the same cases through the step-2 prototype
-// (lib/assistant-v2/front-door.ts), which nothing in the chat uses, to
-// compare it with the chat as it is. Its questions back ("asked") are
-// counted apart from right and wrong.
-//
-// "Agent" runs put them through agent mode (lib/assistant-v2/agent.ts,
-// function calling, the pilot): right when every action it takes is one of
-// the case's answers; "any action right" when at least one is.
+// Two ways, as the chat reads messages since 11 Oct: agent mode
+// (lib/assistant-v2/agent.ts, function calling), the main reader, right when
+// every action it takes is one of the case's answers ("any action right"
+// when at least one is); and the front door (lib/assistant-v2/front-door.ts),
+// its automatic backup. Questions back ("asked") are counted apart from
+// right and wrong. Runs of the old one-call reader ("Old reader", gone with
+// its word rules on 11 Oct) stay listed for comparison.
 
 const MODELS = ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-3.1-flash-lite", "gemini-3.5-flash-lite", "gemini-3.8-flash"];
 
@@ -27,8 +26,7 @@ async function runTests(form: FormData) {
   "use server";
   const model = String(form.get("model") ?? "");
   const way = String(form.get("pipeline") ?? "");
-  const [pipeline, router] = way.startsWith("front_door") ? ["front_door" as const, way.split(":")[1] || undefined]
-    : way === "agent" ? ["agent" as const, undefined] : ["current" as const, undefined];
+  const [pipeline, router] = way.startsWith("front_door") ? ["front_door" as const, way.split(":")[1] || undefined] : ["agent" as const, undefined];
   await queueRun({
     model: MODELS.includes(model) ? model : undefined, pipeline,
     router: router && MODELS.includes(router) ? router : undefined, note: "from the admin page",
@@ -48,10 +46,10 @@ export default async function AssistantTestsPage({ searchParams }: { searchParam
   const cases = new Map(ASSISTANT_CASES.map((c) => [c.id, c]));
   const failures = (latest?.results ?? []).filter((r) => !r.pass);
   const scored = (r: EvalRun) => r.done - r.errors;
-  // Both ask back; neither has word rules to go without.
+  // Both ask back; neither has word rules to go without (only the old reader had them).
   const frontDoor = (r: EvalRun) => r.pipeline === "front_door" || r.pipeline === "agent";
   const agent = (r: EvalRun) => r.pipeline === "agent";
-  const way = (r: EvalRun) => (agent(r) ? "Agent" : frontDoor(r) ? `Front door${r.router_model && r.router_model !== r.model ? ` (sorts with ${r.router_model})` : ""}` : "Current");
+  const way = (r: EvalRun) => (agent(r) ? "Agent" : frontDoor(r) ? `Front door${r.router_model && r.router_model !== r.model ? ` (sorts with ${r.router_model})` : ""}` : "Old reader");
   const avgMs = (r: EvalRun) => {
     const timed = (r.results ?? []).filter((x) => !x.error);
     return timed.length ? `${(timed.reduce((n, x) => n + x.ms, 0) / timed.length / 1000).toFixed(1)} s` : "–";
@@ -63,19 +61,18 @@ export default async function AssistantTestsPage({ searchParams }: { searchParam
       <div>
         <h1 className="text-lg font-bold">Assistant tests</h1>
         <p className="mt-1 max-w-3xl text-sm text-zinc-500">
-          {ASSISTANT_CASES.length} real messages sellers sent (and rewordings of them), each with the answers that would be right, run against the live AI with the same prompt and checks as the chat.
-          &quot;Without word rules&quot; is the AI&apos;s choice checked for safety only. A change ships only if no case that passed before fails.
+          {ASSISTANT_CASES.length} real messages sellers sent (and rewordings of them), each with the answers that would be right, run against the live AI with the same prompt and checks as the chat:
+          agent mode, which reads every message first, or the front door, its backup. A change ships only if no case that passed before fails.
         </p>
         <form action={runTests} className="mt-4 flex flex-wrap items-center gap-2">
           <select name="model" defaultValue="" className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm">
             <option value="">The model in use</option>
             {MODELS.map((m) => <option key={m} value={m}>{m}</option>)}
           </select>
-          <select name="pipeline" defaultValue="current" className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm">
-            <option value="current">The chat as it is</option>
-            <option value="front_door">Front door</option>
+          <select name="pipeline" defaultValue="agent" className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm">
+            <option value="agent">Agent mode (reads first)</option>
+            <option value="front_door">Front door (its backup)</option>
             {MODELS.map((m) => <option key={m} value={`front_door:${m}`}>Front door, sorting with {m}</option>)}
-            <option value="agent">Agent (function calling, pilot)</option>
           </select>
           <button type="submit" className="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-semibold text-white hover:bg-zinc-700">Run the test set</button>
           <span className="text-xs text-zinc-500">About 3 minutes. Refresh to see it fill in.</span>
