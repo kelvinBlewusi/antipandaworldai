@@ -127,7 +127,7 @@ function sameSize(options: string[], part: string): string | null {
 }
 
 /** One option a reply part names: exact, the same but for spaces and case ("100 ML"), a known spelling or size name, or the only one it starts or is part of. */
-function matchOption(options: string[], part: string): string | null {
+export function matchOption(options: string[], part: string): string | null {
   const t = part.trim();
   if (!t) return null;
   const exact = options.find((o) => o.toLowerCase() === t.toLowerCase());

@@ -414,6 +414,14 @@ export const BULK_PARTS_MAX = 5;
 
 /** Which products a rule is about. "listed": the ones the bot just listed for them (rememberListed). */
 export type BulkScope = "all" | "out_of_stock" | "low_stock" | "inactive" | "active" | "matching" | "listed";
+/**
+ * Of a rule's products, only these (test runs of 11 Oct: "the stock of the
+ * approved ones" among the 10 just listed had no way to be said, and became
+ * all 10, or a search for products named "approved"): approved by Jumia's
+ * quality check (ON or OFF), or ON, or OFF.
+ */
+export type BulkOnly = "approved" | "on" | "off";
+const ONLY_WORDS: Record<BulkOnly, string> = { approved: "approved by Jumia's quality check", on: "ON", off: "OFF" };
 
 /**
  * Remember the products just listed for the seller, so "those", "them" and
@@ -431,7 +439,7 @@ export async function rememberListed(phone: string, products: Pick<ShopProduct, 
 
 /** The products a rule picks, and those it leaves out (with why). Pure. */
 export function bulkTargets(
-  products: ShopProduct[], scope: BulkScope, words: string | null, change: LiveChange, minimum: number | null, listed: string[] = [],
+  products: ShopProduct[], scope: BulkScope, words: string | null, change: LiveChange, minimum: number | null, listed: string[] = [], only: BulkOnly | null = null,
 ): { targets: ShopProduct[]; skipped: { reason: string; count: number }[] } {
   const live = products.filter((p) => p.status !== "DELETED");
   let picked: ShopProduct[];
@@ -449,6 +457,9 @@ export function bulkTargets(
     case "listed":       picked = live.filter((p) => listed.includes(p.sid)); break;
     default:             picked = live;
   }
+  if (only === "approved") picked = picked.filter((p) => p.qcStatus === "APPROVED");
+  else if (only === "on") picked = picked.filter((p) => p.status === "ACTIVE");
+  else if (only === "off") picked = picked.filter((p) => p.status === "INACTIVE");
   notOnJumia = picked.filter((p) => !changeable(p)).length;
   picked = picked.filter(changeable);
   const skipped = new Map<string, number>();
@@ -479,18 +490,18 @@ const SCOPE_WORDS: Record<BulkScope, string> = {
  * back in full with one tap, as a group (lgrp:), up to BULK_MAX products.
  */
 export async function proposeBulkChange(
-  userId: string, phone: string, scope: BulkScope, words: string | null, change: LiveChange, listed: string[] = [],
+  userId: string, phone: string, scope: BulkScope, words: string | null, change: LiveChange, listed: string[] = [], only: BulkOnly | null = null,
 ): Promise<string> {
   const ctx = await shopContext(userId, phone, CHANGES_FEATURE, CHANGES);
   if (!ctx) return "blocked";
   const products = await catalog(ctx);
   if (!products) return "no catalog";
   const minimum = await priceMinimumForUser(userId);
-  const { targets, skipped } = bulkTargets(products, scope, words, change, minimum?.min ?? null, listed);
-  const what = scope === "matching" && words ? `"${shorten(words, 40)}"` : SCOPE_WORDS[scope];
+  const { targets, skipped } = bulkTargets(products, scope, words, change, minimum?.min ?? null, listed, only);
+  const what = `${scope === "matching" && words ? `"${shorten(words, 40)}"` : SCOPE_WORDS[scope]}${only ? ` that are ${ONLY_WORDS[only]}` : ""}`;
   const left = skipped.map((s) => `${s.count} ${s.reason}`).join(", ");
   if (targets.length === 0) {
-    await sendTextIfConfigured(phone, `Nothing to change: I found no ${scope === "matching" ? `products matching ${what}` : what.replace(/^your /, "")}${left ? ` to change (${left})` : ""}.`);
+    await sendTextIfConfigured(phone, `Nothing to change: I found no ${scope === "matching" ? `products matching ${what}` : what.replace(/^(?:your|the) /, "")}${left ? ` to change (${left})` : ""}.`);
     return `bulk none: ${scope}`;
   }
   if (targets.length > BULK_MAX * BULK_PARTS_MAX) {

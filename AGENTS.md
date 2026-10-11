@@ -2977,6 +2977,48 @@ Jumia allows nothing, the answer says what can be done instead.
   the seller's way of fixing a rejected product), live-additions.test.ts,
   jumia-capabilities.test.ts, jumia-spec.test.ts.
 
+### Sizes written out, and "the approved ones" (owner, 2026-10-11: "can we work on this?")
+
+Two of the cases agent mode still got wrong. In both, the AI had understood
+the seller, and our own checks turned the reading down.
+
+- **Sizes written out** (draft-variation-order, draft-variation-typo):
+  - "change the variation to Small, medium and, Large" came back as options
+    Small/Medium/Large. The category's are S/M/L, so `verifyChanges` dropped
+    all three.
+  - Now the AI's option, or the seller's words, is matched to the
+    category's own spelling with `matchOption` (lib/whatsapp/variation-question.ts).
+    That's the same matching a typed reply to "which sizes?" gets, with its
+    size names (Small = S, Extra Large = XL).
+  - A string variation is saved in the category's spelling too. "Large" is
+    read as "L" when the message is read, not only when the draft is saved.
+  - One run also gave "the variation" as which draft, against the edit
+    tool's "leave it out when there is one draft". `namesOnlyFields` treats
+    words that are only filler and the draft's field names as naming no
+    product. A real name ("the gold medal") is still checked against the
+    draft.
+- **"The approved ones"** (live-approved-ones, live-approved-on-or-off):
+  - The bulk tool had no way to say "only the approved ones" of the
+    products just listed. The agent sent all 10 listed, or searched for
+    products named "approved".
+  - `bulk` now takes `only`: "approved" (Jumia's quality check approved
+    it, ON or OFF), "on" or "off". It narrows the group and never widens
+    it (`bulkTargets`, `BulkOnly`).
+  - The "products just listed" group was gated on words like "those" and
+    "the ones", and "the approved ones" isn't "the ones". So `bulk` also
+    takes `said`: the seller's own words for the group, copied. When they
+    are in the message, they back the group in any wording. This is the
+    first word gate replaced by a quote check (the approach proposed to the
+    owner). It applies only to the products just listed, so it can never
+    widen to the shop.
+  - The test set accepts `bulk` listed + only approved as well as naming the
+    six products.
+- **Replaying the AI's recorded answers**: __tests__/assistant-replay.test.ts
+  feeds agent mode the exact tool calls the test runs recorded, through
+  `agentInput`/`caseLookups`/`scoreAgent` (lib/evals/assistant-eval.ts),
+  with no AI call. A miss caused by our checks is fixed in the code and
+  pinned there with the AI's own words.
+
 ### A batch Jumia turned down (owner's WhatsApp, 2026-10-11)
 
 "RESTOCK everything in the shop to 10 pcs" became 267 products in 2 feeds.

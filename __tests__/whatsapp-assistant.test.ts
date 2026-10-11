@@ -154,7 +154,8 @@ describe("what the message backs up", () => {
 
   it("takes a variation the seller wrote, one of the category's options, or one the product has", () => {
     const known = { options: SIZES, variations: ["M"] };
-    expect(verifyChanges({ variations: ["Large"] }, "change the variation to Large", known).changes).toEqual({ variations: ["Large"] });
+    // In the category's own spelling: its "L".
+    expect(verifyChanges({ variations: ["Large"] }, "change the variation to Large", known).changes).toEqual({ variations: ["L"] });
     expect(verifyChanges({ variations: ["L"] }, "change the variation to Large", known).changes).toEqual({ variations: ["L"] });
     expect(verifyChanges({ variations: ["M", "XL"] }, "add XL too", known).changes).toEqual({ variations: ["M", "XL"] });
   });
@@ -191,6 +192,12 @@ describe("what the message backs up", () => {
     expect(verifyChanges(pairs(["ages 3 to 4", "3-4 Years"]), "for ages 3 to 4", known).changes).toEqual({ variations: ["3-4 Years"] });
     expect(verifyChanges(pairs(["one litre", "1L"]), "one litre bottle", known).changes).toEqual({ variations: ["1L"] });
     expect(verifyChanges(pairs(["black & white", "Black and White"]), "black & white", known).changes).toEqual({ variations: ["Black and White"] });
+    // The AI's option in another spelling is the category's own (test runs of
+    // 11 Oct: "Small, medium and, Large" came back as Small/Medium/Large and was dropped).
+    expect(verifyChanges(pairs(["Small", "Small"], ["medium", "Medium"], ["Large", "Large"]), "change the variation to Small, medium and, Large", known).changes)
+      .toEqual({ variations: ["S", "M", "L"] });
+    expect(verifyChanges(pairs(["Large", "Large"], ["Medium", "Medium"], ["Small", "Small"]), "Chanage the draft variation to Large, Medium, Small.", known).changes)
+      .toEqual({ variations: ["L", "M", "S"] });
     // An option that isn't on the list, or words the seller didn't write, aren't taken.
     expect(verifyChanges(pairs(["free size", "Free Size"]), "it's free size", known)).toEqual({ changes: {}, dropped: ["variations"] });
     expect(verifyChanges(pairs(["extra small", "XS"]), "make it large", known)).toEqual({ changes: {}, dropped: ["variations"] });
@@ -243,7 +250,7 @@ describe("what the message backs up", () => {
     const BODYSUIT = product(1, "3-Piece Thong Bodysuit - Seamless, Tummy Control, Adjustable Straps", { options: SIZES });
     const first = '{"type":"edit","edits":[{"products":[1],"said":"Large, Medium, Small.","changes":{"variations":["Large","Medium","Small"],"color":"cream, black and brown"},"ask":false}]}';
     expect(parseAction(first, BODYSUIT_MSG, [BODYSUIT], assistantLinks())).toEqual({
-      type: "edit", edits: [{ seqs: [1], changes: { variations: ["Large", "Medium", "Small"], color: "cream, black and brown" }, ask: false }], dropped: [],
+      type: "edit", edits: [{ seqs: [1], changes: { variations: ["L", "M", "S"], color: "cream, black and brown" }, ask: false }], dropped: [],
     });
   });
 
@@ -1295,7 +1302,7 @@ describe("a change to a product is never a count", () => {
       phoneNumber: "233", userId: "seller", state: "awaiting_count", batchId: null, lastSubmittedBatchId: null,
       lastListed: { sids: ["s1", "s2"], what: "The 10 newest products", at },
     } as never, "change the stock of the last 10 to 20", "idle");
-    expect(shopCalls).toEqual([["proposeBulkChange", "listed", null, { kind: "stock", stock: 20 }, ["s1", "s2"]]]);
+    expect(shopCalls).toEqual([["proposeBulkChange", "listed", null, { kind: "stock", stock: 20 }, ["s1", "s2"], null]]);
     expect(aiPrompts[aiPrompts.length - 1]).toContain("Products you last listed for them: 2 (The 10 newest products).");
   });
 
