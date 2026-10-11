@@ -1,6 +1,6 @@
 /**
  * The chat's commands (owner, 2026-10-07): the words, image polish (from
- * the note or "polish 2", 2 credits an image) and the shop health report
+ * the note or "polish 2", POLISH_CREDIT_COST an image) and the shop health report
  * (2 credits).
  */
 
@@ -234,7 +234,7 @@ describe("polish from the seller's note", () => {
     expect(notesAskForPolish("nice picture frame")).toBe(false);
   });
 
-  it("is queued once, and polished by the worker: 2 credits an image that came back, replacing the seller's photos", async () => {
+  it("is queued once, and polished by the worker: POLISH_CREDIT_COST an image that came back, replacing the seller's photos", async () => {
     expect(await queuePolish("l1")).toBe(true);
     expect(await queuePolish("l1")).toBe(false);
     expect(await polishQueue(2)).toEqual(["l1"]);
@@ -244,14 +244,14 @@ describe("polish from the seller's note", () => {
     // The new ones replace the seller's (owner, 2026-10-07: "it must replace them entirely").
     expect(row.images).toEqual(["https://cdn.test/main.png", "https://cdn.test/angle.png", "https://cdn.test/detail.png"]);
     expect(row.original_images).toEqual(["https://cdn.test/a.jpg", "https://cdn.test/b.jpg"]);
-    expect(balance()).toBe(20 - 3 * 2);
+    expect(balance()).toBe(20 - 3 * 3);
     // On WhatsApp, the main photo with the caption (each photo is a paid message there).
     const images = sent.filter((m) => m.kind === "image");
     expect(images).toHaveLength(1);
-    expect(images[0].body).toContain("Product 2: 3 polished photos (main image, angle, detail), 6 credits. They replace your own photos");
+    expect(images[0].body).toContain("Product 2: 3 polished photos (main image, angle, detail), 9 credits. They replace your own photos");
     // Run again: nothing claimed, nothing charged.
     expect(await polishListing("l1")).toBe("busy");
-    expect(balance()).toBe(14);
+    expect(balance()).toBe(11);
   });
 
   it("not enough credits: their own photos stay, nothing is made or charged", async () => {
@@ -260,7 +260,7 @@ describe("polish from the seller's note", () => {
     expect(await polishListing("l1")).toBe("skipped");
     expect(generated).toHaveLength(0);
     expect(db.tables.listings[0].images).toEqual(["https://cdn.test/a.jpg", "https://cdn.test/b.jpg"]);
-    expect(sent.pop()?.body).toContain(`makes 4 images at 2 credits each (8), and you have 7`);
+    expect(sent.pop()?.body).toContain(`makes 4 images at 3 credits each (12), and you have 11`);
   });
 
   it("nothing came back: nothing charged", async () => {

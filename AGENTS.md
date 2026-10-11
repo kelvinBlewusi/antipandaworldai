@@ -1739,7 +1739,7 @@ labels." It is the WhatsApp bot itself, not a copy:
 - **Orders on the web (owner, 2026-10-07)**: "the label and alerts for orders
   should be on WhatsApp only ... we can do all other order actions". The
   web chat runs the WhatsApp order flow (lib/whatsapp/orders.ts, `Ctx.web`):
-  waiting orders, Pick orders, Pack all / Pack order, Ready to ship, Cancel
+  waiting orders, OR Choose one (was Pick orders), Pack all / Pack order, Ready to ship, Cancel
   with its confirm. Packing there prints and charges no label: the message
   says labels are printed on WhatsApp ("orders") or in Vendor Center, and
   `orders:labels` / `olabel:` there answer the same without asking Jumia.
@@ -3116,6 +3116,8 @@ cause, and its fix:
   - ai_usage is read in pages of 1,000 (Supabase's row cap), so `usageSince`'s 20,000 limit in lib/billing/costs.ts really reads 1,000; worth the same paging if that page matters.
 - **The cost log counts Google's cache** (lib/ai/usage.ts): `cachedContentTokenCount` is read (part of the prompt's tokens) and billed at CACHED_INPUT_SHARE (a tenth) of the input price. The agent's ~15k-token turns are ~12k cached, so its logged input cost was ~3.5× too high before. Not stored as its own column; ai_usage rows before 2026-10-11 overstate.
 - **Test runs cut back** (owner, 2026-10-11: "it is eating into our credit"; test runs were ~90% of October's $39.59 Google bill, all paid by credits): the Monday run is agent mode only (the front door is only its backup: run it by hand when it changes); no more model comparisons; one run per real AI change.
+- **Photo polish 3 credits an image** (12 for the four; owner: "yes let's raise polish to 3"). At 2 it earned ~30% over the image model's ~$0.039 an image, the one action that barely paid. `POLISH_CREDIT_COST`; every price shown (pricing page, help, chat, extension refusal) reads it.
+- **Orders button "Pick orders" is now "OR Choose one"** (owner's wording; lib/whatsapp/orders.ts `PICK`, same id `orders:pick`).
 - **The Monday test run skips a week nothing changed** (lib/evals/weekly.ts): `AI_FINGERPRINT` is a hash of lib/assistant-v2/*, lib/whatsapp/assistant.ts, the test set and runner and gemini-client, made at build in next.config.mjs. With it and the agent model the same as the last weekly run (app_settings `assistant_weekly_fingerprint`), the report says so and nothing runs; at least every 4 weeks it runs anyway.
 - **Chat misses fixed**:
   - "Can you get me the stock checklist" (a seller) looked for a product called "checklist", low only. Words for the list itself (`stockListWords`) are no product, and low/out only when the message says so (`STOCK_FILTER_WORDS`).
