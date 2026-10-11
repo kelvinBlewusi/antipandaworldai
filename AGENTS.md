@@ -2842,7 +2842,13 @@ report and a weekly test run. All four are done (11 Oct).
 
     The second is fixed in the action definition: `liveChange` (live_change
     and bulk `toJson`) leaves out a change of 0% or to a price or sale price
-    of 0, which is never a real change.
+    of 0, which is never a real change. The run after it: 236/248 (run
+    2d093984). The 12 still wrong are ones every earlier run got wrong too
+    (help-packages, help-autofills, orders-labels-cancelled, shop-name-malta,
+    live-v-bulk-percent, list-five-review, draft-variation-typo,
+    draft-submit-last, live-approved-ones, live-approved-on-or-off,
+    live-describe-latest, live-bulk-answer-0): the next cases to work on,
+    each by a better instruction checked against the whole set.
   - Front door (3.1 Flash-Lite) got 227/248 (run cfb15ab4; 228 before).
 - **Test runs** (lib/evals/assistant-eval.ts): pipelines `"agent"` (the
   default for `queueRun`, with `agentModel()`) and `"front_door"`. Old runs
