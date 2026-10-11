@@ -7,7 +7,9 @@ import { InstallApp } from "@/components/install/install-app";
 import { CALCULATOR_HREF, COMMISSION_RATES_HREF } from "@/lib/marketing/links";
 import {
   SUPPORT_EMAIL,
+  SUPPORT_EMAIL_ALT,
   SUPPORT_MAILTO,
+  SUPPORT_MAILTO_ALT,
   COMMUNITY_WHATSAPP_URL,
   SOCIAL_LINKS,
 } from "@/lib/constants/support";
@@ -163,6 +165,12 @@ export function MarketingFooter({
               <a href={SUPPORT_MAILTO} className={`${linkClass} inline-flex items-center gap-1.5 [overflow-wrap:anywhere]`}>
                 <Mail className="h-3.5 w-3.5 shrink-0" />
                 {SUPPORT_EMAIL}
+              </a>
+            </li>
+            <li>
+              <a href={SUPPORT_MAILTO_ALT} className={`${linkClass} inline-flex items-center gap-1.5 [overflow-wrap:anywhere]`}>
+                <Mail className="h-3.5 w-3.5 shrink-0" />
+                {SUPPORT_EMAIL_ALT}
               </a>
             </li>
             <li>

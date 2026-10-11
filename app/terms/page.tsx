@@ -282,11 +282,19 @@ export default function TermsPage() {
             Questions about these Terms? Reach us via the WhatsApp
             support button inside the app, or email{" "}
             <a
+              href="mailto:help@pandaworldai.site"
+              className="text-orange-600 underline"
+            >
+              help@pandaworldai.site
+            </a>{" "}
+            (or{" "}
+            <a
               href="mailto:help.pandaworldai@gmail.com"
               className="text-orange-600 underline"
             >
               help.pandaworldai@gmail.com
             </a>
+            )
             .
           </p>
 

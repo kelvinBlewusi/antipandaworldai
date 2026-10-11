@@ -273,11 +273,19 @@ export default function PrivacyPage() {
             To exercise any of these rights, contact us via the
             in-app support button or email{" "}
             <a
+              href="mailto:help@pandaworldai.site"
+              className="text-orange-600 underline"
+            >
+              help@pandaworldai.site
+            </a>{" "}
+            (or{" "}
+            <a
               href="mailto:help.pandaworldai@gmail.com"
               className="text-orange-600 underline"
             >
               help.pandaworldai@gmail.com
             </a>
+            )
             . We respond within 30 days.
           </p>
 
@@ -333,11 +341,19 @@ export default function PrivacyPage() {
             handled? Reach us via the WhatsApp support button inside
             the app, or email{" "}
             <a
+              href="mailto:help@pandaworldai.site"
+              className="text-orange-600 underline"
+            >
+              help@pandaworldai.site
+            </a>{" "}
+            (or{" "}
+            <a
               href="mailto:help.pandaworldai@gmail.com"
               className="text-orange-600 underline"
             >
               help.pandaworldai@gmail.com
             </a>
+            )
             . To make a formal complaint about data handling, you may
             also contact Ghana&apos;s Data Protection Commission at{" "}
             <a

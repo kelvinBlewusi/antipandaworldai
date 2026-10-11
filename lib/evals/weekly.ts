@@ -23,7 +23,7 @@ import { notifyOwner } from "@/lib/ops/notify-owner";
 /** The newest finished run of a way and model, as "235/248 (95%) on 11 Oct", or null. */
 async function lastScore(pipeline: "agent" | "front_door", model: string): Promise<string | null> {
   const { data } = await createServerClient().from("assistant_eval_runs").select("passed, done, errors, created_at")
-    .eq("status", "done").eq("pipeline", pipeline).eq("model", model).order("created_at", { ascending: false }).limit(1);
+    .eq("status", "done").eq("pipeline", pipeline).eq("model", model).is("areas", null).order("created_at", { ascending: false }).limit(1);
   const run = ((data ?? []) as Pick<EvalRun, "passed" | "done" | "errors" | "created_at">[])[0];
   if (!run) return null;
   const scored = run.done - run.errors;

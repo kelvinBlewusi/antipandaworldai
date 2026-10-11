@@ -4,7 +4,8 @@
  * own message only inside 24 hours of their last one, so the weekly report
  * and the alerts went nowhere on a quiet week. Now: their WhatsApp when
  * they wrote to the bot in the last 23 hours, else email, to app_settings
- * `owner_alert_email` or the support inbox (SUPPORT_EMAIL).
+ * `owner_alert_email` or both support inboxes (SUPPORT_EMAIL and
+ * SUPPORT_EMAIL_ALT).
  *
  * `key` with `everyMs`: the same alert at most that often (the hourly
  * health check would otherwise send one an hour for one stuck job), kept
@@ -15,7 +16,7 @@
 import { createServerClient } from "@/lib/supabase/server";
 import { sendTextIfConfigured } from "@/lib/whatsapp/client";
 import { sendEmail } from "@/lib/email/send";
-import { SUPPORT_EMAIL } from "@/lib/constants/support";
+import { SUPPORT_EMAIL, SUPPORT_EMAIL_ALT } from "@/lib/constants/support";
 import { ownerWhatsApp } from "@/lib/evals/warning-signs";
 import { lastInboundAt, WINDOW_MS } from "@/lib/whatsapp/order-alerts";
 
@@ -28,10 +29,10 @@ async function setting(key: string): Promise<unknown> {
   return data?.value;
 }
 
-/** The address the owner's emails go to. */
-export async function ownerEmail(): Promise<string> {
+/** The addresses the owner's emails go to. */
+export async function ownerEmail(): Promise<string[]> {
   const set = await setting("owner_alert_email").catch(() => null);
-  return typeof set === "string" && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(set) ? set : SUPPORT_EMAIL;
+  return typeof set === "string" && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(set) ? [set] : [SUPPORT_EMAIL, SUPPORT_EMAIL_ALT];
 }
 
 export async function notifyOwner(

@@ -7,7 +7,7 @@ import { FaqList } from "@/components/marketing/faq-list";
 import { isBillingEnabled } from "@/lib/billing/mode";
 import { faqSections } from "@/lib/marketing/faq";
 import { CALCULATOR_HREF, SIGN_IN_HREF, SIGN_UP_HREF } from "@/lib/marketing/links";
-import { COMMUNITY_WHATSAPP_URL, SUPPORT_EMAIL, SUPPORT_MAILTO } from "@/lib/constants/support";
+import { COMMUNITY_WHATSAPP_URL, SUPPORT_EMAIL, SUPPORT_EMAIL_ALT, SUPPORT_MAILTO, SUPPORT_MAILTO_ALT } from "@/lib/constants/support";
 
 // ─── /faq — public, indexable ─────────────────────────────────────────────────
 //
@@ -60,7 +60,8 @@ export default async function FaqPage() {
         <p className="mt-10 text-base text-zinc-600">
           Still stuck? Ask in the{" "}
           <a href={COMMUNITY_WHATSAPP_URL} target="_blank" rel="noopener noreferrer" className={linkClass}>WhatsApp community</a>{" "}
-          or email <a href={SUPPORT_MAILTO} className={linkClass}>{SUPPORT_EMAIL}</a>.
+          or email <a href={SUPPORT_MAILTO} className={linkClass}>{SUPPORT_EMAIL}</a>{" "}
+          (or <a href={SUPPORT_MAILTO_ALT} className={linkClass}>{SUPPORT_EMAIL_ALT}</a>).
         </p>
       </div>
 

@@ -163,7 +163,7 @@ const organizationLd = {
   contactPoint: {
     "@type":         "ContactPoint",
     contactType:     "customer support",
-    email:           "help.pandaworldai@gmail.com",
+    email:           "help@pandaworldai.site",
     availableLanguage: ["English"],
     // We serve every African country where Jumia operates. Each entry
     // gives Google a separate localised signal for SERPs in that

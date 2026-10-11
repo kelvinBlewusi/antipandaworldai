@@ -13,10 +13,10 @@ const sent: { to: string; body: string }[] = [];
 jest.mock("@/lib/whatsapp/client", () => ({
   sendTextIfConfigured: async (to: string, body: string) => { sent.push({ to, body }); },
 }));
-const emails: { to: string; subject: string; text?: string }[] = [];
+const emails: { to: string | string[]; subject: string; text?: string }[] = [];
 let emailWorks = true;
 jest.mock("@/lib/email/send", () => ({
-  sendEmail: async (o: { to: string; subject: string; text?: string }) => {
+  sendEmail: async (o: { to: string | string[]; subject: string; text?: string }) => {
     emails.push(o);
     return emailWorks ? { success: true } : { success: false, error: "no key" };
   },
@@ -53,7 +53,12 @@ describe("notifyOwner", () => {
     db.tables.app_settings.push({ key: "owner_alert_email", value: "me@example.com" });
     expect(await notifyOwner("something is stuck", "a < b", { now: NOW })).toBe("email");
     expect(sent).toHaveLength(0);
-    expect(emails[0]).toMatchObject({ to: "me@example.com", subject: "PandaWorld: something is stuck", text: "a < b" });
+    expect(emails[0]).toMatchObject({ to: ["me@example.com"], subject: "PandaWorld: something is stuck", text: "a < b" });
+  });
+
+  it("without owner_alert_email, both support inboxes get it", async () => {
+    expect(await notifyOwner("x", "y", { now: NOW })).toBe("email");
+    expect(emails[0].to).toEqual(["help@pandaworldai.site", "help.pandaworldai@gmail.com"]);
   });
 
   it("says none when the email can't go either", async () => {

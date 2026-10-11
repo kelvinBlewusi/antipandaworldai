@@ -78,7 +78,7 @@ import { shopProducts, type LiveChange, type ShopProduct } from "@/lib/jumia/sho
 import { answerResearch, parseNeeds, type ResearchNeed } from "@/lib/whatsapp/shop-research";
 import { cannotAnswer, capability, capabilityAnswer, insteadLine } from "@/lib/jumia/capabilities";
 import { INTERACTIVE_BODY_MAX, splitForText } from "@/lib/whatsapp/text-limits";
-import { assistantGate, assistantSwitchedOn } from "@/lib/whatsapp/assistant-limits";
+import { assistantGate, assistantSwitchedOn, sellerLimitText } from "@/lib/whatsapp/assistant-limits";
 import { blankCodes, noteSellerMessage, sellerMemory } from "@/lib/whatsapp/seller-memory";
 import { isWebAddress } from "@/lib/whatsapp/channel";
 import { chatClearedAt } from "@/lib/whatsapp/chat-clear";
@@ -2133,6 +2133,15 @@ async function askWhich(
   await sendListIfConfigured(phone, body, "Choose product", [...rows, { id: "apick:all", title: all }]);
 }
 
+const SELLER_LIMIT_OUTCOME = "seller daily limit";
+
+/** Whether the seller was told today (UTC) that they reached their daily limit. */
+async function toldSellerLimit(userId: string, now = new Date()): Promise<boolean> {
+  const { count } = await createServerClient().from("whatsapp_assistant_log").select("id", { count: "exact", head: true })
+    .eq("user_id", userId).eq("outcome", SELLER_LIMIT_OUTCOME).gt("created_at", `${now.toISOString().slice(0, 10)}T00:00:00.000Z`);
+  return (count ?? 0) > 0;
+}
+
 async function logTurn(userId: string, stage: Stage, message: string, action: AssistantAction | null, outcome: string, raw?: string): Promise<void> {
   try {
     await createServerClient().from("whatsapp_assistant_log").insert({
@@ -2217,7 +2226,13 @@ export async function runAssistant(
   // says the commands still work where it has nothing else to say).
   const gate = await assistantGate(userId).catch(() => ({ ok: true }) as const);
   if (!gate.ok) {
-    console.info(`[assistant] ${userId}: daily ceiling reached, fixed flow`);
+    console.info(`[assistant] ${userId}: ${gate.reason === "seller" ? `their ${gate.limit} for today` : "daily ceiling"} reached, fixed flow`);
+    // A seller's own limit is said once a day; after that, the fixed flow answers.
+    if (gate.reason === "seller" && !(await toldSellerLimit(userId))) {
+      await logTurn(userId, stage, text, null, SELLER_LIMIT_OUTCOME);
+      await sendTextIfConfigured(phone, sellerLimitText(gate.limit, gate.pack, isWebAddress(phone)));
+      return "handled";
+    }
     return "limited";
   }
   // Every few messages, what it remembers of the seller is brought up to date.

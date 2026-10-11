@@ -10,7 +10,7 @@
  * names (assistantLinks), which it can send as a button.
  */
 
-import { BOT_NUMBER_DISPLAY, SUPPORT_EMAIL } from "@/lib/constants/support";
+import { BOT_NUMBER_DISPLAY, SUPPORT_EMAIL, SUPPORT_EMAIL_ALT } from "@/lib/constants/support";
 
 export function siteGuide(): string {
   return [
@@ -36,6 +36,6 @@ export function siteGuide(): string {
     "- A product Jumia rejected: the bot says why and offers Fix & resubmit; or edit it on Drafts & Listings and push it again. Products already live are changed here in chat (stock, price, sale, ON/OFF, name, description, highlights, details, more photos, a new size); only their main photo and category are changed in Vendor Center.",
     "- Put PandaWorld on the phone like an app (there's no App Store or Play Store app): Settings → \"Install PandaWorld on your phone\", or \"Get the app\" at the bottom of the website, and tap iPhone & iPad or Android for the steps. iPhone: in Safari, Share → Add to Home Screen → Add. Android: in Chrome, ⋮ menu → Install app (or Add to Home screen) → Install.",
     "- Disconnect Jumia: Settings → Jumia → Disconnect, or type \"disconnect\" here.",
-    `- A person to help: email ${SUPPORT_EMAIL}, or the community WhatsApp group [community].`,
+    `- A person to help: email ${SUPPORT_EMAIL} (or ${SUPPORT_EMAIL_ALT}), or the community WhatsApp group [community].`,
   ].join("\n");
 }
