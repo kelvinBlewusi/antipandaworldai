@@ -3013,6 +3013,10 @@ the seller, and our own checks turned the reading down.
     widen to the shop.
   - The test set accepts `bulk` listed + only approved as well as naming the
     six products.
+  - The first runs after this (agent 236, front door 235):
+    - The sizes passed both ways.
+    - The AI often left `said` out, so the gate still turned "the approved ones" down. `said` is now required on `bulk` (sample "all my prices").
+    - "On all the products that are off" came back as all + only off. That's the same group as `inactive`, and `bulkAction` now writes it that way.
 - **Replaying the AI's recorded answers**: __tests__/assistant-replay.test.ts
   feeds agent mode the exact tool calls the test runs recorded, through
   `agentInput`/`caseLookups`/`scoreAgent` (lib/evals/assistant-eval.ts),
