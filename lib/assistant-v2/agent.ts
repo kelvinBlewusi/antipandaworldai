@@ -43,12 +43,7 @@ const str = (description: string, values?: string[]): Schema => ({ type: "string
 const num = (description: string): Schema => ({ type: "number", description });
 const int = (description: string): Schema => ({ type: "integer", description });
 const bool = (description: string): Schema => ({ type: "boolean", description });
-/**
- * `max`: the most it may hold. Without one the model can keep adding
- * entries: draft edits ran to 10 s writing empty `{"products":[1],
- * "changes":{}}` again and again (test runs of 10 and 11 Oct).
- */
-const arr = (items: Schema, description: string, max: number): Schema => ({ type: "array", items, description, maxItems: max });
+const arr = (items: Schema, description: string): Schema => ({ type: "array", items, description });
 const obj = (properties: Record<string, Schema>, required: string[] = []): Schema => ({ type: "object", properties, ...(required.length ? { required } : {}) });
 const tool = (name: string, description: string, properties: Record<string, Schema> = {}, required: string[] = []): GeminiTool =>
   ({ name, description, parameters: obj(properties, required) });
@@ -76,27 +71,29 @@ export const ACTION_TOOLS: GeminiTool[] = [
   tool("step", "While a batch's products are being sent: a product's details (price, sizes, colours, pieces, quantity, brand, condition, SKU, notes, \"use as note\"), that its photos are done, or anything about the product being sent."),
   tool("category_info", "Which category, or what Jumia needs, for a kind of product.", { product: str("The kind of product.") }, ["product"]),
   // Drafts
-  tool("edit", "Change drafts in their batch (only the drafts listed in the context). Only what they asked to change, every value from the message.", {
-    edits: arr(obj({
-      products: arr(int("A draft number."), "The drafts it applies to (\"Product 1 …\" is [1]; the only draft is [1]).", 20),
-      said: str("Only their words naming which draft (\"the wig\"), never the values; leave it out when they gave the number or there is one draft."),
-      changes: obj({
-        price: num("New price."), quantity: int("New quantity."),
-        variations: arr(obj({ said: str("Their words."), option: str("The one category option they mean, e.g. \"Large\" is L.") }), "The full list of variations the draft should have.", 30),
-        title: str("New name, copied."), brand: str("New brand, copied."), color: str("Colour, copied."),
-        sale: bool("A sale price with dates (read from the message)."), other: str("Another field they want changed."),
-      }),
-      ask: bool("True when their words fit more than one draft and they didn't say all."),
-    }, ["products", "changes"]), "One entry per different change (usually one): its values go in changes (price, variations, colour…), never in said. Never an entry without a change.", 6),
-  }, ["edits"]),
-  tool("submit", "Send drafts to Jumia.", { all: bool("All the drafts."), products: arr(int("A draft number."), "The drafts to send, when not all.", 20) }),
+  // One change a call, not a list of them: with a list, draft edits ran to
+  // 10 s writing empty {"products":[1],"changes":{}} entries again and again
+  // (test runs of 10 and 11 Oct; with maxItems on the lists, every call got a 400). Two
+  // different changes are two calls.
+  tool("edit", "Change drafts in their batch (only the drafts listed in the context): one change to the drafts it names; a different change to other drafts is another edit call. Only what they asked to change, every value from the message, in changes (price, variations, colour…), never in said.", {
+    products: arr(int("A draft number."), "The drafts it applies to (\"Product 1 …\" is [1]; the only draft is [1])."),
+    said: str("Only their words naming which draft (\"the wig\"), never the values; leave it out when they gave the number or there is one draft."),
+    changes: obj({
+      price: num("New price."), quantity: int("New quantity."),
+      variations: arr(obj({ said: str("Their words."), option: str("The one category option they mean, e.g. \"Large\" is L.") }), "The full list of variations the draft should have."),
+      title: str("New name, copied."), brand: str("New brand, copied."), color: str("Colour, copied."),
+      sale: bool("A sale price with dates (read from the message)."), other: str("Another field they want changed."),
+    }),
+    ask: bool("True when their words fit more than one draft and they didn't say all."),
+  }, ["products", "changes"]),
+  tool("submit", "Send drafts to Jumia.", { all: bool("All the drafts."), products: arr(int("A draft number."), "The drafts to send, when not all.") }),
   tool("polish", "Make polished photos for a draft.", { product: int("The draft number, if they named one.") }),
   tool("review", "Open their drafts or listings page."),
   tool("draft_text", "Show drafts as drafted: name, price, sizes, highlights and description (\"show me the highlights you wrote for the first one\", \"what did you write for draft 2\"). Drafts only: a product already on Jumia is product_text.",
-    { products: arr(int("A draft number."), "The drafts to show (\"the first one\" is 1).", 3) }, ["products"]),
+    { products: arr(int("A draft number."), "The drafts to show (\"the first one\" is 1).") }, ["products"]),
   // Live products
   tool("live_change", "Change one or several products already on Jumia: exactly one of stock, price, sale_price, end_sale or active. One product's stock, ON/OFF or end of sale is done straight away; the rest is offered for a confirm tap.", {
-    product: PRODUCT, products: arr(str("A product."), "Several products, the same change.", 20),
+    product: PRODUCT, products: arr(str("A product."), "Several products, the same change."),
     stock: int("New stock."), price: num("New price (\"sell it at 120\", \"make it 120\")."),
     sale_price: num("A sale price, only when they say sale, discount, promo or off (dates are read from the message)."),
     end_sale: bool("End its sale."), active: bool("true to turn it ON, false to turn it OFF."), all: bool("Every product their words fit (\"all the hard hats\")."),
@@ -110,8 +107,8 @@ export const ACTION_TOOLS: GeminiTool[] = [
   }, ["scope"]),
   tool("content_change", "A live product's name, description, highlights, brand, other details, barcode or a size's name. Their own text copied, or rewrite for what they ask you to write.", {
     product: PRODUCT, name: str("New name, copied."), description: str("New description, copied whole."), highlights: str("New highlights, copied."),
-    brand: str("New brand, copied."), rewrite: arr(str("A field.", ["name", "description", "highlights"]), "Fields they ask you to write or improve.", 3),
-    details: arr(obj({ detail: str("The detail in their words: colour, material, weight, model…"), value: str("The value, copied.") }), "Other details.", 10),
+    brand: str("New brand, copied."), rewrite: arr(str("A field.", ["name", "description", "highlights"]), "Fields they ask you to write or improve."),
+    details: arr(obj({ detail: str("The detail in their words: colour, material, weight, model…"), value: str("The value, copied.") }), "Other details."),
     barcode: str("Barcode digits, copied."), size: obj({ from: str("The size now."), to: str("The new size name.") }),
   }, ["product"]),
   tool("add_size", "A new size or colour for a product already on Jumia, with its stock and price from the message.", {
@@ -119,7 +116,7 @@ export const ACTION_TOOLS: GeminiTool[] = [
   }, ["product", "size"]),
   tool("add_photos", "More photos for a product already on Jumia (they send them next).", { product: PRODUCT }, ["product"]),
   tool("fix_rejected", "Fix products Jumia's quality check rejected. Leave product out when they mean all of them or none in particular (they see the list and pick one).", { product: str("One rejected product in their words; never \"rejected\" or \"all\"."), reason: str("Jumia's reason as they pasted it.") }),
-  tool("warehouse_order", "Send stock to Jumia's warehouse.", { items: arr(obj({ product: PRODUCT, quantity: int("How many.") }), "Products and quantities.", 20) }, ["items"]),
+  tool("warehouse_order", "Send stock to Jumia's warehouse.", { items: arr(obj({ product: PRODUCT, quantity: int("How many.") }), "Products and quantities.") }, ["items"]),
   tool("warehouse_shipped", "A delivery to Jumia's warehouse has shipped.", { po: str("Purchase order number."), tracking: str("Tracking number."), carrier: str("Carrier.") }, ["po", "tracking"]),
   // Their shop
   tool("product_info", "Where one product is: ON or OFF, quality check, price, sale, stock.", { product: PRODUCT }, ["product"]),
@@ -136,7 +133,7 @@ export const ACTION_TOOLS: GeminiTool[] = [
       since: str("Products: added in this period.", PERIOD),
       period: str("Orders and sales: the period.", PERIOD),
       status: str("Orders: one status.", STATUS),
-    }, ["source"]), "The reads.", 4),
+    }, ["source"]), "The reads."),
   }, ["needs"]),
   tool("report", "One report on what sells: best sellers, slow movers, restock, returns (\"reports\" on its own: best_sellers). How the shop is doing overall is health_report.", { kind: str("Which.", ["best_sellers", "slow_movers", "restock", "returns"]), period: str("Period.", ["week", "month", "quarter"]) }, ["kind"]),
   tool("health_report", "A full health check of their shop: \"how is my shop doing\", \"insight into my shop's performance\", \"write a report on my shop\"."),
@@ -147,7 +144,7 @@ export const ACTION_TOOLS: GeminiTool[] = [
   // Orders
   tool("orders", "Orders waiting to be packed."),
   tool("order_status", "One order, by its number (\"#394666919\", \"tell me about this one #394666919 · GHS 94\").", { number: str("The order number from the message or the conversation, digits only.") }, ["number"]),
-  tool("sales", "Their orders and sales in a period, optionally with statuses.", { period: str("Period.", PERIOD), status: arr(str("A status.", STATUS), "Statuses.", 7) }),
+  tool("sales", "Their orders and sales in a period, optionally with statuses.", { period: str("Period.", PERIOD), status: arr(str("A status.", STATUS), "Statuses.") }),
   // Money and account
   tool("credits", "Their credit balance, with a button to buy more: always this for \"my credits\", \"how many credits\", even when About this seller shows a number."),
   tool("payouts", "The last Jumia payout and what isn't paid yet."),
@@ -165,7 +162,7 @@ export const ACTION_TOOLS: GeminiTool[] = [
     text: str("Your message."), link: str("A link key, if one fits."),
   }, ["text"]),
   tool("clarify", "Only when you can't tell which action or which product, or a change has no value: one short question with 2 or 3 answers to tap.", {
-    question: str("The question, ending with ?"), options: arr(str("An answer they can tap, up to 20 characters, clear on its own."), "2 or 3 answers.", 3),
+    question: str("The question, ending with ?"), options: arr(str("An answer they can tap, up to 20 characters, clear on its own."), "2 or 3 answers."),
   }, ["question", "options"]),
 ];
 
@@ -186,6 +183,11 @@ export function actionJson(name: string, args: Record<string, unknown>): Record<
   const out: Record<string, unknown> = { type: name, ...args };
   if ((name === "live_change" || name === "bulk") && args.end_sale === true) out.sale = "end";
   delete out.end_sale;
+  // The edit tool takes one change; the chat's edit action, a list of them.
+  if (name === "edit" && !Array.isArray(args.edits)) {
+    out.edits = [{ products: args.products, said: args.said ?? null, changes: args.changes ?? {}, ask: args.ask === true }];
+    delete out.products; delete out.said; delete out.changes; delete out.ask;
+  }
   if (name === "submit") {
     out.products = args.all === true || !Array.isArray(args.products) || args.products.length === 0 ? "all" : args.products;
     delete out.all;
@@ -230,7 +232,7 @@ export function agentSystem(listingCost = 2): string {
     "- A lookup is never an answer: stock, prices, counts and lists come from the tools that read them (product_info, stock, shop, research). Never tell them a product isn't in their shop.",
     "- Every number and word you put in a tool's arguments must be in their message (or, for which product, the recent conversation). Never guess or invent a value.",
     "- You don't have their products' descriptions, highlights, prices, stock or sales: never write them yourself; use the tool that reads them.",
-    "- Drafts are only the ones listed under \"Drafts in their batch\": shown with draft_text, changed with edit, by their numbers. A product already in their shop is read with product_text or product_info and changed with live_change, bulk or content_change, even while drafts wait.",
+    "- Drafts are only the ones listed under \"Drafts in their batch\": shown with draft_text, changed with edit, by their numbers (one edit call per different change: each entry of the examples' \"edits\" is one call). A product already in their shop is read with product_text or product_info and changed with live_change, bulk or content_change, even while drafts wait.",
     "- A change to a product (\"change the drone to 10\", \"restock the kettle\", \"set X to 50 pcs\") is a change, never listing new products. Changing a name, description or highlights with no new text means writing it (content_change with rewrite).",
     "- While a batch's products are being sent, their details (sizes, pieces, prices, SKUs, \"those are 3 different products\") are step: no lookup.",
     "- A product's name on its own after you listed products: product_info. An order number: order_status. How much they made or sold: sales. What PandaWorld listed for them (\"from this chat\"): research with pandaworld_listings.",
