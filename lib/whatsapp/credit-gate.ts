@@ -32,14 +32,30 @@ import { parseGlobalCommand } from "@/lib/whatsapp/commands";
 import { buyCreditsUrl } from "@/lib/whatsapp/batch";
 import { sendCtaUrlIfConfigured } from "@/lib/whatsapp/client";
 import { isWebAddress } from "@/lib/whatsapp/channel";
+import { getJumiaConnectionKind } from "@/lib/jumia/credentials";
+import { appUrl } from "@/lib/whatsapp/app-url";
 
 /** What still answers when the bot is quiet: disconnecting Jumia, and its "keep it" reply. */
 const STILL_ANSWERED = new Set(["disconnect", "confirm_disconnect", "keep_connected"]);
 
 const credits = (n: number) => `${n} credit${n === 1 ? "" : "s"}`;
 
-/** The one reply when the chat locks at 0. */
-export function outOfCreditsMessage(web = false): string {
+/**
+ * The one reply when the chat locks at 0. Buying credits needs Jumia
+ * connected, so without it the way there is said first (2026-10-11: a seller
+ * who used his free credits before connecting Jumia asked "How to pay for
+ * credit", was told to buy credits, and couldn't).
+ */
+export function outOfCreditsMessage(web = false, jumiaConnected = true): string {
+  if (!jumiaConnected) {
+    return "🔒 You've used all your PandaWorld credits, so this chat is locked until you top up.\n\n" +
+      "To buy credits, connect your Jumia store first (it's free):\n" +
+      "1. Tap *Settings* below and find *Jumia*.\n" +
+      "2. Paste your Client ID and token from Jumia Vendor Center → Settings → Applications (a *Self Authorization* app).\n" +
+      "3. Then tap *Buy credits* at the top of your dashboard and pay with mobile money or a card.\n\n" +
+      `Credits arrive at once and the chat unlocks${web ? "" : ": then send me a message to carry on"}.` +
+      (web ? "" : " You can also paste the Client ID and token here to connect.");
+  }
   return "🔒 You've used all your PandaWorld credits, so this chat is locked until you top up. " +
     `Buy credits on your dashboard and it unlocks straight away${web ? "" : ": then send me a message to carry on"}. ` +
     "A refund from Jumia's quality check unlocks it too.\n\n" +
@@ -57,8 +73,13 @@ export async function botPausedForCredits(userId: string): Promise<boolean> {
   return chatLocked(await storedBalance(userId));
 }
 
-/** "go": handle the message as usual. "stop": the bot is quiet for this seller; nothing more is said. */
-export async function creditGate(userId: string, phoneNumber: string, text: string | undefined): Promise<"go" | "stop"> {
+/**
+ * "go": handle the message as usual. "stop": the bot is quiet for this
+ * seller; nothing more is said. `connecting`: the seller is connecting Jumia
+ * (the chat is asking for its Client ID and token), which is free and comes
+ * before buying credits, so it carries on at 0.
+ */
+export async function creditGate(userId: string, phoneNumber: string, text: string | undefined, opts: { connecting?: boolean } = {}): Promise<"go" | "stop"> {
   if (await isUnmetered(userId)) return "go";
   const balance = await storedBalance(userId);
   // A balance back above the line (bought, refunded, or topped up by hand)
@@ -79,8 +100,11 @@ export async function creditGate(userId: string, phoneNumber: string, text: stri
 
   const cmd = text ? parseGlobalCommand(text) : null;
   if (cmd && STILL_ANSWERED.has(cmd.type)) return "go";
+  if (opts.connecting && !isWebAddress(phoneNumber)) return "go";
   if (await claimOutOfCreditsReply(userId)) {
-    await sendCtaUrlIfConfigured(phoneNumber, outOfCreditsMessage(isWebAddress(phoneNumber)), "Buy credits", buyCreditsUrl());
+    const connected = (await getJumiaConnectionKind(userId).catch(() => "connected")) === "connected";
+    await sendCtaUrlIfConfigured(phoneNumber, outOfCreditsMessage(isWebAddress(phoneNumber), connected),
+      connected ? "Buy credits" : "Settings", connected ? buyCreditsUrl() : `${appUrl()}/extension/settings`);
   }
   return "stop";
 }

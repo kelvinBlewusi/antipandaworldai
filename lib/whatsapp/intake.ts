@@ -703,7 +703,9 @@ export async function handleLinkedMessage(
   // Credits first (lib/whatsapp/credit-gate.ts): at 0 the seller gets one
   // reply about it and then silence until they top up; below 6, a one-time
   // warning goes out ahead of the reply.
-  if ((await creditGate(userId, phoneNumber, content.text)) === "stop") return;
+  if ((await creditGate(userId, phoneNumber, content.text, {
+    connecting: session.state === "awaiting_jumia_credentials" || session.state === "awaiting_jumia_oauth",
+  })) === "stop") return;
 
   // Something the bot cannot read — say so rather than dropping it. This
   // used to fall through the whole state machine in silence, which is the
