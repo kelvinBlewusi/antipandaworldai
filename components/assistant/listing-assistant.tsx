@@ -17,7 +17,8 @@ import { ArrowUp, ChevronDown, ChevronLeft, ClipboardList, ExternalLink, ImagePl
 import { cn } from "@/lib/utils";
 import { BuyCreditsButton } from "@/components/billing/buy-credits-button";
 import { matchingCommands, slashCommand, slashToText, unfinishedFill, type PaletteCommand } from "@/components/assistant/chat-commands";
-import { ProductForm } from "@/components/assistant/product-form";
+import { ProductForm, type FormDraft } from "@/components/assistant/product-form";
+import { chatPhotos, formButton, type ChatPhoto } from "@/components/assistant/chat-photos";
 import { RichMessage } from "@/components/assistant/rich-message";
 import { richBlocks } from "@/lib/whatsapp/rich-blocks";
 import { CategoryDeck } from "@/components/ui/category-deck";
@@ -121,19 +122,24 @@ export function ListingAssistant({ firstName, productForm }: {
   // The product form: how products are listed here (owner, 2026-10-08). Opened
   // by New products, by the bot's "Open the form" (a count given in the chat:
   // that many products), and as the bot offers it after the page loaded.
-  const [form, setForm] = useState<{ count: number; photos: { mediaId: string; preview: string }[] } | null>(null);
+  const [form, setForm] = useState<{ count: number; photos: ChatPhoto[] } | null>(null);
+  // What was in the form when it was closed without drafting: it opens again
+  // with it, whichever button opens it (owner, 2026-10-11).
+  const [keptForm, setKeptForm] = useState<FormDraft[] | null>(null);
   const mountedAt = useRef(new Date().toISOString());
   const offered = useRef(new Set<string>());
-  const openFormRef = useRef<((count?: number) => void) | null>(null);
-  // Photos just sent in the chat: the form starts with them when the bot offers it.
-  const recentPhotos = useRef<{ at: number; photos: { mediaId: string; preview: string }[] } | null>(null);
-  const openForm = useCallback((count = 1) => {
-    const recent = recentPhotos.current && Date.now() - recentPhotos.current.at < 120_000 ? recentPhotos.current.photos : [];
-    recentPhotos.current = null;
+  const shown = useRef<Message[]>([]);
+  // Photos sent in the chat that the bot answered with the form go in it,
+  // however it's opened later: its own button again after closing it, a
+  // count, or New products (owner's web chat, 2026-10-11: a sandal photo,
+  // the form closed, and every later form came up empty).
+  // Photos taken off a card stay off.
+  const removedPhotos = useRef(new Set<string>());
+  const openForm = useCallback((count = 1, upto?: number, list: Message[] = shown.current) => {
     setCommandsOpen(false);
-    setForm({ count, photos: recent });
+    setForm({ count, photos: chatPhotos(list, upto ?? list.length).filter((p) => !removedPhotos.current.has(p.mediaId)) });
   }, []);
-  openFormRef.current = openForm;
+  shown.current = messages;
   const lastAt = useRef<string | null>(null);
   const clearedAt = useRef<string | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
@@ -146,12 +152,14 @@ export function ListingAssistant({ firstName, productForm }: {
     if (incoming.length === 0) return;
     lastAt.current = incoming[incoming.length - 1].at;
     // The bot offering the form, after this page loaded: open it.
+    const known = new Set(incoming.map((m) => m.id));
+    const list = [...shown.current.filter((m) => !m.local && !known.has(m.id)), ...incoming];
     for (const m of incoming) {
       if (m.direction !== "outbound" || m.at <= mountedAt.current || offered.current.has(m.id)) continue;
       const id = formButton(m);
       if (id == null) continue;
       offered.current.add(m.id);
-      openFormRef.current?.(id);
+      openForm(id, list.indexOf(m), list);
     }
     setMessages((prev) => {
       const seen = new Set(prev.filter((m) => !m.local).map((m) => m.id));
@@ -160,7 +168,7 @@ export function ListingAssistant({ firstName, productForm }: {
       return [...prev.filter((m) => !(m.local && confirmed.has(m.clientId))), ...fresh];
     });
     if (incoming.some((m) => m.direction === "outbound")) setWaitingSince(null);
-  }, []);
+  }, [openForm]);
 
   const poll = useCallback(async () => {
     try {
@@ -335,7 +343,6 @@ export function ListingAssistant({ firstName, productForm }: {
       });
       if (good.length > 0) {
         const links = good.map((g) => g.url ?? g.photo.preview);
-        recentPhotos.current = { at: Date.now(), photos: good.map((g, i) => ({ mediaId: g.mediaId, preview: links[i] })) };
         await post(
           { mediaIds: good.map((g) => g.mediaId), ...(typed ? { text: typed } : {}) },
           { type: "image", text: typed || null, payload: links.length > 1 ? { link: links[0], links } : { link: links[0] } },
@@ -441,9 +448,9 @@ export function ListingAssistant({ firstName, productForm }: {
     }
   }
 
-  const tap = (b: Button) => {
+  const tap = (b: Button, m?: Message) => {
     const form = /^form(?:\s+(\d{1,2}))?$/i.exec(b.id);
-    if (form) { openForm(form[1] ? Number(form[1]) : 1); return; }
+    if (form) { openForm(form[1] ? Number(form[1]) : 1, m ? messages.indexOf(m) : undefined, messages); return; }
     void send({ text: b.id, label: b.title });
   };
   const waiting = waitingSince != null;
@@ -528,7 +535,7 @@ export function ListingAssistant({ firstName, productForm }: {
           </div>
         )}
 
-        {messages.map((m) => <Bubble key={m.id} m={m} onTap={tap} onResend={resend} disabled={sending || locked} onMedia={onMedia} />)}
+        {messages.map((m) => <Bubble key={m.id} m={m} onTap={(b) => tap(b, m)} onResend={resend} disabled={sending || locked} onMedia={onMedia} />)}
 
         {waiting && <WaitingLine key={waitingSince} />}
       </div>
@@ -684,7 +691,8 @@ export function ListingAssistant({ firstName, productForm }: {
           polishCost={productForm.polishCost ?? null}
           initialCount={form.count}
           initialPhotos={form.photos}
-          onClose={() => setForm(null)}
+          kept={keptForm}
+          onClose={(keep, removed) => { setKeptForm(keep); removed.forEach((id) => removedPhotos.current.add(id)); setForm(null); }}
           onSent={() => { setWaitingSince(Date.now()); void poll(); }}
         />
       )}
@@ -722,14 +730,6 @@ function WaitingLine() {
 }
 
 /** The product count of the bot's "Open the form" button in this message (1 without one), or null. */
-function formButton(m: Message): number | null {
-  const buttons = m.type === "button" && Array.isArray(m.payload?.buttons) ? (m.payload!.buttons as { id?: string }[]) : [];
-  for (const b of buttons) {
-    const hit = /^form(?:\s+(\d{1,2}))?$/i.exec(b?.id ?? "");
-    if (hit) return hit[1] ? Number(hit[1]) : 1;
-  }
-  return null;
-}
 
 /** The command menu, above the message box. A tap anywhere outside it closes it (owner, 2026-10-10), as its X does. */
 function CommandMenu({ commands, onChoose, onClose, keep }: {

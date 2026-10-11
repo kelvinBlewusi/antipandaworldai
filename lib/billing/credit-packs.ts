@@ -76,7 +76,7 @@ export function packRank(id: string | null | undefined): number {
  * ready to ship, cancel) and reading their shop. Changes to live Jumia
  * products from the chat (`shop_changes`) start at Standard ("they can not
  * make changes to listings on Jumia via the chat"), with labels and QC;
- * order alerts at Pro, on WhatsApp only. Image polish is on every plan, in
+ * order alerts on every plan (2026-10-11), on WhatsApp only. Image polish is on every plan, in
  * the extension and the chat ("all packs can use Chrome image generation
  * tool even free packs"), at POLISH_CREDIT_COST an image.
  */
@@ -96,8 +96,9 @@ export const PACK_FEATURES: PackFeature[] = [
   // The alerts the bot sends on its own, on WhatsApp only: new orders, order
   // updates, and the free "Jumia paid you" message (named for orders only,
   // owner 2026-10-07: "change to Order alerts on WhatsApp even though we
-  // still alert for payouts").
-  { id: "order_alerts",           label: "Order alerts on WhatsApp",                    short: "Order alerts",               minPack: "pro" },
+  // still alert for payouts"). On every plan from 2026-10-11 (owner: "let's
+  // fire for free accounts too"); the order updates still cost credits each.
+  { id: "order_alerts",           label: "Order alerts on WhatsApp",                    short: "Order alerts",               minPack: EVERYONE },
   // Standard from 2026-10-07, since each label is charged (owner: "the label download to WhatsApp should be added to the GHS 70 pack").
   { id: "shipping_labels",        label: "Shipping labels on WhatsApp",                 short: "Shipping labels",            minPack: "standard" },
   // In the chat (the Jumia Listing Assistant, and WhatsApp's menu): reading

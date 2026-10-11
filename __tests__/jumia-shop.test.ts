@@ -32,10 +32,12 @@ jest.mock("@/lib/billing/features", () => ({
 
 type Sent = { kind: string; body: string; ids?: string[] };
 const sent: Sent[] = [];
+/** Where each text went. */
+const textTo: string[] = [];
 const richSent: { blocks: unknown[] }[] = [];
 jest.mock("@/lib/whatsapp/client", () => ({
   LIST_MAX_ROWS: 10,
-  sendTextIfConfigured: async (_to: string, body: string) => { sent.push({ kind: "text", body }); },
+  sendTextIfConfigured: async (to: string, body: string) => { sent.push({ kind: "text", body }); textTo.push(to); },
   // An answer laid out for the page (lib/whatsapp/rich.ts): its text, as sent.
   sendRichIfConfigured: async (_to: string, body: string, rich: { blocks: unknown[] }) => { sent.push({ kind: "text", body }); richSent.push(rich); },
   sendButtonsIfConfigured: async (_to: string, body: string, b: { id: string }[]) => { sent.push({ kind: "buttons", body, ids: b.map((x) => x.id) }); },
@@ -50,10 +52,10 @@ import {
 } from "@/lib/jumia/shop";
 import {
   answerFees, answerListings, answerOrderStatus, answerPayouts, answerProductInfo, answerProducts, answerSales, answerStock, groupTargets,
-  handleShopTap, lowStockNote, parseShopTap, periodStart, proposeLiveChange,
+  handleShopTap, lowStockNote, parseShopTap, periodStart, priceClash, proposeLiveChange,
 } from "@/lib/whatsapp/shop";
 import { COUNTRY_FEES, feeCategoryForPath } from "@/lib/marketing/country-fees";
-import { orderUpdatesText, runShopNotices } from "@/lib/whatsapp/shop-notices";
+import { appliedText, orderUpdatesText, runShopNotices } from "@/lib/whatsapp/shop-notices";
 import { parseAction, productBacked } from "@/lib/whatsapp/assistant";
 import { _resetPriceMinimumCache } from "@/lib/jumia/price-minimums";
 import { _resetBillingModeCache } from "@/lib/billing/mode";
@@ -215,6 +217,40 @@ describe("changing a live product on WhatsApp", () => {
     await handleShopTap(USER, PHONE, yes);
     expect(last().body).toBe("That change was already handled.");
     expect(writes()).toHaveLength(1);
+  });
+
+  it("a sale at or above the price is said at once, not sent for Jumia to refuse (the dartboard, 2026-10-11)", async () => {
+    await proposeLiveChange(USER, PHONE, "Hisense fridge", { kind: "sale", sale: { price: 4600, start: "2026-10-20", end: "2026-10-27" } });
+    expect(writes()).toHaveLength(0);
+    expect(db.tables.jumia_product_changes ?? []).toHaveLength(0);
+    expect(last()).toMatchObject({ kind: "text" });
+    expect(last().body).toMatch(/^⚠️ Jumia won't take a sale at GHS 4,600 on \*Hisense 205L Double Door Fridge\*: its price is GHS 4,500, and a sale price has to be below the price\. Send a sale price under GHS 4,500, or raise the price above GHS 4,600 first\.$/);
+    // Equal is refused too.
+    await proposeLiveChange(USER, PHONE, "Hisense fridge", { kind: "sale", sale: { price: 4500, start: "2026-10-20", end: "2026-10-27" } });
+    expect(last().body).toContain("Jumia won't take a sale at GHS 4,500");
+    // The price raised first (sent, or waiting for its tap): the sale is checked against the new price.
+    await proposeLiveChange(USER, PHONE, "Hisense fridge", { kind: "price", price: 5000 });
+    await proposeLiveChange(USER, PHONE, "Hisense fridge", { kind: "sale", sale: { price: 4600, start: "2026-10-20", end: "2026-10-27" } });
+    expect(last()).toMatchObject({ kind: "buttons" });
+    expect(last().body).toContain("a sale at GHS 4,600");
+  });
+
+  it("a price at or under a sale that hasn't ended is refused too; an ended sale doesn't count", () => {
+    const fridge = { ...productsFromCatalog({ products: catalog }, "GH").find((p) => p.sid === FRIDGE)!, salePrice: 4000, saleStart: "2026-10-01", saleEnd: "2026-10-27" };
+    const ctx = { currency: "GHS" };
+    expect(priceClash(fridge, { kind: "price", price: 3900 }, null, ctx, "2026-10-11")).toBe(
+      "Jumia won't take a price of GHS 3,900 on *Hisense 205L Double Door Fridge*: it's on sale at GHS 4,000 until 2026-10-27, and the sale price has to stay below the price. Set a price above GHS 4,000, or end the sale first (e.g. \"end the sale on Hisense 205L Double Door Frid…\").",
+    );
+    expect(priceClash(fridge, { kind: "price", price: 4100 }, null, ctx, "2026-10-11")).toBeNull();
+    expect(priceClash(fridge, { kind: "price", price: 3900 }, null, ctx, "2026-10-28")).toBeNull();
+    expect(priceClash(fridge, { kind: "stock", stock: 3 }, null, ctx)).toBeNull();
+  });
+
+  it("of several that fit, the ones Jumia would refuse are left out", async () => {
+    // The Hisense is GHS 4,500 and the LG 5,200: a sale at 5,000 fits only the LG.
+    await proposeLiveChange(USER, PHONE, "fridge", { kind: "sale", sale: { price: 5000, start: "2026-10-20", end: "2026-10-27" } });
+    expect(last()).toMatchObject({ kind: "buttons" });
+    expect(last().body).toContain("LG 250L Top Freezer Fridge");
   });
 
   it("several fit: a list, then the one picked is confirmed before anything changes", async () => {
@@ -549,22 +585,47 @@ describe("told without asking", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("a change Jumia refused is told; one it applied updates the local copy quietly", async () => {
+  it("a change Jumia refused is told; one it applied is told too, and updates the local copy", async () => {
     seed();
     await syncCatalog(USER, { accessToken: "t", country: "GH" });
     const old = new Date(Date.now() - 5 * 60_000).toISOString();
     db.tables.jumia_product_changes = [
       { id: "c1", user_id: USER, product_sid: FRIDGE, seller_sku: "HIS-205", name: "Hisense fridge", change: { kind: "stock", stock: 20 }, status: "sent", feed_id: "f1", created_at: old, updated_at: old },
     ];
+    sent.length = 0;
     await runShopNotices(new Date());
     expect(db.tables.jumia_product_changes[0].status).toBe("done");
     expect(db.tables.jumia_products.find((p) => p.product_sid === FRIDGE)!.stock).toBe(20);
+    // Owner, 2026-10-11: "let's be able to tell user if it was successful or not after the task is done".
+    expect(sent.filter((m) => m.body.startsWith("✅"))).toEqual([{ kind: "text", body: "✅ Done on Jumia: *Hisense fridge*, stock to 20." }]);
 
     feed = { status: "DONE", failed: 1, errors: ["Invalid price for business client jumia-gh"] };
     db.tables.jumia_product_changes.push({ id: "c2", user_id: USER, product_sid: FRIDGE, seller_sku: "HIS-205", name: "Hisense fridge", change: { kind: "price", price: 1 }, status: "sent", feed_id: "f2", created_at: old, updated_at: old });
     sent.length = 0;
     await runShopNotices(new Date());
     expect(sent.find((s) => s.body.startsWith("⚠️ Jumia didn't apply"))!.body).toBe("⚠️ Jumia didn't apply the change to *Hisense fridge* (price to GHS 1): Invalid price for business client jumia-gh");
+  });
+
+  it("told where the change was asked: the web chat's change in the web chat, not on WhatsApp (2026-10-11)", async () => {
+    seed();
+    await syncCatalog(USER, { accessToken: "t", country: "GH" });
+    const old = new Date(Date.now() - 5 * 60_000).toISOString();
+    feed = { status: "DONE", failed: 1, errors: ["The Local Sale Price on Country [GH] should not be greater than local Price."] };
+    db.tables.jumia_product_changes = [
+      { id: "c1", user_id: USER, product_sid: FRIDGE, seller_sku: "HIS-205", name: "Hisense fridge", change: { kind: "sale", sale: { price: 5000, start: "2026-10-20", end: "2026-10-27" } }, status: "sent", feed_id: "f1", reply_to: `web:${USER}`, created_at: old, updated_at: old },
+    ];
+    sent.length = 0;
+    textTo.length = 0;
+    await runShopNotices(new Date());
+    expect(sent.find((m) => m.body.startsWith("⚠️ Jumia didn't apply"))).toBeTruthy();
+    expect(textTo).toEqual([`web:${USER}`]);
+  });
+
+  it("the applied message: content and a new size wait for the quality check; several products listed", () => {
+    expect(appliedText([{ name: "Dartboard", change: { kind: "content", fields: { name: "17-Inch Dartboard Set" } } }], "GHS"))
+      .toBe("✅ Done on Jumia: *Dartboard*, name → \"17-Inch Dartboard Set\". It shows on Jumia once its quality check passes it.");
+    expect(appliedText([{ name: "A", change: { kind: "price_pct", pct: -10 } }, { name: "B", change: { kind: "price_pct", pct: -10 } }], "GHS"))
+      .toBe("✅ Done on Jumia for 2 products (price -10%):\n• A\n• B");
   });
 
   it("the grouped text, cut at 15 per kind", () => {
@@ -724,7 +785,7 @@ describe("round 3: several products, product info, fees (owner's second test, 20
     expect(feedReads).toBe(1);
     expect(db.tables.jumia_product_changes.map((r) => r.status)).toEqual(["done", "failed"]);
     expect(sent.filter((m) => m.body.includes("didn't apply"))).toEqual([
-      { kind: "text", body: "⚠️ Jumia didn't apply the change to *Nasco Blender 1.5L* (stock to 10): Stock can't be updated for a rejected product" },
+      { kind: "text", body: "⚠️ Jumia didn't apply the change to *Nasco Blender 1.5L* (stock to 10): Stock can't be updated for a rejected product\n\n✅ The other one changed." },
     ]);
   });
 

@@ -192,22 +192,29 @@ export async function saveVariations(listingId: string, values: string[]): Promi
   ]);
   if (!listing) return false;
 
-  const template = ((existing ?? []) as Record<string, unknown>[])[0];
+  const had = (existing ?? []) as Record<string, unknown>[];
+  const template = had[0];
   const baseSku = typeof template?.seller_sku === "string" && template.seller_sku.includes("-")
     ? template.seller_sku.replace(/-[^-]*$/, "")
     : ((listing.sku as string | null) ?? listingId.slice(0, 8).toUpperCase());
   const taken = new Set<string>();
-  const rows = values.map((variation) => ({
-    listing_id:      listingId,
-    variation,
-    seller_sku:      `${baseSku}-${skuSuffix(variation, taken)}`,
-    gtin:            values.length === 1 ? (template?.gtin ?? null) : null,
-    quantity:        (template?.quantity as number | null | undefined) ?? (listing.quantity as number | null) ?? 1,
-    global_price:    (template?.global_price as number | null | undefined) ?? (listing.selling_price as number | null) ?? null,
-    sale_price:      template?.sale_price ?? null,
-    sale_start_date: template?.sale_start_date ?? null,
-    sale_end_date:   template?.sale_end_date ?? null,
-  }));
+  // A variation it had keeps its own price, stock and sale (2026-10-11: adding
+  // XL set S, M and L back to the first one's price); a new one takes the first's.
+  const own = (variation: string) => had.find((v) => String(v.variation ?? "").toLowerCase() === variation.toLowerCase());
+  const rows = values.map((variation) => {
+    const from = own(variation) ?? template;
+    return {
+      listing_id:      listingId,
+      variation,
+      seller_sku:      `${baseSku}-${skuSuffix(variation, taken)}`,
+      gtin:            values.length === 1 ? (template?.gtin ?? null) : null,
+      quantity:        (from?.quantity as number | null | undefined) ?? (listing.quantity as number | null) ?? 1,
+      global_price:    (from?.global_price as number | null | undefined) ?? (listing.selling_price as number | null) ?? null,
+      sale_price:      from?.sale_price ?? null,
+      sale_start_date: from?.sale_start_date ?? null,
+      sale_end_date:   from?.sale_end_date ?? null,
+    };
+  });
 
   const { error: delError } = await db.from("variants").delete().eq("listing_id", listingId);
   if (delError) {

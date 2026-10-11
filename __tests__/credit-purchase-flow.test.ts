@@ -123,7 +123,7 @@ describe("a seller buying a pack (Standard)", () => {
     expect((await getRecentTransactions(SELLER)).map((t) => t.description)).toContain(`Purchased ${pack.credits} credits (standard pack)`);
     expect((await getMostRecentCreditPack(SELLER))?.id).toBe("standard");
     expect(await hasFeature(SELLER, "shipping_labels")).toBe(true); // Standard and up
-    expect(await hasFeature(SELLER, "order_alerts")).toBe(false); // Pro and up
+    expect(await hasFeature(SELLER, "fee_calc_extension")).toBe(false); // Pro and up
   });
 
   // Owner, 2026-10-08: "let's remove the 35 GHS PACK". A Starter checkout

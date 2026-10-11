@@ -92,7 +92,7 @@ export const ACTION_DEFS: ActionDef[] = [
     name: "restart",
     line: ['{"type":"restart"} - they want to list but give no number, or start a new batch, or stop or start over the batch they are sending.'],
     lineIn: { drafts: ['{"type":"restart"} - start a new batch, or stop this one.'] },
-    tool: { does: "They want to list but give no number (never ask how many: this asks), start a new listing or batch, put this one on hold to list another, or stop or start over the batch they are sending." },
+    tool: { does: "They want to list but give no number (never ask how many: this asks), start a new listing or batch, put this one on hold to list another, or stop or start over the batch they are sending. Also listing the photo(s) they sent in this chat (\"use the image I uploaded\", \"list this photo\"): on the web this opens the product form with those photos in it." },
     sample: { message: "let's list some products", args: {} },
   },
   {
@@ -115,7 +115,8 @@ export const ACTION_DEFS: ActionDef[] = [
       '{"type":"edit","edits":[{"products":[<draft numbers>],"said":"<their words for which draft, or null>","changes":{...},"ask":false}]} - change drafts. "changes" holds ONLY what they asked to change:',
       '  "price" (number), "quantity" (whole number), "variations" (the full list the draft should have; where its category lists options, each as',
       '  {"said":"<their words>","option":"<the ONE option they mean>"}: "Large" is L), "title", "brand", "color" (copied from the message),',
-      '  "sale": true, "other": "<a field name>". Every number and word from the message. "ask": true when their words fit more than one draft.',
+      '  "sale": true, "other": "<a field name>", "variation_prices": [{"option":"<one variation>","price":<number>}] (one variation\'s own price, "XL at 150").',
+      '  Every number and word from the message. "ask": true when their words fit more than one draft.',
     ],
     // One change a call, not a list of them: with a list, draft edits ran to
     // 10 s writing empty {"products":[1],"changes":{}} entries again and again
@@ -131,6 +132,7 @@ export const ACTION_DEFS: ActionDef[] = [
           variations: arr(obj({ said: str("Their words."), option: str("The one category option they mean, e.g. \"Large\" is L.") }), "The full list of variations the draft should have."),
           title: str("New name, copied."), brand: str("New brand, copied."), color: str("Colour, copied."),
           sale: bool("A sale price with dates (read from the message)."), other: str("Another field they want changed."),
+          variation_prices: arr(obj({ option: str("The variation, as they wrote it."), price: num("Its own price.") }), "A price for one variation only (\"XL at 150\", \"the blue one 220\"), never the draft's price. With variations when they add one with its price."),
         }),
         ask: bool("True when their words fit more than one draft and they didn't say all."),
       },
@@ -162,7 +164,7 @@ export const ACTION_DEFS: ActionDef[] = [
   {
     name: "review",
     line: ['{"type":"review"} - open their drafts.'],
-    tool: { does: "Open their drafts or listings page." },
+    tool: { does: "Open their drafts or listings page, or whether they have drafts (\"do I have drafts?\")." },
     sample: { message: "open my drafts", args: {} },
   },
   {
@@ -280,8 +282,12 @@ export const ACTION_DEFS: ActionDef[] = [
   },
   {
     name: "add_photos",
-    line: ['{"type":"add_photos","product":"<their words>"} - more photos for a product already on Jumia (they send them next).'],
-    tool: { does: "More photos for a product already on Jumia (they send them next).", fields: { product: PRODUCT }, required: ["product"] },
+    line: ['{"type":"add_photos","product":"<their words>","replace":[<photo numbers>]} - more photos for a product already on Jumia (they send them next); "replace": the photos to swap out, by number (1 is the main one, which stays).'],
+    tool: {
+      does: "More photos for a product already on Jumia, or new ones in place of some it has (they send them next). It takes 8 at most; its main photo (1) only changes in Vendor Center.",
+      fields: { product: PRODUCT, replace: arr(int("A photo's number, as they're shown: 1 is the main one."), "The photos to swap out for the new ones, when they say replace, swap or change photos (\"replace photo 3\", \"the last two\" of 8 is [7, 8]).") },
+      required: ["product"],
+    },
     sample: { message: "I want to add more pictures to the neck fan", args: { product: "neck fan" } },
   },
   {
@@ -325,7 +331,7 @@ export const ACTION_DEFS: ActionDef[] = [
     // Owner's chat, 10 Oct: "show me the pictures for that product" got its text.
     name: "product_photos",
     line: ['{"type":"product_photos","product":"<their words>"} - show a product\'s photos, whatever its status (ON, OFF, rejected, waiting for quality check), or a draft\'s.'],
-    tool: { does: "Show a product's photos: every photo Jumia has, the main one first, whatever its status (ON, OFF, rejected, waiting for the quality check); a draft's photos when it names a draft (by its name, or \"draft 2\").", fields: { product: PRODUCT }, required: ["product"] },
+    tool: { does: "Show a product's photos: every photo Jumia has, the main one first, whatever its status (ON, OFF, rejected, waiting for the quality check); a draft's photos when it names a draft (by its name, or \"draft 2\"). Never for photos the seller sent in this chat (\"[a photo]\" lines): listing those is restart.", fields: { product: PRODUCT }, required: ["product"] },
     sample: { message: "show me the pictures of the kettle", args: { product: "kettle" } },
   },
   {

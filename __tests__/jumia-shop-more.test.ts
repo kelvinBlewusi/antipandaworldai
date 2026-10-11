@@ -54,6 +54,7 @@ import { changedPrice, contentItems, findProducts, pctPrice, productsFromCatalog
 import { answerProductPhotos, productDetailsLookup, productFactsText, whereLine } from "@/lib/whatsapp/shop";
 import { answerProductText, answerProducts, answerStock, bulkTargets, handleShopTap, htmlToText, proposeAddSize, proposeBulkChange, proposeContentChange } from "@/lib/whatsapp/shop";
 import { runApiChecks } from "@/lib/jumia/api-checks";
+import { answerLiveValue } from "@/lib/whatsapp/assistant";
 import { fixRejected } from "@/lib/whatsapp/fix-rejected";
 import {
   answerBrand, answerLinkedShops, answerPayoutDetail, answerReport, answerWarehouseStock, daysLeft, handleWarehouseTap, proposeWarehouseOrder,
@@ -227,6 +228,41 @@ describe("rules for many products", () => {
     expect(last().body).toContain('has one size, with no name on Jumia ("..."), so 2.2L can\'t be added beside it yet.');
     expect(last().body).toContain("current size is");
     expect(writes()).toHaveLength(0);
+  });
+
+  // Owner, 2026-10-11: "when users request an addition of a variant to a live or draft without price request for it".
+  it("a new size with no price: asked, the others' price one tap away; with no stock, the stock first", async () => {
+    db.tables.whatsapp_sessions = [{ phone_number: PHONE, user_id: USER, state: "idle", assistant_pending: null }];
+    // Sizes at different prices: those are said, no one-tap price.
+    expect(await proposeAddSize(USER, PHONE, "Eau de Parfum", { size: "200ml", stock: 3, price: null })).toBe("add size: asked price");
+    expect(last()).toMatchObject({ kind: "text" });
+    expect(last().body).toBe("What should *200ml* of *Lattafa Eau de Parfum* sell for? Send its price (its other sizes are GHS 150, GHS 240).");
+    // One price between them: "Same price" is a tap.
+    catalog[0] = set("p", "Lattafa Eau de Parfum", [{ id: PERFUME_50, sku: "LAT-50", variation: "50ml", price: 150 }, { id: PERFUME_100, sku: "LAT-100", variation: "100ml", price: 150 }]);
+    db.tables.jumia_products = [];
+    db.tables.jumia_catalog_syncs = [];
+    expect(await proposeAddSize(USER, PHONE, "Eau de Parfum", { size: "200ml", stock: 3, price: null })).toBe("add size: asked price");
+    expect(last()).toMatchObject({ kind: "buttons", ids: ["lval:same"] });
+    expect(last().body).toBe("What should *200ml* of *Lattafa Eau de Parfum* sell for? Send its price, or tap *Same price* for GHS 150 like the others.");
+    expect(db.tables.whatsapp_sessions[0].assistant_pending).toMatchObject({ kind: "live_value", field: "price", products: ["LAT-100"], addSize: { size: "200ml", stock: 3, price: null, same: 150 } });
+    expect(writes()).toHaveLength(0);
+
+    // The tap: offered at the others' price, for the usual confirm tap.
+    const session = { ...db.tables.whatsapp_sessions[0], assistantPending: db.tables.whatsapp_sessions[0].assistant_pending } as never;
+    expect(await answerLiveValue(USER, PHONE, session, "lval:same")).toBe(true);
+    expect(last()).toMatchObject({ kind: "buttons" });
+    expect(last().body).toContain("Add *200ml* to *Lattafa Eau de Parfum* on Jumia: 3 in stock at GHS 150?");
+    expect(writes()).toHaveLength(0);
+
+    expect(await proposeAddSize(USER, PHONE, "Eau de Parfum", { size: "200ml", stock: null, price: null })).toBe("add size: asked stock");
+    expect(last().body).toBe("How many *200ml* of *Lattafa Eau de Parfum* do you have? Send the number.");
+    const asked = { ...db.tables.whatsapp_sessions[0], assistantPending: db.tables.whatsapp_sessions[0].assistant_pending } as never;
+    // Their number is the stock; the price is asked next.
+    expect(await answerLiveValue(USER, PHONE, asked, "4")).toBe(true);
+    expect(last().body).toContain("What should *200ml* of *Lattafa Eau de Parfum* sell for?");
+    const priced = { ...db.tables.whatsapp_sessions[0], assistantPending: db.tables.whatsapp_sessions[0].assistant_pending } as never;
+    expect(await answerLiveValue(USER, PHONE, priced, "GHS 260")).toBe(true);
+    expect(last().body).toContain("4 in stock at GHS 260?");
   });
 
   it("only some of the products just listed: the approved ones, or the ones ON or OFF", async () => {

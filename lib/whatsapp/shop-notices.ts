@@ -145,8 +145,25 @@ export function refusedText(own: string[], batch: number, refused: number, allNo
 }
 
 /**
- * Changes sent to Jumia: applied (noted), refused (told), or no answer after
- * a day (told). The rows of one feed (several products changed with one tap)
+ * The message for a feed's changes Jumia applied (owner, 2026-10-11: "all
+ * changes made on live products, let's be able to tell user if it was
+ * successful or not after the task is done"). Content and a new size go
+ * through Jumia's quality check again before they show: said so. Pure.
+ */
+export function appliedText(rows: { name: string; change: LiveChange }[], currency: string): string {
+  const change = rows[0].change;
+  const what = describeLiveChange(change, null, { currency });
+  const checked = change.kind === "content" || change.kind === "add_variation";
+  const after = checked ? " It shows on Jumia once its quality check passes it." : "";
+  if (rows.length === 1) return `✅ Done on Jumia: *${rows[0].name}*, ${what}.${after}`;
+  const names = rows.slice(0, 10).map((r) => `• ${r.name}`);
+  return [`✅ Done on Jumia for ${rows.length} products (${what}):`, ...names, ...(rows.length > 10 ? [`+${rows.length - 10} more`] : [])].join("\n") + (after ? `\n\n${after.trim()}` : "");
+}
+
+/**
+ * Changes sent to Jumia: applied, refused, or no answer after a day, each
+ * told where the change was asked (the web chat or WhatsApp; rows from
+ * before 11 Oct, on their WhatsApp). The rows of one feed (several products changed with one tap)
  * are read with one call, and only the products Jumia refused are refused:
  * one message names them all.
  */
@@ -183,6 +200,7 @@ async function checkSentChanges(now: Date, deadline: number, run: ShopNoticesRun
         }
       }
       const outcomes = feedOutcomes(rows, feed, readBack);
+      const applied: { name: string; change: LiveChange }[] = [];
       const own: string[] = [];
       let batch = 0;
       let refusedCount = 0;
@@ -205,18 +223,23 @@ async function checkSentChanges(now: Date, deadline: number, run: ShopNoticesRun
         } else if (o.outcome === "applied") {
           await db.from("jumia_product_changes").update({ status: "done", updated_at: now.toISOString() }).eq("id", String(r.id));
           if (r.product_sid) await recordApplied(userId, String(r.product_sid), r.change as LiveChange);
+          applied.push({ name: String(r.name ?? r.seller_sku), change: r.change as LiveChange });
           run.changes++;
         }
       }
+      const phone = typeof first.reply_to === "string" && first.reply_to ? first.reply_to : await phoneOf(userId);
       if (refusedCount > 0) {
         // Nothing of it applied: its credits back (lib/whatsapp/shop.ts charged the tap).
         const back = refusedCount === group.length
           ? (await refundService(first.group_id ? `lgrp:${String(first.group_id)}` : `lchg:${String(first.id)}`, "Refund: Jumia didn't apply the change")).refunded
           : 0;
         const credits = back > 0 ? `\n\nYour ${back} credits for it are back.` : "";
-        const phone = await phoneOf(userId);
+        // Refused for their own reasons, the rest applied: said too (a refused batch says it itself).
+        const rest = batch === 0 && applied.length > 0 ? `\n\n✅ The other ${applied.length === 1 ? "one" : applied.length} changed.` : "";
         if (phone) await sendTextIfConfigured(phone, refusedText(own, batch, refusedCount, allNotFound,
-          describeLiveChange(first.change as LiveChange, null, { currency: creds.currency }), group.length) + credits);
+          describeLiveChange(first.change as LiveChange, null, { currency: creds.currency }), group.length) + rest + credits);
+      } else if (applied.length > 0 && phone) {
+        await sendTextIfConfigured(phone, appliedText(applied, creds.currency));
       }
     } catch (e) {
       run.failed++;

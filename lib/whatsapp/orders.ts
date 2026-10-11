@@ -8,7 +8,7 @@
  * ready to ship and cancelling are on every plan (`shop_whatsapp`, owner
  * 2026-10-07: "all the capabilities available to all plans in the chat");
  * the label PDF needs `shipping_labels` (Standard and up, each label
- * charged, LABEL_CREDIT_COST) and the new-order alerts `order_alerts` (Pro,
+ * charged, LABEL_CREDIT_COST) and the new-order alerts `order_alerts` (every plan,
  * free). Nothing works at 0 credits. Works for every Jumia country: amounts in the
  * shop's own currency and the country's formatting, Jumia's own wording
  * passed through.
@@ -245,7 +245,7 @@ export async function handleOrderMessage(userId: string, phone: string, text: st
 }
 
 /**
- * `alerts`: they get new-order alerts (Pro), so "I'll message you" is true.
+ * `alerts`: they get new-order alerts (every plan), so "I'll message you" is true.
  * `web`: the website's chat. `labels`: a label PDF can be sent here (on
  * WhatsApp, with the pack that has them).
  */

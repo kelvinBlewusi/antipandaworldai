@@ -3791,6 +3791,38 @@ describe("the assistant, on the pilot's accounts", () => {
     expect(sent[0].body).toBe("✅ Product 1 (Vintage Radio Eau de Parfum Natural Spr…): variation 100ml.");
   });
 
+  // Owner, 2026-10-11: "when users request an addition of a variant to a live or draft without price request for it".
+  it("a variation added beside the ones it has: theirs keep their own prices, and the new one's price is asked", async () => {
+    drafted(["Vintage Radio Eau de Parfum Natural Spray", SHIRT]);
+    variationHeld.add("listing-1");
+    db.tables.variants = [
+      { id: "v1", listing_id: "listing-1", variation: "50ml", seller_sku: "PA-TEST01-50ML", quantity: 3, global_price: 4500 },
+      { id: "v2", listing_id: "listing-1", variation: "100ml", seller_sku: "PA-TEST01-100ML", quantity: 2, global_price: 5200 },
+    ];
+    aiReplies.push('{"type":"edit","edits":[{"products":[1],"changes":{"variations":["50ml","100ml","10ml"]},"ask":false}]}');
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "add a 10ml variation to the perfume" });
+
+    const rows = () => db.tables.variants.filter((v) => v.listing_id === "listing-1");
+    expect(rows().map((v) => [v.variation, v.global_price, v.quantity])).toEqual([["50ml", 4500, 3], ["100ml", 5200, 2], ["10ml", 4500, 3]]);
+    expect(sent[0].body).toContain("✅ Product 1 (Vintage Radio Eau de Parfum Natural Spr…): variations 50ml, 100ml, 10ml.");
+    expect(sent[0].body).toContain('💬 Product 1 (Vintage Radio Eau de Parfum Natural Spr…): 10ml has 50ml\'s price (4,500). A different price? Say e.g. "10ml 4950".');
+
+    // Its own price, then.
+    sent.length = 0;
+    aiReplies.push('{"type":"edit","edits":[{"products":[1],"changes":{"variation_prices":[{"option":"10ml","price":3000}]},"ask":false}]}');
+    await handleLinkedMessage(USER, PHONE, "m2", { text: "10ml 3000" });
+    expect(rows().map((v) => [v.variation, v.global_price])).toEqual([["50ml", 4500], ["100ml", 5200], ["10ml", 3000]]);
+    expect(sent[0].body).toContain("✅ Product 1 (Vintage Radio Eau de Parfum Natural Spr…): 10ml at 3,000.");
+
+    // Given with it: nothing to ask.
+    sent.length = 0;
+    aiReplies.push('{"type":"edit","edits":[{"products":[1],"changes":{"variations":["50ml","100ml","10ml","105ml"],"variation_prices":[{"option":"105ml","price":5300}]},"ask":false}]}');
+    await handleLinkedMessage(USER, PHONE, "m3", { text: "add 105ml at 5300" });
+    expect(rows().find((v) => v.variation === "105ml")).toMatchObject({ global_price: 5300 });
+    expect(rows().find((v) => v.variation === "10ml")).toMatchObject({ global_price: 3000 });
+    expect(sent[0].body).not.toContain("💬");
+  });
+
   it("refuses a variation the category doesn't stock, naming its options", async () => {
     drafted(["Vintage Radio Eau de Parfum Natural Spray"]);
     variationHeld.add("listing-1");

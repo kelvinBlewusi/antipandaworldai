@@ -18,15 +18,14 @@
 import { useEffect, useRef, useState } from "react";
 import { ImagePlus, Loader2, Plus, Sparkles, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { blankCard as blank, newKey, openingCards, type FormDraft, type FormPhoto } from "@/components/assistant/chat-photos";
 
 /** Jumia takes at most 8 photos a product. */
 const MAX_PHOTOS = 8;
 
-interface Photo { key: string; preview: string; mediaId?: string; uploading: boolean; error?: string }
-interface Draft { key: string; photos: Photo[]; price: string; quantity: string; sizes: string; colour: string; notes: string; polish: boolean }
-
-const newKey = () => crypto.randomUUID();
-const blank = (): Draft => ({ key: newKey(), photos: [], price: "", quantity: "", sizes: "", colour: "", notes: "", polish: false });
+type Photo = FormPhoto;
+type Draft = FormDraft;
+export type { FormDraft };
 
 /** What a card still needs before the batch can go, or null. */
 function missing(d: Draft): string | null {
@@ -38,40 +37,42 @@ function missing(d: Draft): string | null {
   return null;
 }
 
-async function upload(file: File): Promise<{ mediaId: string } | { error: string }> {
+async function upload(file: File): Promise<{ mediaId: string; url?: string } | { error: string }> {
   const form = new FormData();
   form.append("file", file);
   const res = await fetch("/api/listing-assistant/upload", { method: "POST", body: form }).catch(() => null);
-  const data = res ? ((await res.json().catch(() => ({}))) as { mediaId?: string; error?: string }) : {};
-  return res?.ok && data.mediaId ? { mediaId: data.mediaId } : { error: data.error ?? "Didn't upload" };
+  const data = res ? ((await res.json().catch(() => ({}))) as { mediaId?: string; url?: string; error?: string }) : {};
+  return res?.ok && data.mediaId ? { mediaId: data.mediaId, url: data.url } : { error: data.error ?? "Didn't upload" };
 }
 
-export function ProductForm({ currency, maxProducts, polishCost, initialCount = 1, initialPhotos = [], onClose, onSent }: {
+export function ProductForm({ currency, maxProducts, polishCost, initialCount = 1, initialPhotos = [], kept, onClose, onSent }: {
   currency: string;
   maxProducts: number;
   /** Credits a product's polish takes (POLISH_COST); none hides the option. Not shown on the card (owner, 2026-10-08). */
   polishCost?: number | null;
   /** Cards to start with: the count the seller gave in the chat. */
   initialCount?: number;
-  /** Photos the seller just sent in the chat, already uploaded: product 1's. */
+  /** Photos the seller sent in the chat, already uploaded, not on a card yet. */
   initialPhotos?: { mediaId: string; preview: string }[];
-  onClose: () => void;
+  /** What was in the form when it was last closed without drafting. */
+  kept?: FormDraft[] | null;
+  /** Closed: with the cards to keep (null once they went), and the chat's photos taken off a card. */
+  onClose: (keep: FormDraft[] | null, removed: string[]) => void;
   /** After the batch went: the chat polls for its message and the bot's. */
   onSent: () => void;
 }) {
-  const [drafts, setDrafts] = useState<Draft[]>(() => {
-    const cards = Array.from({ length: Math.min(Math.max(1, initialCount), maxProducts) }, blank);
-    cards[0].photos = initialPhotos.slice(0, MAX_PHOTOS).map((p) => ({ key: newKey(), preview: p.preview, mediaId: p.mediaId, uploading: false }));
-    return cards;
-  });
+  const [drafts, setDrafts] = useState<Draft[]>(() => openingCards(kept, initialCount, initialPhotos, maxProducts));
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tried, setTried] = useState(false);
 
-  // Previews are object URLs: released when the form closes.
+  // A photo's preview is the page's own copy until it's uploaded, then its
+  // stored link (so a kept card still shows it). Copies still in use when
+  // the form closes are released then: those photos don't come back.
   const all = useRef<Draft[]>(drafts);
   all.current = drafts;
-  useEffect(() => () => all.current.forEach((d) => d.photos.forEach((p) => p.preview.startsWith("blob:") && URL.revokeObjectURL(p.preview))), []);
+  const removed = useRef<string[]>([]);
+  useEffect(() => () => all.current.forEach((d) => d.photos.forEach((p) => !p.mediaId && p.preview.startsWith("blob:") && URL.revokeObjectURL(p.preview))), []);
 
   const patch = (key: string, change: Partial<Draft> | ((d: Draft) => Partial<Draft>)) =>
     setDrafts((prev) => prev.map((d) => (d.key === key ? { ...d, ...(typeof change === "function" ? change(d) : change) } : d)));
@@ -85,23 +86,32 @@ export function ProductForm({ currency, maxProducts, polishCost, initialCount = 
     const added = images.map((file) => ({ file, photo: { key: newKey(), preview: URL.createObjectURL(file), uploading: true } as Photo }));
     patch(key, (d) => ({ photos: [...d.photos, ...added.map((a) => a.photo)] }));
     for (const { file, photo } of added) {
-      void upload(file).then((r) => patch(key, (d) => ({
-        photos: d.photos.map((p) => (p.key === photo.key ? { ...p, uploading: false, ...("mediaId" in r ? { mediaId: r.mediaId } : { error: r.error }) } : p)),
-      })));
+      void upload(file).then((r) => {
+        if ("mediaId" in r && r.url) URL.revokeObjectURL(photo.preview);
+        patch(key, (d) => ({
+          photos: d.photos.map((p) => (p.key === photo.key
+            ? { ...p, uploading: false, ...("mediaId" in r ? { mediaId: r.mediaId, ...(r.url ? { preview: r.url } : {}) } : { error: r.error }) }
+            : p)),
+        }));
+      });
     }
   }
 
   function removePhoto(key: string, photoKey: string) {
     patch(key, (d) => {
       const gone = d.photos.find((p) => p.key === photoKey);
-      if (gone) URL.revokeObjectURL(gone.preview);
+      if (gone?.preview.startsWith("blob:")) URL.revokeObjectURL(gone.preview);
+      if (gone?.mediaId) removed.current.push(gone.mediaId);
       return { photos: d.photos.filter((p) => p.key !== photoKey) };
     });
   }
 
   function removeCard(key: string) {
     setDrafts((prev) => {
-      prev.find((d) => d.key === key)?.photos.forEach((p) => URL.revokeObjectURL(p.preview));
+      prev.find((d) => d.key === key)?.photos.forEach((p) => {
+        if (p.preview.startsWith("blob:")) URL.revokeObjectURL(p.preview);
+        if (p.mediaId) removed.current.push(p.mediaId);
+      });
       return prev.filter((d) => d.key !== key);
     });
   }
@@ -136,7 +146,7 @@ export function ProductForm({ currency, maxProducts, polishCost, initialCount = 
       return;
     }
     onSent();
-    onClose();
+    onClose(null, removed.current);
   }
 
   return (
@@ -147,7 +157,7 @@ export function ProductForm({ currency, maxProducts, polishCost, initialCount = 
             <p className="font-semibold text-zinc-900">New products</p>
             <p className="text-xs text-zinc-500">Each product&apos;s photos, price and details, then Draft.</p>
           </div>
-          <button type="button" onClick={onClose} aria-label="Close" className="flex h-10 w-10 items-center justify-center rounded-lg text-zinc-500 hover:bg-zinc-100">
+          <button type="button" onClick={() => onClose(all.current, removed.current)} aria-label="Close" className="flex h-10 w-10 items-center justify-center rounded-lg text-zinc-500 hover:bg-zinc-100">
             <X className="h-5 w-5" />
           </button>
         </div>
