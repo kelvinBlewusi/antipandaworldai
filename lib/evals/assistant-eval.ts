@@ -30,8 +30,10 @@
 import { createServerClient } from "@/lib/supabase/server";
 import { appUrl } from "@/lib/whatsapp/app-url";
 import {
-  agentModel, assistantLinks, assistantModel, type ProductFacts,
+  agentModel, assistantLinks, assistantModel, routerModel, type ProductFacts,
 } from "@/lib/whatsapp/assistant";
+import { sendTextIfConfigured } from "@/lib/whatsapp/client";
+import { ownerWhatsApp } from "@/lib/evals/warning-signs";
 import { ASSISTANT_CASES, type EvalCase, type Shape } from "@/lib/evals/assistant-cases";
 import { frontDoor, type FrontDoorInput } from "@/lib/assistant-v2/front-door";
 import { agentRead, agentSystem, catalogLookups, geminiAgentCall } from "@/lib/assistant-v2/agent";
@@ -250,8 +252,10 @@ export async function workOnRuns(budgetMs = 100_000): Promise<{ runId: string | 
   const db = createServerClient();
   const deadline = Date.now() + budgetMs;
   const now = new Date().toISOString();
+  // One run at a time, oldest first: two at once (the weekly agent and front
+  // door runs) would hit Gemini's per-minute quota together.
   const { data: open } = await db.from("assistant_eval_runs").select("id, locked_until")
-    .in("status", ["queued", "running"]).order("created_at", { ascending: true }).limit(5);
+    .in("status", ["queued", "running"]).order("created_at", { ascending: true }).limit(1);
   const free = ((open ?? []) as { id: string; locked_until: string | null }[]).find((r) => !r.locked_until || r.locked_until < now);
   if (!free) return { runId: null, done: 0, total: 0 };
   // Claimed only if no other worker took it since it was read.
@@ -277,7 +281,65 @@ export async function workOnRuns(budgetMs = 100_000): Promise<{ runId: string | 
     ...tally(results), results, total: ASSISTANT_CASES.length, locked_until: null,
     ...(finished ? { status: "done", finished_at: new Date().toISOString() } : {}),
   }).eq("id", run.id);
+  if (finished && run.note === WEEKLY) await alertOnDrop({ ...run, results });
   return { runId: run.id, done: results.length, total: ASSISTANT_CASES.length };
+}
+
+// ─── The weekly run (step 4 of the plan, owner 2026-10-11) ───────────────────
+
+/** The note on the runs app/api/worker/assistant-weekly queues each Monday. */
+export const WEEKLY = "weekly";
+/** A weekly run this many cases below the last run of the same way and model, on the cases both scored, is sent to the owner. */
+export const DROP_ALERT_CASES = 3;
+
+/** The week's runs: agent mode and the front door, each with the model the chat uses. One at a time (workOnRuns). */
+export async function queueWeeklyRuns(): Promise<string[]> {
+  return [
+    await queueRun({ pipeline: "agent", note: WEEKLY }),
+    await queueRun({ pipeline: "front_door", router: await routerModel(), note: WEEKLY }),
+  ];
+}
+
+/** One run against an earlier one, on the cases both scored. Pure. */
+export function compareRuns(now: CaseResult[], before: CaseResult[]): { cases: number; passedNow: number; passedBefore: number; newlyWrong: string[]; newlyRight: string[] } {
+  const prev = new Map(before.filter((r) => !r.error).map((r) => [r.id, r]));
+  const both = now.filter((r) => !r.error && prev.has(r.id));
+  return {
+    cases:        both.length,
+    passedNow:    both.filter((r) => r.pass).length,
+    passedBefore: both.filter((r) => prev.get(r.id)!.pass).length,
+    newlyWrong:   both.filter((r) => !r.pass && prev.get(r.id)!.pass).map((r) => r.id),
+    newlyRight:   both.filter((r) => r.pass && !prev.get(r.id)!.pass).map((r) => r.id),
+  };
+}
+
+/** The finished run before this one, the same way and model. */
+export async function previousRun(run: Pick<EvalRun, "id" | "created_at" | "model" | "pipeline">): Promise<EvalRun | null> {
+  const { data } = await createServerClient().from("assistant_eval_runs").select("*")
+    .eq("status", "done").eq("model", run.model).eq("pipeline", run.pipeline ?? "front_door")
+    .lt("created_at", run.created_at).order("created_at", { ascending: false }).limit(1);
+  return ((data ?? []) as EvalRun[])[0] ?? null;
+}
+
+/** A weekly run that fell DROP_ALERT_CASES or more below the last one: sent to the owner on WhatsApp. Never throws. */
+async function alertOnDrop(run: EvalRun): Promise<void> {
+  try {
+    const before = await previousRun(run);
+    if (!before) return;
+    const c = compareRuns(run.results, before.results ?? []);
+    if (c.passedBefore - c.passedNow < DROP_ALERT_CASES) return;
+    const way = run.pipeline === "agent" ? "agent mode" : "the front door";
+    console.error(`[assistant eval] weekly run ${run.id} (${way}, ${run.model}) ${c.passedNow}/${c.cases}, was ${c.passedBefore}: ${c.newlyWrong.join(", ")}`);
+    const phone = await ownerWhatsApp();
+    if (!phone) return;
+    await sendTextIfConfigured(phone, [
+      `⚠️ This week's test run of ${way} (${run.model}) got ${c.passedNow} of ${c.cases} right, down from ${c.passedBefore} on the same cases.`,
+      `Now wrong: ${c.newlyWrong.slice(0, 12).join(", ")}${c.newlyWrong.length > 12 ? ` and ${c.newlyWrong.length - 12} more` : ""}.`,
+      "", `Details: ${appUrl()}/admin/assistant-tests?run=${run.id}`,
+    ].join("\n"));
+  } catch (e) {
+    console.warn(`[assistant eval] couldn't check run ${run.id} against the last: ${(e as Error).message}`);
+  }
 }
 
 /** A run's results by area: cases, passed as deployed, passed on the AI's choice alone, asked back. Pure. */

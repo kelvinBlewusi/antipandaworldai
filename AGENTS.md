@@ -2732,7 +2732,7 @@ these three were approved, plus some live changes made immediate.
 The plan from here: 1. agent mode for everyone; 2. retire the old one-call
 reader and its word rules (the front door stays, as the backup); 3. one
 definition per action (part G of the plan page); 4. a weekly warning-signs
-report and a weekly test run. Steps 1, 2 and 3 are done.
+report and a weekly test run. All four are done (11 Oct).
 
 - **Step 1**: app_settings `assistant_agent` = `"all"` (11 Oct, after
   94dcc39 was live). Every seller's typed message is read by agent mode
@@ -2793,6 +2793,44 @@ report and a weekly test run. Steps 1, 2 and 3 are done.
     The checks and the code that runs it stay in assistant.ts (they share
     the session, the shop module and the confirm taps); the tests fail
     until every part is there.
+- **Step 4, the weekly look** (plan: "a weekly look at the warning signs …
+  each one found becomes a test case"):
+  - lib/evals/warning-signs.ts reads a week of whatsapp_assistant_log and
+    whatsapp_message_log (`warningSigns`, pure) for:
+    - not_understood: outcome "default";
+    - fell_back: `raw` starts `[agent failed` / `[agent found nothing to do`;
+    - restart: "offered restart";
+    - said_no: an inbound `lchgno:` / `lgrpno:` / `whno:` tap, with the
+      offer before it;
+    - repeated: an inbound text much like the one before it (`sameRequest`:
+      half the words shared, or one inside the other) within 60 s;
+    - overridden: the AI's choice in `raw` (`aiChoice`: agent mode's first
+      action tool, the front door's last reading) isn't the action the
+      checks made (step → note and can-you → reply don't count);
+    - blocked: a "can't" reply stopped;
+    - failed: outcome "failed…";
+    - wished: "not yet: …".
+
+    It also gives agent mode's median and slowest-tenth time, from `raw`.
+  - /admin/warning-signs: the 7 days to now (or `?to=YYYY-MM-DD`) against
+    the week before, every message behind each sign (`?kind=` for one),
+    and the weekly test runs, each against the run before it.
+  - Every Monday at 06:41 UTC, pg_cron `assistant-weekly`
+    (migration 2026-10-11_assistant-weekly.sql) calls
+    app/api/worker/assistant-weekly → `runWeekly` (lib/evals/weekly.ts).
+    It sends the owner (`ownerWhatsApp`: the daily Jumia checks' account)
+    the counts against last week, the latest test-set scores and the
+    page's link. Then it queues the week's runs (`queueWeeklyRuns`, note
+    `"weekly"`): agent mode with `agentModel()`, then the front door with
+    `assistantModel()` / `routerModel()`.
+  - `workOnRuns` works one run at a time, oldest first, since two at once
+    hit AI Studio's per-minute quota. When a weekly run finishes,
+    `alertOnDrop` compares it with the run before it (same way and model,
+    `compareRuns`, on the cases both scored). If it got
+    `DROP_ALERT_CASES` (3) or more fewer right, the owner gets a WhatsApp
+    message with the cases now wrong and the run's link.
+  - Tests: __tests__/assistant-weekly.test.ts. The test FakeDb now has
+    `gte`, `lte` and `range`.
 - **Test runs** (lib/evals/assistant-eval.ts): pipelines `"agent"` (the
   default for `queueRun`, with `agentModel()`) and `"front_door"`. Old runs
   of the one-call reader (`pipeline` "current" or null) stay in the table as
