@@ -37,6 +37,12 @@ const int = (description: string): Schema => ({ type: "integer", description });
 const bool = (description: string): Schema => ({ type: "boolean", description });
 const arr = (items: Schema, description: string): Schema => ({ type: "array", items, description });
 const obj = (properties: Record<string, Schema>, required: string[] = []): Schema => ({ type: "object", properties, ...(required.length ? { required } : {}) });
+/** A sale's dates as you read them, with their words for them (checked against the message). */
+const SALE_DATES: Record<string, Schema> = {
+  sale_start: str("The sale's first day, YYYY-MM-DD, as you read their dates."),
+  sale_end: str("The sale's last day, YYYY-MM-DD."),
+  dates_said: str("Their own words for the dates, copied from the message (\"20th october to 27th october\")."),
+};
 
 const PERIOD = ["today", "yesterday", "week", "month", "quarter"];
 const PRODUCT = str("The product in their words, or as their shop names it.");
@@ -174,7 +180,7 @@ export const ACTION_DEFS: ActionDef[] = [
     name: "live_change",
     line: [
       '{"type":"live_change","product":"<their words for the product>","stock":<number>} - change one product already on Jumia. Instead of "stock",',
-      '  exactly one of: "price":<number>, "sale_price":<number> (dates are read from the message), "sale":"end", "active":true or false.',
+      '  exactly one of: "price":<number>, "sale_price":<number> (with "sale_start":"YYYY-MM-DD","sale_end":"YYYY-MM-DD","dates_said":"<their words for the dates, copied>"), "sale":"end", "active":true or false.',
       '  Several products, the same change: "products":["<words>","<words>"]. Values from the message.',
     ],
     tool: {
@@ -182,7 +188,8 @@ export const ACTION_DEFS: ActionDef[] = [
       fields: {
         product: PRODUCT, products: arr(str("A product."), "Several products, the same change."),
         stock: int("New stock."), price: num("New price (\"sell it at 120\", \"make it 120\")."),
-        sale_price: num("A sale price, only when they say sale, discount, promo or off (dates are read from the message)."),
+        sale_price: num("A sale price, only when they say sale, discount, promo or off."),
+        ...SALE_DATES,
         end_sale: bool("End its sale."), active: bool("true to turn it ON, false to turn it OFF."), all: bool("Every product their words fit (\"all the hard hats\")."),
       },
     },
@@ -205,7 +212,7 @@ export const ACTION_DEFS: ActionDef[] = [
         words: str("Their words for the products, for matching."),
         said: str("Their own words for which products, copied from the message: \"all my prices\", \"everything out of stock\", \"those\", \"the approved ones\", \"the last 10\"."),
         only: str("Of those, only some: \"approved\" for the ones Jumia's quality check approved, ON or OFF (\"the approved ones\"); \"on\" or \"off\" for the ones ON or OFF.", ["approved", "on", "off"]),
-        price_pct: num("Prices up (+) or down (-) by this %."), sale_pct: num("A sale this % off."),
+        price_pct: num("Prices up (+) or down (-) by this %."), sale_pct: num("A sale this % off."), ...SALE_DATES,
         stock: int("Stock to set."), price: num("Price to set."), sale_price: num("Sale price to set."),
         end_sale: bool("End sales."), active: bool("true ON, false OFF."),
       },
@@ -219,15 +226,25 @@ export const ACTION_DEFS: ActionDef[] = [
     line: [
       '{"type":"content_change","product":"<the product>","name":"<copied>" or null,"description":"<copied>" or null,"highlights":null,"brand":null,"rewrite":["name","description","highlights"] or []} - a live product\'s',
       '  name, description or highlights: their own text copied whole, or "rewrite" for what they ask YOU to write (PandaWorld writes it with AI and shows it before one tap).',
+      '  With "rewrite", "asked":{"<field>":"<their own words asking for it, copied: \\"edit the title to be a bit longer\\">"} for each field it names.',
       '  Its other details go in the same action: "details":{"<the detail in their words: colour, material, weight, model…>":"<value copied>"},',
+      '  and "adding":["<detail>"] for each detail they add to rather than replace ("add rubber to the material").',
       '  "barcode":"<digits copied>", "size":{"from":"<the size now, or null>","to":"<the new size name>"} (renaming one of its sizes).',
     ],
     tool: {
-      does: "A live product's name, description, highlights, brand, other details, barcode or a size's name. Their own text copied, or rewrite for what they ask you to write.",
+      does: "A live product's name, description, highlights, brand, other details, barcode or a size's name. Their own text copied, or rewrite for what they ask you to write, with asked: their own words asking for each field rewritten, copied (only the fields they asked about).",
       fields: {
         product: PRODUCT, name: str("New name, copied."), description: str("New description, copied whole."), highlights: str("New highlights, copied."),
         brand: str("New brand, copied."), rewrite: arr(str("A field.", ["name", "description", "highlights"]), "Fields they ask you to write or improve."),
-        details: arr(obj({ detail: str("The detail in their words: colour, material, weight, model…"), value: str("The value, copied.") }), "Other details."),
+        asked: obj({
+          name: str("Their own words asking for a new name or title, copied from the message (\"edit the title to be a bit longer\")."),
+          description: str("Their own words asking for a new description, copied."),
+          highlights: str("Their own words asking for new highlights, copied."),
+        }),
+        details: arr(obj({
+          detail: str("The detail in their words: colour, material, weight, model…"), value: str("The value, copied."),
+          add: bool("true when they add this value to what the detail has (\"add rubber to the material\"); left out, it replaces it."),
+        }), "Other details."),
         barcode: str("Barcode digits, copied."), size: obj({ from: str("The size now."), to: str("The new size name.") }),
       },
       required: ["product"],
@@ -240,20 +257,26 @@ export const ACTION_DEFS: ActionDef[] = [
         details: details.length
           ? Object.fromEntries(details.filter((d) => typeof d.detail === "string" && typeof d.value === "string").map((d) => [d.detail as string, d.value as string]))
           : undefined,
+        ...(details.some((d) => (d as { add?: unknown }).add === true)
+          ? { adding: details.filter((d) => (d as { add?: unknown }).add === true && typeof d.detail === "string").map((d) => d.detail as string) }
+          : {}),
         rewrite: Array.isArray(args.rewrite) ? args.rewrite : [],
       };
     },
-    sample: { message: "rewrite the description of the kettle", args: { product: "kettle", rewrite: ["description"] } },
+    sample: { message: "rewrite the description of the kettle", args: { product: "kettle", rewrite: ["description"], asked: { description: "rewrite the description" } } },
   },
   {
     name: "add_size",
-    line: ['{"type":"add_size","product":"<their words>","size":"<the new size or colour, copied>","stock":<number> or null,"price":<number> or null} - a new size or colour for a product already on Jumia, its stock and price from the message.'],
+    line: ['{"type":"add_size","product":"<their words>","size":"<the new size or colour>","said":"<their own words for it, copied: \\"15inc\\">","stock":<number> or null,"price":<number> or null} - a new size or colour for a product already on Jumia, its stock and price from the message.'],
     tool: {
       does: "A new size or colour for a product already on Jumia, with its stock and price from the message.",
-      fields: { product: PRODUCT, size: str("The new size or colour, copied."), stock: int("Stock, from the message."), price: num("Price, from the message.") },
-      required: ["product", "size"],
+      fields: {
+        product: PRODUCT, size: str("The new size or colour (\"15-Inch\")."), said: str("Their own words for it, copied from the message or the one before (\"15inc\")."),
+        stock: int("Stock, from the message."), price: num("Price, from the message."),
+      },
+      required: ["product", "size", "said"],
     },
-    sample: { message: "add size XL to the gown, 4 pieces at 150", args: { product: "gown", size: "XL", stock: 4, price: 150 } },
+    sample: { message: "add size XL to the gown, 4 pieces at 150", args: { product: "gown", size: "XL", said: "size XL", stock: 4, price: 150 } },
   },
   {
     name: "add_photos",

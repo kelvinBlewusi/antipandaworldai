@@ -33,9 +33,10 @@ describe("each action is defined once", () => {
     }
   });
 
-  it("agent mode has a tool for every action, and only those besides the lookups", () => {
+  it("agent mode has a tool for every action, and only those besides the lookups and done", () => {
     expect(ACTION_TOOLS.map((t) => t.name)).toEqual(NAMES);
-    expect(AGENT_TOOLS.map((t) => t.name)).toEqual([...LOOKUP_TOOLS.map((t) => t.name), ...NAMES]);
+    // done: only when asked whether anything is left of a message of several parts.
+    expect(AGENT_TOOLS.map((t) => t.name)).toEqual([...LOOKUP_TOOLS.map((t) => t.name), ...NAMES, "done"]);
   });
 
   it("the front door offers every action in an area, or in every reading", () => {

@@ -3027,6 +3027,47 @@ the seller, and our own checks turned the reading down.
   with no AI call. A miss caused by our checks is fixed in the code and
   pinned there with the AI's own words.
 
+### The owner's dartboard test, and quotes in place of word lists (owner's WhatsApp, 2026-10-11 10:01–10:16)
+
+Six changes to the 17-inch dartboard in one numbered message. Brand,
+weight and warranty address worked. The title didn't, the sale didn't, and
+the material replaced instead of adding. The description rewrite didn't
+follow the drafting standard, and adding a 15-inch size didn't work. Each
+cause, and its fix:
+
+- **Rewrites in any words** (`content_change` `asked`):
+  - The cause:
+    - "edit the tittle to be abit longer" was turned down by REWRITE_WORDS/CHANGE_WORDS ("tittle" isn't "title", "longer" isn't "rewrite").
+    - "rewrite the description yourself" also got a new name nobody asked for: one named field let every field through.
+  - The fix: the AI copies the seller's words asking for each field (`asked: {name: "…"}`). A field is rewritten only when its words are in the message (or the conversation), and those words are the writer's instructions.
+  - Without `asked` (the front door), the old word check still applies.
+- **A rewrite written like a draft** (`rewriteContent`, lib/whatsapp/shop.ts):
+  - It now sends up to 4 of the product's photos (`resolveOneImage`), with Jumia's content policy (`buildContentPolicyInstructions`), the drafting style and its 1500-character floor, and web search (`buildSearchGroundingInstruction`, `groundWithSearch`).
+  - It no longer says "using only the facts above", so a thin description is no limit on the new one.
+  - Limits: photos 8 s each, the writing 30 s. Search first; without it if that fails fast. Descriptions up to 8000 characters.
+- **Adding to a detail** (`content_change` `details[].add`, `adding`; live-details.ts `addedValue`):
+  - "add rubber to the material family" keeps what's there: a multi-choice detail gets "Wood,Rubber", free text gets ", rubber".
+  - A choice of one can't hold two, and says so.
+- **A new size in their words** (`add_size` `said`, required):
+  - "15inc", read as "15-Inch", was turned down for not being in the message, twice (the next message had the price and stock).
+  - The size is now backed by their copied words, in the message or the one before, and the category's spelling is tried from either.
+  - A product whose one size has no name on Jumia ("...", the dartboard) can't take a second beside it. The seller is told to name the current one first (a size rename, which Jumia's update takes), then add.
+- **Nothing left undone** (agent.ts `severalParts`, `askWhatsLeft`, `DONE_TOOL`):
+  - A message on two or more lines, or numbered, gets one more turn before anything is carried out: "go through their message part by part; call the tool for each part not covered, or done" (`ANYTHING_LEFT`).
+  - A call of the same tool for the same product is the same part, left out.
+  - `done` is offered only in that turn (`FIRST_NAMES` excludes it).
+- **Sale dates in their words** (`aiSaleWindow`):
+  - "start and end is 20th october to 27th october" wasn't read by `saleWindow`.
+  - `live_change` and `bulk` now take `sale_start`/`sale_end` with `dates_said` (their words, copied). Both days' numbers must be in those words.
+  - The year is the next time that day comes (the AI isn't told the date).
+- **No word gate on the products just listed** (owner: "yes"):
+  - `bulk` with scope "listed" isn't gated on "those"/"the ones" any more. It can only be the products just shown, and the tap lists them all.
+- **Adding photos** (lib/whatsapp/live-photos.ts):
+  - Works on WhatsApp and the web chat (web uploads come through the same path).
+  - Never used for real yet (no `jumia_product_changes` with images).
+  - A photo sent first, with a caption like "add this to the dartboard", still starts a new listing.
+- Test set: 6 "dart-*" cases from these messages. Tests are in whatsapp-assistant.test.ts ("the owner's dartboard, all in one message", "a message of several parts…"), jumia-shop-more.test.ts, live-additions.test.ts, jumia-capabilities.test.ts and assistant-replay.test.ts.
+
 ### A batch Jumia turned down (owner's WhatsApp, 2026-10-11)
 
 "RESTOCK everything in the shop to 10 pcs" became 267 products in 2 feeds.

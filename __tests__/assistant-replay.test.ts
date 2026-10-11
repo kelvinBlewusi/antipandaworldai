@@ -54,17 +54,19 @@ describe("agent mode's recorded answers (test runs of 11 Oct)", () => {
 
   it("\"the approved ones\" of the products just listed: the group, narrowed", async () => {
     // What the runs did, with no way to say "only the approved ones": all 10 listed, or a search for "approved".
-    // ("the approved ones" isn't one of the words for the products just listed, so it was turned down.)
+    // Without the filter: all ten just listed (the confirm tap shows them), not what they meant.
     const all = await read("live-approved-ones", [[{ name: "bulk", args: { scope: "listed", stock: 10, words: "approved" } }]]);
-    expect(all).toMatchObject({ pass: false, actions: [{ type: "unclear" }] });
+    expect(all).toMatchObject({ pass: false, actions: [{ type: "bulk", scope: "listed", change: { kind: "stock", stock: 10 } }] });
+    expect(all.actions[0]).not.toHaveProperty("only");
     // With the group narrowed, and their own words for it copied.
     for (const id of ["live-approved-ones", "live-approved-on-or-off"]) {
       const approved = await read(id, [[{ name: "bulk", args: { scope: "listed", said: "the approved ones", only: "approved", stock: 10 } }]]);
       expect(approved).toMatchObject({ pass: true, actions: [{ type: "bulk", scope: "listed", only: "approved", change: { kind: "stock", stock: 10 } }] });
     }
-    // Words that aren't in the message back nothing; something else as "only" is no filter.
-    const made = await read("live-approved-ones", [[{ name: "bulk", args: { scope: "listed", said: "the good ones", only: "approved", stock: 10 } }]]);
-    expect(made.actions).toEqual([{ type: "unclear" }]);
+    // No word gate on the products just listed (owner, 2026-10-11): with or without their words copied, it's the same group.
+    const bare = await read("live-approved-ones", [[{ name: "bulk", args: { scope: "listed", only: "approved", stock: 10 } }]]);
+    expect(bare).toMatchObject({ pass: true, actions: [{ type: "bulk", scope: "listed", only: "approved" }] });
+    // Something else as "only" is no filter.
     const odd = await read("live-approved-ones", [[{ name: "bulk", args: { scope: "listed", said: "the approved ones", only: "cheap", stock: 10 } }]]);
     expect(odd.actions[0]).toMatchObject({ type: "bulk", scope: "listed" });
     expect(odd.actions[0]).not.toHaveProperty("only");

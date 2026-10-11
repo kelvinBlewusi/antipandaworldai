@@ -736,6 +736,35 @@ export function saleWindow(message: string, now: Date): { start: string; end: st
   return null;
 }
 
+/**
+ * A sale's dates as the AI read them, when the date reader above can't
+ * (owner's WhatsApp, 2026-10-11: "start and end is 20th october to 27th
+ * october"): backed by their own words for the dates, copied
+ * (`dates_said`), which must hold both days' numbers. The year is the next
+ * time that day comes (the AI isn't told the date). Null when anything
+ * doesn't hold. Pure.
+ */
+export function aiSaleWindow(parsed: Record<string, unknown>, message: string, now: Date): { start: string; end: string } | null {
+  const quote = typeof parsed.dates_said === "string" ? parsed.dates_said.trim() : "";
+  if (quote.length < 3 || !saidInMessage(quote, message)) return null;
+  const iso = (v: unknown) => (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v.trim()) ? v.trim() : null);
+  const s = iso(parsed.sale_start), e = iso(parsed.sale_end);
+  if (!s || !e) return null;
+  const days = messageNumbers(quote);
+  if (!days.includes(Number(s.slice(8))) || !days.includes(Number(e.slice(8)))) return null;
+  const today = isoDay(now);
+  const monthAgo = isoDay(new Date(now.getTime() - 31 * 86_400_000));
+  const year = now.getUTCFullYear();
+  const valid = (d: string) => !Number.isNaN(Date.parse(`${d}T00:00:00Z`)) && isoDay(new Date(`${d}T00:00:00Z`)) === d;
+  let start = `${year}-${s.slice(5)}`;
+  if (start < monthAgo) start = `${year + 1}-${s.slice(5)}`;
+  let end = `${Number(start.slice(0, 4))}-${e.slice(5)}`;
+  if (end < start) end = `${Number(start.slice(0, 4)) + 1}-${e.slice(5)}`;
+  if (!valid(start) || !valid(end) || end < today) return null;
+  if (Date.parse(end) - Date.parse(start) > 366 * 86_400_000) return null;
+  return { start: start < today ? today : start, end };
+}
+
 const END_SALE_WORDS = /\b(end|ends|stop|remove|cancel|no longer|take off|turn off)\b[^.?!]*\b(sale|discount|promo)|\b(sale|discount|promo)\b[^.?!]*\b(end|ended|off|over|stop)\b/i;
 const OFF_WORDS = /\b(off|deactivate|disable|hide|unpublish|inactive|pause|stop selling|unlist)\b/i;
 /** Typos included: "also tun on the drone" was refused (live, 2026-10-07). Not "on sale". */
@@ -880,7 +909,7 @@ function liveChangeAction(
     const n = Number(parsed.sale_price);
     const price = n > 0 && numbers.includes(n) ? n : extractSalePrice(message, now, currency)?.salePrice ?? null;
     if (price == null) return ask("What sale price? e.g. \"put it on sale at 80 from 10 Oct to 20 Oct\".");
-    const window = saleWindow(message, now) ?? (own.length === 0 ? saleWindow(sellerLines(context, 2), now) : null);
+    const window = saleWindow(message, now) ?? (own.length === 0 ? saleWindow(sellerLines(context, 2), now) : null) ?? aiSaleWindow(parsed, message, now);
     if (!window) return ask(`A sale on Jumia needs its dates. Send them with the price, e.g. "sale ${price} from 10 Oct to 20 Oct", or say "sale ${price} this month".`);
     return live({ kind: "sale", sale: { price, start: window.start, end: window.end } });
   }
@@ -935,11 +964,10 @@ export function bulkAction(
     // listed (session.lastListed), only while it's fresh. Never widened to
     // the whole shop.
     if (!opts.listed) return ask("Which products? Ask me to list them first (e.g. \"my last 10 products\" or \"what's out of stock\"), then say what to change on them.");
-    // Their own words for the group, copied ("the approved ones"), backs it
-    // in any wording (test runs of 11 Oct: "the approved ones" isn't "the
-    // ones"). It can only ever be the products just shown, and the tap lists them.
-    const quoted = typeof parsed.said === "string" && parsed.said.trim().length >= 3 && saidInMessage(parsed.said, message);
-    if (!quoted && !LISTED_WORDS.test(message) && !RULE_WORDS.test(message) && !opts.many) return { type: "unclear" };
+    // No word gate (owner, 2026-10-11: "yes" to removing it, after "the
+    // approved ones" was turned down for not being "the ones"): this group
+    // can only ever be the products just shown, never wider, and the confirm
+    // tap lists every one of them before anything changes.
     scope = "listed";
   } else {
     if (!RULE_WORDS.test(rule) && !opts.many) return { type: "unclear" };
@@ -975,7 +1003,7 @@ export function bulkAction(
     change = { kind: "price_pct", pct: sign * pctValue };
   } else if (parsed.sale_pct != null) {
     if (pctValue == null || !(pctValue > 0) || pctValue > 90) return ask("How much off? e.g. \"10% off all perfumes this weekend\".");
-    const window = saleWindow(message, now);
+    const window = saleWindow(message, now) ?? aiSaleWindow(parsed, message, now);
     if (!window) return ask(`A sale on Jumia needs its dates. Say them with it, e.g. "${pctValue}% off ${words ? `all ${words}` : "everything"} from 10 Oct to 20 Oct", or "this weekend".`);
     change = { kind: "sale_pct", pct: pctValue, start: window.start, end: window.end };
   } else if (parsed.stock != null) {
@@ -991,7 +1019,7 @@ export function bulkAction(
     const n = Number(parsed.sale_price);
     const price = n > 0 && numbers.includes(n) ? n : extractSalePrice(message, now, currency)?.salePrice ?? null;
     if (price == null) return ask("What sale price? e.g. \"all the phone cases on sale at 40 this weekend\".");
-    const window = saleWindow(message, now);
+    const window = saleWindow(message, now) ?? aiSaleWindow(parsed, message, now);
     if (!window) return ask(`A sale on Jumia needs its dates, e.g. "sale ${price} from 10 Oct to 20 Oct".`);
     change = { kind: "sale", sale: { price, start: window.start, end: window.end } };
   } else if (parsed.sale === "end") {
@@ -1042,10 +1070,29 @@ export function contentAction(parsed: Record<string, unknown>, message: string, 
   // to be written, like "rewrite" (owner's web chat, 2026-10-08). A word of
   // its name said with the change is about the name ("it is not a Thong so
   // change that").
-  const inName = nameWords(product).some((w) => w.length >= 4 && new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(message));
-  const named = rewrite.some((f) => f === "name" ? /\b(name|title)\b/i.test(message) || inName : new RegExp(`\\b${f}\\b`, "i").test(message));
-  if (rewrite.length > 0 && (REWRITE_WORDS.test(message) || (named && CHANGE_WORDS.test(message)))) {
-    request.rewrite = rewrite; request.instructions = message.slice(0, 400);
+  // Their own words asking for each field, copied (owner, 2026-10-11: "edit
+  // the tittle to be abit longer" was turned down by a word list that knew
+  // "title", not "tittle", and "rewrite", not "longer"; and a description
+  // rewrite got a new name nobody asked for). A field is rewritten when its
+  // words are in the message, or the conversation for a follow-up, in any
+  // wording or language; those words are the writer's instructions.
+  const asked = parsed.asked && typeof parsed.asked === "object" && !Array.isArray(parsed.asked) ? parsed.asked as Record<string, unknown> : null;
+  if (asked) {
+    const quoted = TEXT_FIELDS.filter((f) => !request[f]).flatMap((f) => {
+      const q = typeof asked[f] === "string" ? (asked[f] as string).trim() : "";
+      return q.length >= 3 && (saidInMessage(q, message) || saidInMessage(q, context)) ? [[f, q] as const] : [];
+    });
+    if (quoted.length > 0) {
+      request.rewrite = quoted.map(([f]) => f);
+      request.instructions = quoted.map(([f, q]) => `${f === "name" ? "Name" : f === "description" ? "Description" : "Highlights"}: "${q}"`).join(" ").slice(0, 400);
+    }
+  } else {
+    // No words copied (the front door's reading, or an older one): the words that ask for it.
+    const inName = nameWords(product).some((w) => w.length >= 4 && new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(message));
+    const named = rewrite.some((f) => f === "name" ? /\b(name|title)\b/i.test(message) || inName : new RegExp(`\\b${f}\\b`, "i").test(message));
+    if (rewrite.length > 0 && (REWRITE_WORDS.test(message) || (named && CHANGE_WORDS.test(message)))) {
+      request.rewrite = rewrite; request.instructions = message.slice(0, 400);
+    }
   }
   // Its other details, barcode or a size's name (owner, 2026-10-09): each
   // value copied from the message; which detail, and whether Jumia takes
@@ -1056,7 +1103,12 @@ export function contentAction(parsed: Record<string, unknown>, message: string, 
       if (typeof v === "string" && v.trim() && k.trim() && saidInMessage(v, message)) details[k.trim().slice(0, 40)] = v.trim().slice(0, 200);
     }
   }
-  if (Object.keys(details).length > 0) request.details = details;
+  if (Object.keys(details).length > 0) {
+    request.details = details;
+    // "Add rubber to the material family": kept with what it has, not instead of it.
+    const adding = (Array.isArray(parsed.adding) ? parsed.adding : []).filter((d): d is string => typeof d === "string" && d.trim().slice(0, 40) in details);
+    if (adding.length > 0) request.adding = adding.map((d) => d.trim().slice(0, 40));
+  }
   const barcode = typeof parsed.barcode === "string" ? parsed.barcode.replace(/[\s-]/g, "") : "";
   if (/^\d{8,14}$/.test(barcode) && message.replace(/[\s-]/g, "").includes(barcode)) request.barcode = barcode;
   const size = (parsed.size ?? null) as { from?: unknown; to?: unknown } | null;
@@ -1244,12 +1296,21 @@ function parseActionRaw(
         return ask("Which product gets the new size? Tell me its name as it shows on Jumia, e.g. \"add size XL to the gown, 5 in stock\".");
       }
       const size = typeof parsed.size === "string" ? parsed.size.trim().slice(0, 40) : "";
-      if (!size || !saidInMessage(size, message)) return ask("Which size should I add? E.g. \"add size XL to the gown, 5 in stock\".");
+      // The size as they wrote it, here or just before ("15inc", read as
+      // "15-Inch": owner, 2026-10-11, where the AI's spelling alone was turned down).
+      const quote = typeof parsed.said === "string" ? parsed.said.trim().slice(0, 40) : "";
+      const theirs = quote.length >= 1 && (saidInMessage(quote, message) || saidInMessage(quote, context)) ? quote : "";
+      if (!size || !(saidInMessage(size, message) || saidInMessage(size, context) || theirs)) {
+        return ask("Which size should I add? E.g. \"add size XL to the gown, 5 in stock\".");
+      }
       const said = messageNumbers(message);
       const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && said.includes(v) ? v : null);
       const stock = n(parsed.stock);
       const price = n(parsed.price);
-      return { type: "add_size", product, request: { size, stock: stock != null && Number.isInteger(stock) ? stock : null, price: price != null && price > 0 ? price : null } };
+      return {
+        type: "add_size", product,
+        request: { size, stock: stock != null && Number.isInteger(stock) ? stock : null, price: price != null && price > 0 ? price : null, ...(theirs && theirs !== size ? { said: theirs } : {}) },
+      };
     }
     case "add_photos": {
       const product = typeof parsed.product === "string" ? parsed.product.trim().slice(0, 120) : "";

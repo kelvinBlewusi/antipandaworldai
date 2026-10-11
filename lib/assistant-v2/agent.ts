@@ -68,11 +68,38 @@ export { actionJson };
 const LOOKUPS = new Set(LOOKUP_TOOLS.map((t) => t.name));
 /** A lookup that finds nothing: the saved copy can be behind, so it still acts on their words. */
 export const NO_MATCH = "None of the products in PandaWorld's saved copy of their shop match these words. The copy can be out of date: act with their own words for the product (the action looks it up on Jumia). Never tell them it isn't in their shop.";
+/**
+ * Called only when asked whether anything they asked is left (a message of
+ * several parts, owner's WhatsApp, 2026-10-11: six numbered changes, and the
+ * sale among them was never called): nothing is.
+ */
+export const DONE_TOOL: GeminiTool = {
+  name: "done",
+  description: "Everything they asked for is covered by the calls you already made: nothing is left.",
+  parameters: { type: "object", properties: { left: { type: "string", description: "Leave empty." } } },
+};
 /** Every tool, declared on every call (earlier turns call the lookups). */
-export const AGENT_TOOLS: GeminiTool[] = [...LOOKUP_TOOLS, ...ACTION_TOOLS];
+export const AGENT_TOOLS: GeminiTool[] = [...LOOKUP_TOOLS, ...ACTION_TOOLS, DONE_TOOL];
 const ACTION_NAMES = ACTION_TOOLS.map((t) => t.name);
+/** A first turn: anything but done. */
+const FIRST_NAMES = [...LOOKUP_TOOLS.map((t) => t.name), ...ACTION_NAMES];
 /** After a reply that said it can't: every action but reply. */
 const ACTION_NAMES_NO_REPLY = ACTION_NAMES.filter((n) => n !== "reply");
+/** Asked whether anything is left: an action for it, or done. */
+const CHECK_NAMES = [...ACTION_NAMES, DONE_TOOL.name];
+
+/**
+ * A message of several requests: on two or more lines, or numbered ("1. … 2.
+ * …"). Its form, not its words. Pure.
+ */
+export function severalParts(message: string): boolean {
+  const lines = message.split(/\n/).filter((l) => l.trim().length > 0);
+  const numbered = message.match(/(?:^|\s)\d{1,2}[.)]\s+\S/g) ?? [];
+  return lines.length >= 2 || numbered.length >= 2;
+}
+
+/** What the model is told after its calls on a message of several parts. */
+export const ANYTHING_LEFT = "Noted: it's carried out when you finish. Before that, go through their message part by part. For each part none of your calls covers, call its tool now. Never call again for a part already covered. When everything is covered, call done.";
 
 // ─── The prompt ──────────────────────────────────────────────────────────────
 
@@ -198,7 +225,7 @@ type ToolCall = { name: string; args: Record<string, unknown>; id?: string };
  * One model turn (`onlyAct`: the lookups may not be called; `noReply`: nor
  * reply, after one that said it can't): injectable for tests.
  */
-export type AgentCall = (turns: GeminiTurn[], onlyAct: boolean, noReply?: boolean) => Promise<{
+export type AgentCall = (turns: GeminiTurn[], onlyAct: boolean, noReply?: boolean, checking?: boolean) => Promise<{
   calls: ToolCall[]; text: string; turn: GeminiTurn; usage?: { prompt: number; cached: number };
 }>;
 
@@ -218,8 +245,9 @@ export function agentModelSpec(spec: string): { model: string; thinking?: Thinki
 /** `system` is agentSystem(): the same for every seller, so it's cached. `spec` as agentModelSpec reads it. */
 export function geminiAgentCall(spec: string, system: string, usage: FrontDoorUsage): AgentCall {
   const { model, thinking } = agentModelSpec(spec) ?? { model: spec };
-  return (turns, onlyAct, noReply) => withAiUsageContext(usage, () => callGeminiWithTools(model, turns, {
-    system, tools: AGENT_TOOLS, mode: "ANY", ...(noReply ? { allowed: ACTION_NAMES_NO_REPLY } : onlyAct ? { allowed: ACTION_NAMES } : {}),
+  return (turns, onlyAct, noReply, checking) => withAiUsageContext(usage, () => callGeminiWithTools(model, turns, {
+    system, tools: AGENT_TOOLS, mode: "ANY",
+    allowed: checking ? CHECK_NAMES : noReply ? ACTION_NAMES_NO_REPLY : onlyAct ? ACTION_NAMES : FIRST_NAMES,
     // AI Studio for every model: Vertex refuses these tools for 2.5 Flash
     // ("too much branching for serving", the model comparison of 11 Oct),
     // and Gemini 3 needs it for its thought signatures.
@@ -229,6 +257,29 @@ export function geminiAgentCall(spec: string, system: string, usage: FrontDoorUs
 }
 
 const brief = (calls: ToolCall[]) => calls.map((c) => `${c.name}(${JSON.stringify(c.args).slice(0, 200)})`).join(" + ");
+
+/**
+ * The calls for what's left of a message of several parts: the model is told
+ * its calls are noted and asked to go through the message part by part
+ * (ANYTHING_LEFT). A call of the same tool for the same product as one it
+ * made is the same part again, left out. Never throws: on any failure,
+ * nothing more.
+ */
+async function askWhatsLeft(call: AgentCall, turns: GeminiTurn[], made: GeminiTurn, finals: ToolCall[], ms: number, log: string[]): Promise<ToolCall[]> {
+  const noted = finals.map((c, i) => ({
+    functionResponse: { ...(c.id ? { id: c.id } : {}), name: c.name, response: { result: i === finals.length - 1 ? ANYTHING_LEFT : "Noted: it's carried out when you finish." } },
+  }));
+  try {
+    const r = await timed(call([...turns, made, { role: "user", parts: noted }], true, false, true), ms, "anything-left call");
+    const same = (a: ToolCall, b: ToolCall) => a.name === b.name && String(a.args.product ?? "") === String(b.args.product ?? "");
+    const more = r.calls.filter((c) => c.name !== DONE_TOOL.name && !LOOKUPS.has(c.name) && !finals.some((f) => same(f, c)));
+    log.push(more.length > 0 ? `(anything left?) ${brief(more)}` : "(anything left? done)");
+    return more;
+  } catch (e) {
+    log.push(`(anything left? ${(e as Error).message.slice(0, 80)})`);
+    return [];
+  }
+}
 
 /** What the model is told when its reply said it can't (claimsInability). */
 /**
@@ -306,6 +357,15 @@ export async function agentRead(
         log.push("(cannot with a key that isn't on Not possible: asked again)");
         turns.push(r.turn, { role: "user", parts: [{ functionResponse: { ...(cannot.id ? { id: cannot.id } : {}), name: "cannot", response: { result: misnamed } } }] });
         continue;
+      }
+      // A message of several parts: asked once whether any part is left
+      // (owner's WhatsApp, 2026-10-11: brand, weight, warranty, title and
+      // material went into one change; the sale was never called).
+      const acting = acted.length > 0 && finals.every((c) => c.name !== "clarify" && c.name !== "reply" && c.name !== DONE_TOOL.name);
+      if (acting && finals.length < MAX_ACTIONS && severalParts(input.message) && Date.now() - t0 < lim.totalMs - lim.callMs) {
+        const more = await askWhatsLeft(call, turns, r.turn, finals, Math.min(lim.callMs, lim.totalMs - (Date.now() - t0)), log);
+        calls++;
+        finals = [...finals, ...more].slice(0, MAX_ACTIONS);
       }
       break;
     }

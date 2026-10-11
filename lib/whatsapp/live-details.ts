@@ -76,6 +76,28 @@ export function checkDetailValue(attr: JumiaCategoryAttribute, value: string): {
   return { ok: true, value: raw };
 }
 
+/**
+ * "Add rubber to the material family" (owner, 2026-10-11: it replaced Wood
+ * with Rubber): the detail's value now with this one added. A choice of
+ * several keeps both, comma separated as Jumia takes them; free text gets
+ * it after a comma; a choice of one can't hold two, which is said. Pure.
+ */
+export function addedValue(attr: JumiaCategoryAttribute, value: string, set: Pick<ProductSet, "attributes" | "variations">): { ok: true; value: string } | { ok: false; why: string } {
+  const now = (set.attributes.find((a) => a.name === attr.name)?.value
+    ?? set.variations.flatMap((v) => v.attributes).find((a) => a.name === attr.name)?.value ?? "").trim();
+  if (!now) return { ok: true, value };
+  const label = attr.label || attr.name.replace(/_/g, " ");
+  const parts = (s: string) => s.split(",").map((p) => p.trim()).filter(Boolean);
+  if (attr.type === "multi" || (attr.allowed_values.length === 0 && attr.type !== "number" && attr.type !== "boolean")) {
+    const all = [...parts(now)];
+    for (const p of parts(value)) if (!all.some((x) => x.toLowerCase() === p.toLowerCase())) all.push(p);
+    const joined = attr.type === "multi" ? all.join(",") : all.join(", ");
+    if (attr.max_length != null && joined.length > attr.max_length) return { ok: false, why: `${label} can be at most ${attr.max_length} characters on Jumia, and "${joined}" is longer.` };
+    return { ok: true, value: joined };
+  }
+  return { ok: false, why: `Jumia takes one ${label.toLowerCase()} here (it's ${now} now). Say "change its ${label.toLowerCase()} to ${value}" to put it in its place.` };
+}
+
 /** A product's category details: the local copy, else read from Jumia (and kept). */
 export async function categoryDetails(accessToken: string, categoryCode: number): Promise<JumiaCategoryAttribute[]> {
   const cached = await getCategoryAttributes(categoryCode).catch(() => []);
@@ -90,6 +112,8 @@ export async function categoryDetails(accessToken: string, categoryCode: number)
 /** What the seller asked for: details by their words, a barcode, a size's new name. */
 export interface DetailsRequest {
   details?: Record<string, string>;
+  /** The details (their words, as in `details`) whose value is added to what the product has, not put in its place. */
+  adding?: string[];
   barcode?: string;
   size?:    { from: string | null; to: string };
 }
@@ -116,7 +140,9 @@ export function resolveDetails(
       }
       const checked = checkDetailValue(attr, value);
       if (!checked.ok) return checked;
-      out.push({ name: attr.name, label: attr.label || attr.name, value: checked.value });
+      const added = req.adding?.includes(word) ? addedValue(attr, checked.value, set) : { ok: true as const, value: checked.value };
+      if (!added.ok) return added;
+      out.push({ name: attr.name, label: attr.label || attr.name, value: added.value });
     }
     fields.attributes = out;
   }
