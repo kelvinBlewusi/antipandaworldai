@@ -1003,7 +1003,13 @@ export function bulkAction(
   }
   if (!change) return ask("What should change on them? e.g. \"raise all prices by 5%\", \"turn off everything out of stock\", \"10% off all perfumes this weekend\".");
   // Only some of them: narrows the group, never widens it, so the AI's reading stands.
-  const only = BULK_ONLY.find((o) => o === parsed.only);
+  let only: BulkOnly | undefined = BULK_ONLY.find((o) => o === parsed.only);
+  // One group, one way of saying it: all their products that are off is
+  // "inactive" (the test run after `only` came in read "on all the products
+  // that are off" as all + only off).
+  if (scope === "all" && only === "off") { scope = "inactive"; only = undefined; }
+  if (scope === "all" && only === "on") { scope = "active"; only = undefined; }
+  if ((scope === "inactive" && only === "off") || (scope === "active" && only === "on")) only = undefined;
   return { type: "bulk", scope, words: scope === "matching" ? words : null, change, ...(only ? { only } : {}) };
 }
 

@@ -69,4 +69,13 @@ describe("agent mode's recorded answers (test runs of 11 Oct)", () => {
     expect(odd.actions[0]).toMatchObject({ type: "bulk", scope: "listed" });
     expect(odd.actions[0]).not.toHaveProperty("only");
   });
+
+  it("all their products that are off is one group, however the AI puts it", async () => {
+    // The run after `only` came in: all + only off, where the set has scope "inactive".
+    for (const id of ["live-on-all-off", "live-on-them-keep-stock"]) {
+      const r = await read(id, [[{ name: "bulk", args: { scope: "all", active: true, only: "off", words: "off" } }]]);
+      expect(r).toMatchObject({ pass: true, actions: [{ type: "bulk", scope: "inactive", change: { kind: "status", active: true } }] });
+      expect(r.actions[0]).not.toHaveProperty("only");
+    }
+  });
 });
