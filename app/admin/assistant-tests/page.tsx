@@ -21,7 +21,7 @@ export const dynamic = "force-dynamic";
 // function calling, the pilot): right when every action it takes is one of
 // the case's answers; "any action right" when at least one is.
 
-const MODELS = ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-3.1-flash-lite"];
+const MODELS = ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-3.1-flash-lite", "gemini-3.5-flash-lite", "gemini-3.8-flash"];
 
 async function runTests(form: FormData) {
   "use server";

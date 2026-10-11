@@ -15,7 +15,7 @@ jest.mock("@/lib/ai/gemini-client", () => ({
 }));
 
 import {
-  ACTION_TOOLS, AGENT_TOOLS, LOOKUP_TOOLS, NO_MATCH, actionJson, agentContext, agentPrompt, agentRead, agentSystem, catalogLookups, lookupLine, type AgentCall,
+  ACTION_TOOLS, AGENT_TOOLS, LOOKUP_TOOLS, NO_MATCH, actionJson, agentContext, agentModelSpec, agentPrompt, agentRead, agentSystem, catalogLookups, lookupLine, type AgentCall,
 } from "@/lib/assistant-v2/agent";
 import type { FrontDoorInput } from "@/lib/assistant-v2/front-door";
 import { assistantLinks } from "@/lib/whatsapp/assistant";
@@ -230,5 +230,16 @@ describe("reading a message", () => {
   it("throws when the model fails", async () => {
     const call: AgentCall = async () => { throw new Error("404 model not found"); };
     await expect(agentRead(input("hello"), call, noLookups)).rejects.toThrow("404");
+  });
+});
+
+describe("the agent's model (model comparison, 2026-10-11)", () => {
+  it("is a model id, with how much it thinks after a colon", () => {
+    expect(agentModelSpec("gemini-3.1-flash-lite")).toEqual({ model: "gemini-3.1-flash-lite" });
+    expect(agentModelSpec("gemini-3.8-flash:low")).toEqual({ model: "gemini-3.8-flash", thinking: "low" });
+    expect(agentModelSpec(" gemini-2.5-flash:minimal ")).toEqual({ model: "gemini-2.5-flash", thinking: "minimal" });
+    expect(agentModelSpec("gemini-3.8-flash:lots")).toBeNull();
+    expect(agentModelSpec("gpt-4:low")).toBeNull();
+    expect(agentModelSpec("gemini-3.8-flash:low:x")).toBeNull();
   });
 });
