@@ -22,7 +22,7 @@ describe("readUsage", () => {
   it("reads the newer SDK's counts, thinking tokens included", () => {
     expect(readUsage({
       usageMetadata: { promptTokenCount: 5000, candidatesTokenCount: 800, thoughtsTokenCount: 300, totalTokenCount: 6100 },
-    })).toEqual({ promptTokens: 5000, outputTokens: 800, thoughtTokens: 300, searchQueries: 0 });
+    })).toEqual({ promptTokens: 5000, outputTokens: 800, thoughtTokens: 300, searchQueries: 0, cachedTokens: 0 });
   });
 
   it("derives thinking tokens from the total when the older SDK doesn't break them out", () => {
@@ -38,7 +38,12 @@ describe("readUsage", () => {
   });
 
   it("is all zeros when a response has no usage block", () => {
-    expect(readUsage(undefined)).toEqual({ promptTokens: 0, outputTokens: 0, thoughtTokens: 0, searchQueries: 0 });
+    expect(readUsage(undefined)).toEqual({ promptTokens: 0, outputTokens: 0, thoughtTokens: 0, searchQueries: 0, cachedTokens: 0 });
+  });
+
+  it("reads the input Google served from its cache", () => {
+    expect(readUsage({ usageMetadata: { promptTokenCount: 15_000, cachedContentTokenCount: 12_000, candidatesTokenCount: 100, totalTokenCount: 15_100 } }))
+      .toMatchObject({ promptTokens: 15_000, cachedTokens: 12_000, thoughtTokens: 0 });
   });
 });
 
@@ -47,6 +52,15 @@ describe("tokenCostUsd", () => {
     // 10k in at $0.25/M + (2k out + 1k thinking) at $1.50/M
     expect(tokenCostUsd({ model: "gemini-3.1-flash-lite", promptTokens: 10_000, outputTokens: 2_000, thoughtTokens: 1_000 }))
       .toBeCloseTo(0.0025 + 0.0045, 10);
+  });
+
+  it("bills cached input at a tenth of the input price", () => {
+    // 3k fresh at $0.30/M + 12k cached at $0.03/M + 100 out at $2.50/M
+    expect(tokenCostUsd({ model: "gemini-3.5-flash-lite", promptTokens: 15_000, cachedTokens: 12_000, outputTokens: 100, thoughtTokens: 0 }))
+      .toBeCloseTo(0.0009 + 0.00036 + 0.00025, 10);
+    // A count over the prompt (never seen; guarded) can't make it negative.
+    expect(tokenCostUsd({ model: "gemini-3.5-flash-lite", promptTokens: 1_000, cachedTokens: 5_000, outputTokens: 0, thoughtTokens: 0 }))
+      .toBeCloseTo(0.00003, 10);
   });
 
   it("is null for a model without a known price", () => {

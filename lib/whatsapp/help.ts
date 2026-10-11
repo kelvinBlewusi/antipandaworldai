@@ -10,7 +10,7 @@
  */
 
 import { isUnmetered, availableCredits } from "@/lib/billing/extension-credits";
-import { PACK_FEATURES, POLISH_CREDIT_COST, REPORT_CREDIT_COST, type PackFeature } from "@/lib/billing/credit-packs";
+import { LABEL_CREDIT_COST, PACK_FEATURES, POLISH_CREDIT_COST, REPORT_CREDIT_COST, type PackFeature } from "@/lib/billing/credit-packs";
 import { currentPack, featureAccess, type FeatureId } from "@/lib/billing/features";
 import { isWebAddress } from "@/lib/whatsapp/channel";
 import { createServerClient } from "@/lib/supabase/server";
@@ -20,7 +20,6 @@ import { sendButtonsIfConfigured } from "@/lib/whatsapp/client";
 const PACK_LINES: Partial<Record<FeatureId, string>> = {
   shop_changes:       "Change live products: e.g. *set the stock of the blue kettle to 10*, *put the iron on sale at 150 till Friday*, *turn off the fan*",
   qc_fix:             "Jumia QC rejections: I tell you why, return the credits and help you fix and resubmit",
-  shipping_labels:    "Shipping label PDFs on WhatsApp: *orders*, then *Pack & get label*",
   fee_calc_extension: "Jumia fee calculator on the Chrome extension panel",
 };
 
@@ -49,6 +48,7 @@ export async function helpFor(userId: string, phone: string): Promise<string> {
     "- *report*: a full health check of your shop (" + REPORT_CREDIT_COST + " credits)",
     // Every plan since 2026-10-11 (owner: "let's fire for free accounts too").
     "- Order alerts on WhatsApp: new orders and payouts",
+    "- Shipping label PDFs on WhatsApp: *orders*, then *Pack & get label* (" + LABEL_CREDIT_COST + " credits a label)",
   ];
 
   if (!unmetered) {

@@ -38,6 +38,8 @@ import { appUrl } from "@/lib/whatsapp/app-url";
 /** What still answers when the bot is quiet: disconnecting Jumia, and its "keep it" reply. */
 const STILL_ANSWERED = new Set(["disconnect", "confirm_disconnect", "keep_connected"]);
 
+const LOCKED = "🔒 You've used all your PandaWorld credits, so this chat is locked until you top up.";
+
 const credits = (n: number) => `${n} credit${n === 1 ? "" : "s"}`;
 
 /**
@@ -47,19 +49,27 @@ const credits = (n: number) => `${n} credit${n === 1 ? "" : "s"}`;
  * credit", was told to buy credits, and couldn't).
  */
 export function outOfCreditsMessage(web = false, jumiaConnected = true): string {
+  // Plain strings joined, never "🔒 …" + `…${}`: the compiler merges those
+  // into one template and escapes the emoji twice (scripts/check-built-emoji.mjs
+  // stopped the 2026-10-11 deploy of this message for it).
+  const unlocks = web ? "." : ": then send me a message to carry on.";
   if (!jumiaConnected) {
-    return "🔒 You've used all your PandaWorld credits, so this chat is locked until you top up.\n\n" +
-      "To buy credits, connect your Jumia store first (it's free):\n" +
-      "1. Tap *Settings* below and find *Jumia*.\n" +
-      "2. Paste your Client ID and token from Jumia Vendor Center → Settings → Applications (a *Self Authorization* app).\n" +
-      "3. Then tap *Buy credits* at the top of your dashboard and pay with mobile money or a card.\n\n" +
-      `Credits arrive at once and the chat unlocks${web ? "" : ": then send me a message to carry on"}.` +
-      (web ? "" : " You can also paste the Client ID and token here to connect.");
+    return [
+      LOCKED,
+      "",
+      "To buy credits, connect your Jumia store first (it's free):",
+      "1. Tap *Settings* below and find *Jumia*.",
+      "2. Paste your Client ID and token from Jumia Vendor Center → Settings → Applications (a *Self Authorization* app).",
+      "3. Then tap *Buy credits* at the top of your dashboard and pay with mobile money or a card.",
+      "",
+      ["Credits arrive at once and the chat unlocks", unlocks, web ? "" : " You can also paste the Client ID and token here to connect."].join(""),
+    ].join("\n");
   }
-  return "🔒 You've used all your PandaWorld credits, so this chat is locked until you top up. " +
-    `Buy credits on your dashboard and it unlocks straight away${web ? "" : ": then send me a message to carry on"}. ` +
-    "A refund from Jumia's quality check unlocks it too.\n\n" +
-    `Updates about listings already with Jumia will still come ${web ? "to you" : "here"}.`;
+  return [
+    [LOCKED, " Buy credits on your dashboard and it unlocks straight away", unlocks, " A refund from Jumia's quality check unlocks it too."].join(""),
+    "",
+    ["Updates about listings already with Jumia will still come ", web ? "to you" : "here", "."].join(""),
+  ].join("\n");
 }
 
 export function lowCreditsMessage(balance: number, listingCost = LIVE_LISTING_CREDIT_COST): string {

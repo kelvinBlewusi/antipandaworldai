@@ -3823,6 +3823,23 @@ describe("the assistant, on the pilot's accounts", () => {
     expect(sent[0].body).not.toContain("💬");
   });
 
+  // The test run of 2026-10-11: "10ml 3000" was read as the 10ml added with
+  // no price, and "10ml 3000" as the product's name ("isn't one of the drafts").
+  it("\"10ml 3000\" adds the 10ml at 3000 even when the AI leaves the price out", async () => {
+    drafted(["Vintage Radio Eau de Parfum Natural Spray", SHIRT]);
+    variationHeld.add("listing-1");
+    db.tables.variants = [
+      { id: "v1", listing_id: "listing-1", variation: "50ml", seller_sku: "PA-TEST01-50ML", quantity: 3, global_price: 4500 },
+      { id: "v2", listing_id: "listing-1", variation: "100ml", seller_sku: "PA-TEST01-100ML", quantity: 2, global_price: 5200 },
+    ];
+    aiReplies.push('{"type":"edit","edits":[{"products":[1],"said":"10ml 3000","changes":{"variations":["50ml","100ml","10ml"]},"ask":false}]}');
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "10ml 3000" });
+    const rows = () => db.tables.variants.filter((v) => v.listing_id === "listing-1");
+    expect(rows().map((v) => [v.variation, v.global_price])).toEqual([["50ml", 4500], ["100ml", 5200], ["10ml", 3000]]);
+    expect(sent[0].body).not.toContain("isn't one of the drafts");
+    expect(sent[0].body).not.toContain("💬");
+  });
+
   it("refuses a variation the category doesn't stock, naming its options", async () => {
     drafted(["Vintage Radio Eau de Parfum Natural Spray"]);
     variationHeld.add("listing-1");

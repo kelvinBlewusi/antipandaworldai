@@ -318,10 +318,42 @@ const words = (s: string) =>
   s.toLowerCase().replace(NON_WORD, " ").split(" ").filter((w) => w && !STOP.has(w)).map((w) => (w.length > 3 ? w.replace(/s$/, "") : w));
 
 /**
+ * One letter left out, added or two swapped ("earing" for earring, "ballon",
+ * "recieve"), in words of 5 letters or more. Never one letter for another:
+ * that makes other real words ("shirt" and "short").
+ */
+export function typoOf(a: string, b: string): boolean {
+  if (a === b || Math.min(a.length, b.length) < 5) return false;
+  if (a.length === b.length) {
+    const at = Array.from(a).findIndex((c, i) => c !== b[i]);
+    return at >= 0 && at < a.length - 1 && a[at] === b[at + 1] && a[at + 1] === b[at] && a.slice(at + 2) === b.slice(at + 2);
+  }
+  const [short, long] = a.length < b.length ? [a, b] : [b, a];
+  if (long.length - short.length !== 1) return false;
+  const at = Array.from(short).findIndex((c, i) => c !== long[i]);
+  return at < 0 || short.slice(at) === long.slice(at + 1);
+}
+
+/**
+ * How well a word of the query fits a word of the product: the same word 1,
+ * a typo of it or the start of a longer one ("fridg") 0.9, and a longer word
+ * that starts with it 0.5 (a seller, 2026-10-11: "bluetooth lens" found the
+ * products with "Blue" in their names before the Bluetooth glasses).
+ */
+function fit(w: string, h: string): number {
+  if (h === w) return 1;
+  if (w.length >= 4 && h.startsWith(w)) return 0.9;
+  if (typoOf(w, h)) return 0.9;
+  if (w.length >= 4 && h.length >= 4 && w.startsWith(h)) return 0.5;
+  return 0;
+}
+
+/**
  * The products a seller means by `query` ("the Hisense fridge", "black
  * t-shirt", a SKU): an exact SKU first, else those whose name, variation, brand
- * and SKU hold the most of its words. Deleted products are left out. Best
- * first; empty when nothing fits.
+ * and SKU hold the most of its words, the same words counting more than typos
+ * and parts of words. Deleted products are left out. Best first; empty when
+ * nothing fits.
  */
 export function findProducts(products: ShopProduct[], query: string, max = 10): ShopProduct[] {
   const live = products.filter((p) => p.status !== "DELETED");
@@ -335,8 +367,8 @@ export function findProducts(products: ShopProduct[], query: string, max = 10): 
   if (want.length === 0) return [];
   const scored = live.map((p) => {
     const have = words(`${p.name} ${p.variation ?? ""} ${p.brand ?? ""} ${p.sellerSku}`);
-    const hits = want.filter((w) => have.some((h) => h === w || (w.length >= 4 && (h.startsWith(w) || w.startsWith(h) && h.length >= 4))));
-    return { p, score: hits.length / want.length };
+    const score = want.reduce((sum, w) => sum + Math.max(0, ...have.map((h) => fit(w, h))), 0);
+    return { p, score: score / want.length };
   });
   const best = Math.max(0, ...scored.map((s) => s.score));
   if (best < 0.5) return [];

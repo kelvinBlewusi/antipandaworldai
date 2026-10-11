@@ -99,8 +99,8 @@ export const PACK_FEATURES: PackFeature[] = [
   // still alert for payouts"). On every plan from 2026-10-11 (owner: "let's
   // fire for free accounts too"); the order updates still cost credits each.
   { id: "order_alerts",           label: "Order alerts on WhatsApp",                    short: "Order alerts",               minPack: EVERYONE },
-  // Standard from 2026-10-07, since each label is charged (owner: "the label download to WhatsApp should be added to the GHS 70 pack").
-  { id: "shipping_labels",        label: "Shipping labels on WhatsApp",                 short: "Shipping labels",            minPack: "standard" },
+  // Every plan from 2026-10-11 (owner: "let free users be able to print labels on whatsapp too"); each label is still charged.
+  { id: "shipping_labels",        label: "Shipping labels on WhatsApp",                 short: "Shipping labels",            minPack: EVERYONE },
   // In the chat (the Jumia Listing Assistant, and WhatsApp's menu): reading
   // their products, stock, sales, reports and payouts, and their orders
   // (packing, ready to ship, cancelling).

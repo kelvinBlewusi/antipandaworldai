@@ -32,8 +32,7 @@ import { appUrl } from "@/lib/whatsapp/app-url";
 import {
   agentModel, assistantLinks, assistantModel, routerModel, type ProductFacts,
 } from "@/lib/whatsapp/assistant";
-import { sendTextIfConfigured } from "@/lib/whatsapp/client";
-import { ownerWhatsApp } from "@/lib/evals/warning-signs";
+import { notifyOwner } from "@/lib/ops/notify-owner";
 import { ASSISTANT_CASES, type EvalCase, type Shape } from "@/lib/evals/assistant-cases";
 import { frontDoor, type FrontDoorInput } from "@/lib/assistant-v2/front-door";
 import { agentRead, agentSystem, catalogLookups, geminiAgentCall, type AgentLookups } from "@/lib/assistant-v2/agent";
@@ -355,9 +354,8 @@ async function alertOnDrop(run: EvalRun): Promise<void> {
     if (c.passedBefore - c.passedNow < DROP_ALERT_CASES) return;
     const way = run.pipeline === "agent" ? "agent mode" : "the front door";
     console.error(`[assistant eval] weekly run ${run.id} (${way}, ${run.model}) ${c.passedNow}/${c.cases}, was ${c.passedBefore}: ${c.newlyWrong.join(", ")}`);
-    const phone = await ownerWhatsApp();
-    if (!phone) return;
-    await sendTextIfConfigured(phone, [
+    // WhatsApp, or email when they haven't written to the bot in 24 hours (lib/ops/notify-owner.ts).
+    await notifyOwner(`test run of ${way} got worse`, [
       `⚠️ This week's test run of ${way} (${run.model}) got ${c.passedNow} of ${c.cases} right, down from ${c.passedBefore} on the same cases.`,
       `Now wrong: ${c.newlyWrong.slice(0, 12).join(", ")}${c.newlyWrong.length > 12 ? ` and ${c.newlyWrong.length - 12} more` : ""}.`,
       "", `Details: ${appUrl()}/admin/assistant-tests?run=${run.id}`,

@@ -3103,6 +3103,27 @@ cause, and its fix:
 - **Costs found 11 Oct** (for the launch audit): test runs were ~93% of the month's Gemini spend (~$40 of ~$43); a seller's chat message costs ~$0.003–0.006 (ai_usage ignores the cached-token discount, so the upper end). Functions run in iad1 (Washington) while Supabase is in eu-north-1 (Stockholm): every query crosses the Atlantic.
 - Test set: 6 new cases (photo-list-this, photo-use-uploaded, drafts-any, photos-replace, photos-replace-last, draft-variation-price). Tests: chat-photos.test.ts, jumia-shop.test.ts (sale vs price, applied notices, reply_to), jumia-shop-more.test.ts (size price), whatsapp-intake-flow.test.ts (draft size price), live-additions.test.ts (swaps), billing-features.test.ts.
 
+### Autopilot (owner, 2026-10-11: "what is left to do to leave the system on autopilot" → "go")
+
+- **A sale is never a price change** (`salePriceIn`, lib/whatsapp/assistant.ts): a number said with sale/promo/discount/deal turns `price` into `sale_price` (which then asks for dates). In bulk rules, a % with sale words or "% off" is a sale %, unless "permanent", "for good" or "from now on".
+- **Labels on every plan** (owner: "let free users be able to print labels on whatsapp too"): `shipping_labels` minPack is EVERYONE, like order alerts. Each label still costs LABEL_CREDIT_COST.
+- **Server region arn1** (Stockholm, vercel.json `regions`), next to Supabase eu-north-1. Was iad1, with every query crossing the Atlantic.
+- **Owner alerts reach the owner while away** (lib/ops/notify-owner.ts `notifyOwner`): their WhatsApp when they wrote to the bot in the last 23 hours (`lastInboundAt`), else email to app_settings `owner_alert_email`, else SUPPORT_EMAIL. Repeats held by `key` + `everyMs` or `perDay` (app_settings `owner_alert:<key>`). The Monday report, a weekly run that does worse, and the health check use it. Before, all went to WhatsApp as free text, which doesn't arrive outside the 24 hours.
+- **The hourly health check tells the owner** (app/api/cron/health-check): stuck queues, unreadable checks, schema drift, the wrong database key, every 6 hours while it lasts. Plus **the AI budget guard** (lib/ops/budget-guard.ts), once a UTC day each:
+  - the day's AI turns at 80% of `assistant_daily_limit` (before the chat rests for everyone);
+  - sellers' AI cost today over `ai_daily_budget_usd` (default $5; a normal day is under $1);
+  - test runs' cost today over `ai_test_budget_usd` (default $10; a full run is about $1, 11 Oct's 25 model-comparison runs cost $22).
+  - ai_usage is read in pages of 1,000 (Supabase's row cap), so `usageSince`'s 20,000 limit in lib/billing/costs.ts really reads 1,000; worth the same paging if that page matters.
+- **The cost log counts Google's cache** (lib/ai/usage.ts): `cachedContentTokenCount` is read (part of the prompt's tokens) and billed at CACHED_INPUT_SHARE (a tenth) of the input price. The agent's ~15k-token turns are ~12k cached, so its logged input cost was ~3.5× too high before. Not stored as its own column; ai_usage rows before 2026-10-11 overstate.
+- **The Monday test runs skip a week nothing changed** (lib/evals/weekly.ts): `AI_FINGERPRINT` is a hash of lib/assistant-v2/*, lib/whatsapp/assistant.ts, the test set and runner and gemini-client, made at build in next.config.mjs. With it and the three models the same as the last weekly runs (app_settings `assistant_weekly_fingerprint`), the report says so and nothing runs; at least every 4 weeks they run anyway.
+- **Chat misses fixed**:
+  - "Can you get me the stock checklist" (a seller) looked for a product called "checklist", low only. Words for the list itself (`stockListWords`) are no product, and low/out only when the message says so (`STOCK_FILTER_WORDS`).
+  - "I have a spectacle product i want to rewrite the description" → not found → "it is a bluetooth lens" got "What should I change on it?". A rewrite asked in the seller's message before counts (`contentAction`, `lastSellerLine`), with both as the writer's instructions.
+  - "earing" found nothing, and "bluetooth lens" listed the products with "Blue" in their names. `findProducts` (lib/jumia/shop.ts) now forgives one letter left out, added or swapped in words of 5+ letters (`typoOf`; never one letter for another: shirt/short), and weighs the same word 1, a typo or a word's start 0.9, a shorter word inside the query's 0.5, so the right one ranks alone.
+  - "10ml 3000" on a draft: the AI added the 10ml without its price and named "10ml 3000" as a product ("isn't one of the drafts"). A size and numbers is values (`saidIsValues`), and `variationPricesIn` reads "<size> <price>" from the message when the AI leaves the price out (never when the message talks stock or pieces).
+- **The 0-credit, Jumia-first message (34ad631) never deployed**: its "🔒 …" + template text compiled to a double-escaped emoji, and scripts/check-built-emoji.mjs failed both builds. Production stayed on e583a7a. `outOfCreditsMessage` is now plain strings joined; this deploy carries it. Check the Vercel deploy state after every push, not just the push.
+- Test set: stock-checklist, rewrite-after-not-found, photos-earing-typo. Tests: owner-alerts.test.ts (new), assistant-weekly.test.ts (email, skipping), ai-usage.test.ts (cache), jumia-shop.test.ts (typos, ranking), whatsapp-assistant.test.ts ("misses from 2026-10-11"), whatsapp-intake-flow.test.ts ("10ml 3000").
+
 ### A batch Jumia turned down (owner's WhatsApp, 2026-10-11)
 
 "RESTOCK everything in the shop to 10 pcs" became 267 products in 2 feeds.

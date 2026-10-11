@@ -296,9 +296,9 @@ export function capabilities(listingCost = LIVE_LISTING_CREDIT_COST): string {
     `- List products on Jumia from WhatsApp: the seller says how many (1 to ${MAX_BATCH_SIZE}), sends each product's photos with the price and notes as the caption, and AI drafts each listing (name, description, category, details) for them to check and submit. Two ways to send: all at once, or guided step by step.`,
     "- Ask for what Jumia needs that the photos don't show: a missing price, weight or other required detail, the variation, the category when unsure.",
     "- Show drafts in chat as drafted (name, price, sizes, highlights, description), and edit them before they're submitted: price, quantity, variations or sizes, name, brand, colour, a sale price with its dates. Anything else in the editor on the review page.",
-    "- Chatting is free on every pack. Every pack, free credits included: listing, orders (see, pack, ready to ship, cancel), reading their shop (products, stock, sales, reports, payouts, fees), image polish and the shop health report; only the commands below that cost credits are charged. Order alerts on WhatsApp (new orders, order updates, payouts) are on every pack too. Only these need a pack: changes to live Jumia products from the chat, Jumia QC rejection alerts and guided fixes and shipping label PDFs on WhatsApp (Standard and up); the extension's fee calculator (Pro and up). Everything pauses at 0 credits.",
+    "- Chatting is free on every pack. Every pack, free credits included: listing, orders (see, pack, ready to ship, cancel), reading their shop (products, stock, sales, reports, payouts, fees), image polish and the shop health report; only the commands below that cost credits are charged. Order alerts on WhatsApp (new orders, order updates, payouts) and shipping label PDFs on WhatsApp are on every pack too. Only these need a pack: changes to live Jumia products from the chat and Jumia QC rejection alerts and guided fixes (Standard and up); the extension's fee calculator (Pro and up). Everything pauses at 0 credits.",
     "- Submit to Jumia and report back when each product goes live or is rejected; fix common rejections itself (banned words, restricted brands) and guide the seller through the rest with Fix & resubmit. After Jumia accepts a listing, its quality-check verdict is followed up (and the credits returned if QC rejects it) with the Standard pack and up.",
-    "- Orders: \"orders\" shows orders waiting to be packed; pack them, mark them ready to ship, or cancel, here or on WhatsApp; where any order is, by its number; orders and sales for today, the week, the month or 90 days. Shipping label PDFs only on WhatsApp (Standard pack and up). Pro and up also: alerts for new Jumia orders on WhatsApp, grouped and quiet at night, and a message when orders are delivered, returned, fail delivery or are cancelled.",
+    "- Orders: \"orders\" shows orders waiting to be packed; pack them, mark them ready to ship, or cancel, here or on WhatsApp; where any order is, by its number; orders and sales for today, the week, the month or 90 days. Shipping label PDFs only on WhatsApp (every pack, credits each). Every pack also: alerts for new Jumia orders on WhatsApp, grouped and quiet at night, and a message when orders are delivered, returned, fail delivery or are cancelled.",
     `- Their live Jumia products, found by name among everything in their shop: change a product's stock, price, a sale price with its dates, end its sale, or turn it on or off, for one product or several named together (up to ${MAX_GROUP}). One product's stock, ON/OFF or ending its sale is done straight away when they name it; a price, a sale, a product taken from the conversation, or several products wait for one tap to confirm; where a product is (on or off, Jumia's quality check, price, sale, stock); how many are left; what's out of stock or low; which products are turned off or rejected by Jumia's quality check.`,
     `- Rules for many products at once, shown in full before one tap: prices up or down by a percentage, a sale a percentage off (with dates), a stock or price, ending sales, turning on or off; for all their products, the ones out of stock, low, off or on, or all that match words ("all perfumes"); up to ${BULK_MAX} products per tap, and a bigger rule in parts of ${BULK_MAX}, one tap each (up to ${BULK_MAX * BULK_PARTS_MAX}).`,
     "- A live product's name, description and highlights shown as Jumia has them now (product_text). Changing them, or the brand: the seller's own text, or rewritten by AI from what Jumia has now with their instructions (\"remove the word X from the name\"), shown before one tap. Also its other details (colour, material, weight, model and whatever its category takes, checked against Jumia's options), its barcode, or a size's name. Jumia checks content changes again. More photos after its main one, or new ones in place of others it has (add_photos, \"replace photos 7 and 8\": they send them, then Done, and they go to Jumia), and a new size or colour with its own stock and price (add_size: one tap; Jumia's quality check looks at it like a new product). Its main photo and category are changed in Vendor Center.",
@@ -625,10 +625,46 @@ export function verifyChanges(
     }
     if (prices.length > 0) changes.variationPrices = prices;
   }
+  // "10ml 3000": a variation and its price side by side, read from the
+  // message when the AI left the price out (owner, 2026-10-11; the test run
+  // added the 10ml without its price). A variation they name that the draft
+  // doesn't have yet is added, keeping the others.
+  if (!changes.variationPrices) {
+    const kept = Array.from(new Set([...(changes.variations ?? known.variations), ...known.options]));
+    const pairs = variationPricesIn(message, kept).filter((p) => numbers.includes(p.price));
+    if (pairs.length > 0) {
+      changes.variationPrices = pairs;
+      const have = changes.variations ?? known.variations;
+      const added = pairs.map((p) => p.option).filter((o) => !have.some((v) => v.toLowerCase() === o.toLowerCase()));
+      if (added.length > 0) changes.variations = [...have, ...added];
+      if (changes.price != null && pairs.some((p) => p.price === changes.price)) delete changes.price;
+      if (changes.quantity != null && pairs.some((p) => p.price === changes.quantity)) delete changes.quantity;
+      for (let i = dropped.length - 1; i >= 0; i--) if (dropped[i] === "variation price") dropped.splice(i, 1);
+    }
+  }
   // A field's name ("material", "weight"), not a sentence: "Don't list this
   // again pls" once came back as the field to change.
   if (typeof r.other === "string" && r.other.trim() && r.other.trim().split(/\s+/).length <= 3) changes.other = r.other.trim().slice(0, 40);
   return { changes, dropped };
+}
+
+/**
+ * Each variation written with a price straight after it ("10ml 3000",
+ * "50ml: GHS 4,500", "M at 200", "set 50ml to 4500"), from `options`. None when the message is
+ * about stock (its numbers could be quantities).
+ */
+export function variationPricesIn(message: string, options: string[]): { option: string; price: number }[] {
+  if (/\b(stock|qty|quantity|quantities|pcs|pieces?|units?|left|available|in store)\b/i.test(message)) return [];
+  const out: { option: string; price: number }[] = [];
+  for (const option of options) {
+    if (!option.trim()) continue;
+    const o = option.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s*");
+    const m = message.match(new RegExp(
+      `(?<![\\p{L}\\p{N}])${o}(?![\\p{L}\\p{N}])\\s*(?:[:=@-]|\\bat\\b|\\bto\\b|\\bfor\\b|\\bis\\b|\\bcosts?\\b|\\bprice\\b)?\\s*(?:[a-z]{3}\\s*|gh₵\\s*|₵\\s*|₦\\s*)?(\\d[\\d,]*(?:\\.\\d+)?)(?![\\d.]*\\s*(?:ml|l|g|kg|cm|mm|m|inch(?:es)?|in|oz|%)(?![\\p{L}]))`, "iu"));
+    const price = m ? parseFloat(m[1].replace(/,/g, "")) : NaN;
+    if (price > 0 && !out.some((x) => x.option.toLowerCase() === option.toLowerCase())) out.push({ option, price });
+  }
+  return out;
 }
 
 /** What follows "colour:" / "colors -" in the message, on its own line. */
@@ -660,7 +696,8 @@ export function saidIsValues(said: string, changes: unknown): boolean {
   const words = (t: string) => t.toLowerCase().split(new RegExp("[^\\p{L}\\p{N}]+", "u")).filter((w) => w && !DRAFT_STOP.has(w));
   const values = new Set(words(JSON.stringify(changes ?? {})));
   const named = words(said);
-  return named.length > 0 && named.every((w) => values.has(w));
+  // A bare number is a value too: "10ml 3000" is a size and its price, not a product (owner, 2026-10-11).
+  return named.length > 0 && named.some((w) => values.has(w)) && named.every((w) => values.has(w) || /^\d+(?:[.,]\d+)?$/.test(w));
 }
 
 const hasChanges = (c: Changes) => Object.keys(c).length > 0;
@@ -894,6 +931,19 @@ const sellerLines = (context: string, n = 3) =>
  * or from the seller's own recent messages when this one only names the
  * products ("update those to 10 each", then "the freezer and the blender").
  */
+/**
+ * Whether `n` is a sale's price in the message: written beside "sale",
+ * "promo", "discount" or "deal" ("sale price @150", "on promo at 100",
+ * "100 promo"). Pure.
+ */
+export function salePriceIn(message: string, n: number): boolean {
+  if (!(n > 0)) return false;
+  const num = String(n).replace(".", "\\.");
+  const word = "(?:sale|promo(?:tion)?|discount(?:ed)?|deal|flash sale)";
+  return new RegExp(`\\b${word}\\b[^0-9\\n]{0,25}?(?:[a-z]{3}\\s*|gh₵|₵|₦)?${num}(?![0-9])`, "i").test(message)
+    || new RegExp(`(?<![0-9.])${num}\\s+(?:on\\s+)?${word}\\b`, "i").test(message);
+}
+
 function liveChangeAction(
   parsed: Record<string, unknown>, message: string, context: string, now: Date, currency: string,
 ): AssistantAction {
@@ -936,6 +986,12 @@ function liveChangeAction(
     const outWords = /\b(out of stock|sold out|none left|finished|no more)\b/i.test(message);
     return Number.isInteger(n) && n >= 0 && (numbers.includes(n) || (n === 0 && outWords))
       ? live({ kind: "stock", stock: n }) : ask(`What should ${it} stock be? Send the number, e.g. "10".`, awaiting("stock"));
+  }
+  // A sale's price given as the price ("Set sale price @150", "on promo at
+  // 100": test runs of 11 Oct) would change the product's own price: it's
+  // the sale's, and the sale's dates are asked when not given.
+  if (parsed.price != null && parsed.sale_price == null && salePriceIn(message, Number(parsed.price))) {
+    parsed = { ...parsed, sale_price: parsed.price, price: undefined };
   }
   if (parsed.price != null) {
     const n = Number(parsed.price);
@@ -1036,9 +1092,15 @@ export function bulkAction(
   const pctValue = pctMatch ? parseFloat(pctMatch[1]) : null;
   let change: LiveChange | null = null;
 
+  // "10% off all perfumes this weekend" is a sale, not a price change (test
+  // runs of 11 Oct: read as prices UP 10%), unless they say it's for good.
+  if (parsed.price_pct != null && parsed.sale_pct == null
+      && (/\b(?:sale|promo(?:tion)?|discount(?:ed)?|deal)\b|%\s*off\b/i.test(message)) && !/\b(?:permanent(?:ly)?|for good|from now on)\b/i.test(message)) {
+    parsed = { ...parsed, sale_pct: parsed.price_pct, price_pct: undefined };
+  }
   if (parsed.price_pct != null) {
     if (pctValue == null || !(pctValue > 0) || pctValue > 90) return ask("By what percentage? e.g. \"raise all prices by 5%\".");
-    const sign = DOWN_WORDS.test(message) ? -1 : UP_WORDS.test(message) ? 1 : Math.sign(Number(parsed.price_pct)) || 1;
+    const sign = DOWN_WORDS.test(message) || /%\s*off\b/i.test(message) ? -1 : UP_WORDS.test(message) ? 1 : Math.sign(Number(parsed.price_pct)) || 1;
     change = { kind: "price_pct", pct: sign * pctValue };
   } else if (parsed.sale_pct != null) {
     if (pctValue == null || !(pctValue > 0) || pctValue > 90) return ask("How much off? e.g. \"10% off all perfumes this weekend\".");
@@ -1079,6 +1141,23 @@ export function bulkAction(
   if ((scope === "inactive" && only === "off") || (scope === "active" && only === "on")) only = undefined;
   return { type: "bulk", scope, words: scope === "matching" ? words : null, change, ...(only ? { only } : {}) };
 }
+
+/** Words for the stock list itself, never a product: "stock checklist", "inventory report". */
+const STOCK_LIST_WORDS = new Set([
+  "stock", "stocks", "checklist", "check", "list", "lists", "sheet", "report", "summary", "overview", "level", "levels",
+  "count", "counts", "inventory", "status", "all", "everything", "every", "product", "products", "item", "items",
+  "my", "the", "full", "whole", "entire", "shop", "store", "current", "quantity", "quantities", "of", "in", "on",
+]);
+export function stockListWords(product: string): boolean {
+  const words = product.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  return words.length > 0 && words.every((w) => STOCK_LIST_WORDS.has(w));
+}
+
+/** A low or out-of-stock list asked for in so many words, in any of the ways sellers say it. */
+const STOCK_FILTER_WORDS: Record<"low" | "out", RegExp> = {
+  low: /\b(low|running|run(?:s)? out|almost|nearly|few|little|finish(?:ing|ed)?|restock(?:ing)?|re-?order|less than|below|under|short|remaining|left)\b/i,
+  out: /\b(out|sold|finished|none|zero|empty|no (?:stock|more)|0)\b/i,
+};
 
 const CHANGE_WORDS = /\b(change|update|edit|modify|new|another|remove|delete|take (?:out|off)|drop|replace|rename|redraft|re-draft|correct)\b/i;
 const REWRITE_WORDS = /\b(rewrite|re-write|improve|better|write|redo|re-do|optimi[sz]e|polish|fix|make (it|the \w+) (better|nicer|attractive|catchy|professional))\b/i;
@@ -1127,10 +1206,20 @@ export function contentAction(parsed: Record<string, unknown>, message: string, 
     }
   } else {
     // No words copied (the front door's reading, or an older one): the words that ask for it.
-    const inName = nameWords(product).some((w) => w.length >= 4 && new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(message));
-    const named = rewrite.some((f) => f === "name" ? /\b(name|title)\b/i.test(message) || inName : new RegExp(`\\b${f}\\b`, "i").test(message));
-    if (rewrite.length > 0 && (REWRITE_WORDS.test(message) || (named && CHANGE_WORDS.test(message)))) {
+    const askedIn = (text: string) => {
+      const inName = nameWords(product).some((w) => w.length >= 4 && new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(text));
+      const named = rewrite.some((f) => f === "name" ? /\b(name|title)\b/i.test(text) || inName : new RegExp(`\\b${f}\\b`, "i").test(text));
+      return REWRITE_WORDS.test(text) || (named && CHANGE_WORDS.test(text));
+    };
+    // Or asked in their message before, and this one says which product (a
+    // seller, 2026-10-11: "I have a spectacle product i want to rewrite the
+    // description", not found, then "it is a bluetooth lens" was answered
+    // "What should I change on it?").
+    const previous = lastSellerLine(context);
+    if (rewrite.length > 0 && askedIn(message)) {
       request.rewrite = rewrite; request.instructions = message.slice(0, 400);
+    } else if (rewrite.length > 0 && previous && askedIn(previous)) {
+      request.rewrite = rewrite; request.instructions = `${previous} ${message}`.slice(0, 400);
     }
   }
   // Its other details, barcode or a size's name (owner, 2026-10-09): each
@@ -1381,11 +1470,15 @@ function parseActionRaw(
     case "stock": {
       // "What is the stock of this product" names it in the conversation
       // (owner's web chat, 2026-10-08: it got the whole low-stock list).
-      const product = typeof parsed.product === "string" && parsed.product.trim()
+      // A word for the list itself isn't a product (a seller, 2026-10-11:
+      // "Can you get me the stock checklist" looked for a product called
+      // "checklist" and found none).
+      const product = typeof parsed.product === "string" && parsed.product.trim() && !stockListWords(parsed.product)
         && (productBacked(parsed.product, message) || (namesAProduct(parsed.product) && productBacked(parsed.product, context)))
         ? parsed.product.trim().slice(0, 120) : null;
+      // Only what's low or out when they said so; the same seller got the low list for "stock checklist".
       const filter = parsed.filter === "out" || parsed.filter === "low" ? parsed.filter : null;
-      return { type: "stock", product, filter };
+      return { type: "stock", product, filter: filter && STOCK_FILTER_WORDS[filter].test(message) ? filter : null };
     }
     case "shop":
       return { type: "shop", filter: parsed.filter === "inactive" || parsed.filter === "rejected" ? parsed.filter : "all" };

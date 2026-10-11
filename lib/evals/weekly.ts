@@ -5,14 +5,20 @@
  * one after the other). A weekly run that falls behind the last one is sent
  * to the owner when it finishes (lib/evals/assistant-eval.ts alertOnDrop).
  * Called by app/api/worker/assistant-weekly (pg_cron).
+ *
+ * The runs are skipped on a week nothing in the chat's AI changed (owner,
+ * 2026-10-11, the test runs were the biggest AI cost): the same code
+ * (AI_FINGERPRINT, hashed at build by next.config.mjs) and the same models
+ * as the last weekly runs, kept in app_settings `assistant_weekly_fingerprint`.
+ * Every 4 weeks they run anyway, as Google's models change under one name.
  */
 
 import { createServerClient } from "@/lib/supabase/server";
-import { sendTextIfConfigured } from "@/lib/whatsapp/client";
 import { appUrl } from "@/lib/whatsapp/app-url";
-import { agentModel, assistantModel } from "@/lib/whatsapp/assistant";
+import { agentModel, assistantModel, routerModel } from "@/lib/whatsapp/assistant";
 import { nudgeEvalWorker, queueWeeklyRuns, type EvalRun } from "@/lib/evals/assistant-eval";
-import { ownerWhatsApp, signsText, weekOfSigns } from "@/lib/evals/warning-signs";
+import { signsText, weekOfSigns } from "@/lib/evals/warning-signs";
+import { notifyOwner } from "@/lib/ops/notify-owner";
 
 /** The newest finished run of a way and model, as "235/248 (95%) on 11 Oct", or null. */
 async function lastScore(pipeline: "agent" | "front_door", model: string): Promise<string | null> {
@@ -25,21 +31,51 @@ async function lastScore(pipeline: "agent" | "front_door", model: string): Promi
   return `${run.passed}/${scored} (${scored ? Math.round((run.passed / scored) * 100) : 0}%) on ${day}`;
 }
 
-export async function runWeekly(): Promise<{ sent: boolean; queued: string[]; signs: Record<string, number> }> {
+/** The longest the weekly runs are skipped for. */
+export const RUN_AT_LEAST_EVERY_MS = 28 * 24 * 60 * 60_000;
+const FINGERPRINT_KEY = "assistant_weekly_fingerprint";
+
+/**
+ * The last weekly runs' date when nothing in the chat's AI changed since,
+ * so this week's can be skipped; null when they should run.
+ */
+export async function unchangedSince(fingerprint: string | null, now = new Date()): Promise<Date | null> {
+  if (!fingerprint) return null;
+  const { data } = await createServerClient().from("app_settings").select("value").eq("key", FINGERPRINT_KEY).maybeSingle();
+  const last = data?.value as { fingerprint?: string; at?: string } | undefined;
+  if (last?.fingerprint !== fingerprint || !last.at) return null;
+  const at = new Date(last.at);
+  return now.getTime() - at.getTime() < RUN_AT_LEAST_EVERY_MS ? at : null;
+}
+
+export async function runWeekly(now = new Date()): Promise<{ sent: boolean; queued: string[]; signs: Record<string, number> }> {
   const { week, before } = await weekOfSigns();
-  const [agent, door] = await Promise.all([agentModel(), assistantModel()]);
+  const [agent, door, router] = await Promise.all([agentModel(), assistantModel(), routerModel()]);
   const [agentScore, doorScore] = await Promise.all([lastScore("agent", agent), lastScore("front_door", door)]);
+  const code = process.env.AI_FINGERPRINT;
+  const fingerprint = code ? [code, agent, door, router].join("|") : null;
+  const since = await unchangedSince(fingerprint, now);
+  const day = (d: Date) => d.toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "Africa/Accra" });
   const text = [
     signsText(week, before, `${appUrl()}/admin/warning-signs`),
     "",
     "Test set, latest runs:",
     `• Agent mode (${agent}): ${agentScore ?? "no run yet"}`,
     `• Front door (${door}): ${doorScore ?? "no run yet"}`,
-    "This week's runs start now; I'll tell you if either does worse than its last.",
+    since
+      ? `Nothing in the chat's AI changed since the runs on ${day(since)}, so none this week (they run by ${day(new Date(since.getTime() + RUN_AT_LEAST_EVERY_MS))} at the latest).`
+      : "This week's runs start now; I'll tell you if either does worse than its last.",
   ].join("\n");
-  const phone = await ownerWhatsApp();
-  if (phone) await sendTextIfConfigured(phone, text).catch(() => undefined);
-  const queued = await queueWeeklyRuns();
-  await nudgeEvalWorker();
-  return { sent: !!phone, queued, signs: week.counts };
+  // WhatsApp, or email on a week they haven't written to the bot (lib/ops/notify-owner.ts).
+  const channel = await notifyOwner("weekly report", text);
+  let queued: string[] = [];
+  if (!since) {
+    queued = await queueWeeklyRuns();
+    await nudgeEvalWorker();
+    if (fingerprint) {
+      await createServerClient().from("app_settings").upsert(
+        { key: FINGERPRINT_KEY, value: { fingerprint, at: now.toISOString() }, updated_at: now.toISOString() }, { onConflict: "key" });
+    }
+  }
+  return { sent: channel === "whatsapp" || channel === "email", queued, signs: week.counts };
 }

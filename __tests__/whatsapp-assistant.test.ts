@@ -101,7 +101,7 @@ jest.mock("@/lib/jumia/categories", () => ({
 
 import {
   NOT_YET_TEXT, OUTSIDE_TEXT, agentFor, agentModel, aiSaleWindow, answerLiveValue, answerProductPick, claimsInability, assistantEnabled, assistantFor, assistantLinks, cleanReply, countBacked, fitsDraft, isStateQuestion, looksLikeQuestion, messageNumbers,
-   draftNumberIn, draftTextLines,  sameName, namesAProduct, newestWithin, recentConversation, saidIsValues, saleWindow, splitProducts, parseAction, plainQuickEdit, runAssistant, verifyChanges, type ProductFacts,
+   draftNumberIn, draftTextLines,  sameName, namesAProduct, contentAction, stockListWords, variationPricesIn, newestWithin, recentConversation, saidIsValues, saleWindow, salePriceIn, splitProducts, parseAction, plainQuickEdit, runAssistant, verifyChanges, type ProductFacts,
 } from "@/lib/whatsapp/assistant";
 import { assistantGate } from "@/lib/whatsapp/assistant-limits";
 import { parseVariations } from "@/lib/whatsapp/variation-question";
@@ -295,6 +295,35 @@ describe("reading the AI's reply", () => {
 
   it("reads JSON wrapped in a code fence", () => {
     expect(parseAction('```json\n{"type":"orders"}\n```', "my orders?", products)).toEqual({ type: "orders" });
+  });
+});
+
+describe("a sale's price given as the price (test runs of 11 Oct)", () => {
+  it("is the sale's when the number sits beside sale, promo, discount or deal", () => {
+    expect(salePriceIn("Set sale price @150 for men’s safety shoe with start and end date in this month", 150)).toBe(true);
+    expect(salePriceIn("put the kettle on promo at 100 this weekend", 100)).toBe(true);
+    expect(salePriceIn("Set sale price to 150 for pa-mou7Izdd", 150)).toBe(true);
+    expect(salePriceIn("100 promo on the kettle", 100)).toBe(true);
+    expect(salePriceIn("set the kettle price to 100", 100)).toBe(false);
+    expect(salePriceIn("price 250, end the sale", 250)).toBe(false);
+    expect(salePriceIn("sale 1500 on the fridge", 150)).toBe(false);
+  });
+
+  it("becomes a sale, never a price change; with no dates, they're asked", () => {
+    const now = new Date("2026-10-11T12:00:00Z");
+    const month = parseAction('{"type":"live_change","product":"men’s safety shoe","price":150}',
+      "Set sale price @150 for men’s safety shoe with start and end date in this month", [], undefined, "GHS", { now });
+    expect(month).toMatchObject({ type: "live_change", change: { kind: "sale", sale: { price: 150 } } });
+    const bare = parseAction('{"type":"live_change","product":"pa-mou7Izdd","price":150}', "Set sale price to 150 for pa-mou7Izdd", [], undefined, "GHS", { now });
+    expect(bare).toMatchObject({ type: "reply", text: expect.stringContaining("A sale on Jumia needs its dates") });
+    // "10% off all perfumes this weekend": a sale, not prices up 10%.
+    const pct = parseAction('{"type":"bulk","scope":"matching","words":"perfumes","price_pct":10}', "10% off all perfumes this weekend", [], undefined, "GHS", { now });
+    expect(pct).toMatchObject({ type: "bulk", change: { kind: "sale_pct", pct: 10 } });
+    expect(parseAction('{"type":"bulk","scope":"matching","words":"perfumes","price_pct":10}', "take 10% off all perfumes for good", [], undefined, "GHS", { now }))
+      .toMatchObject({ type: "bulk", change: { kind: "price_pct", pct: -10 } });
+    // A plain price stays a price.
+    expect(parseAction('{"type":"live_change","product":"kettle","price":100}', "set the kettle price to 100", [], undefined, "GHS", { now }))
+      .toMatchObject({ type: "live_change", change: { kind: "price", price: 100 } });
   });
 });
 
@@ -767,7 +796,7 @@ describe("its own replies (owner, 2026-10-06)", () => {
     const prompt = aiPrompts[0];
     expect(prompt).toContain("- List products on Jumia from WhatsApp");
     expect(prompt).toContain("pack them, mark them ready to ship, or cancel, here or on WhatsApp");
-    expect(prompt).toContain("Shipping label PDFs only on WhatsApp (Standard pack and up). Pro and up also: alerts for new Jumia orders on WhatsApp");
+    expect(prompt).toContain("Shipping label PDFs only on WhatsApp (every pack, credits each). Every pack also: alerts for new Jumia orders on WhatsApp");
     expect(prompt).toContain("- Chatting is free on every pack.");
     expect(prompt).toContain("- Changes to live Jumia products from the chat: not on their pack (Standard and up)");
     expect(prompt).toContain("up to 200 products");
@@ -776,7 +805,7 @@ describe("its own replies (owner, 2026-10-06)", () => {
     // Every plan since 2026-10-07: the chat's features; labels and alerts keep their packs.
     expect(prompt).toContain("- The chat's shop features (products, orders, reports, payouts, fees): on");
     expect(prompt).toContain("- Jumia QC rejection alerts and guided fixes: not on their pack (Standard and up)");
-    expect(prompt).toContain("- Shipping label PDFs on WhatsApp: not on their pack (Standard and up)");
+    expect(prompt).toContain("- Shipping label PDFs on WhatsApp: on");
     expect(prompt).toContain("- Order alerts on WhatsApp (new orders, order updates, payouts): on");
     expect(prompt).toContain("a shipping label 0.5 credits (the same label again is free)");
     expect(prompt).toContain("- Credits: 9 available, enough for about 4 WhatsApp listings");
@@ -1500,5 +1529,43 @@ describe("honest \"can't\" (owner, 2026-10-11)", () => {
     expect(prompt).toContain('{"type":"not_yet"');
     expect(prompt).toContain("- live_price: Change a product's price");
     expect(prompt).not.toContain("can't help with it");
+  });
+});
+
+describe("misses from 2026-10-11", () => {
+  it("variationPricesIn: a variation with its price after it, never a quantity or another size", () => {
+    const o = ["50ml", "100ml", "10ml", "M"];
+    expect(variationPricesIn("10ml 3000", o)).toEqual([{ option: "10ml", price: 3000 }]);
+    expect(variationPricesIn("50ml: GHS 4,500 and 100ml at 6000", o)).toEqual([{ option: "50ml", price: 4500 }, { option: "100ml", price: 6000 }]);
+    expect(variationPricesIn("set 50ml to 4500", o)).toEqual([{ option: "50ml", price: 4500 }]);
+    expect(variationPricesIn("change 50ml to 100ml", o)).toEqual([]);
+    expect(variationPricesIn("10ml 30 pieces", o)).toEqual([]);
+    expect(variationPricesIn("stock: M 20", o)).toEqual([]);
+    expect(variationPricesIn("add a 10ml variation", o)).toEqual([]);
+  });
+
+  it("a size and a price isn't a product's name", () => {
+    expect(saidIsValues("10ml 3000", { variations: ["50ml", "100ml", "10ml"] })).toBe(true);
+    expect(saidIsValues("iphone 13", { price: 13 })).toBe(false);
+    expect(saidIsValues("3000", { price: 5 })).toBe(false);
+  });
+
+  it("\"stock checklist\" is the whole stock list, and low only when they say so", () => {
+    expect(parseAction('{"type":"stock","product":"checklist","filter":"low"}', "Can you get me the stock checklist", [])).toEqual({ type: "stock", product: null, filter: null });
+    expect(parseAction('{"type":"stock","product":null,"filter":"low"}', "what is running low", [])).toEqual({ type: "stock", product: null, filter: "low" });
+    expect(parseAction('{"type":"stock","product":null,"filter":"low"}', "which products need restocking", [])).toEqual({ type: "stock", product: null, filter: "low" });
+    expect(parseAction('{"type":"stock","product":"kettle","filter":null}', "stock of the kettle", [])).toEqual({ type: "stock", product: "kettle", filter: null });
+    expect(stockListWords("full inventory report")).toBe(true);
+    expect(stockListWords("checklist pad")).toBe(false);
+  });
+
+  it("a rewrite asked in the message before, with this one saying which product, is kept", () => {
+    const context = "Seller: I have a spectacle product i want to rewrite the description\nBot: I couldn't find spectacle in your shop.";
+    expect(contentAction({ product: "Wireless Eyewear Audio Glasses - Bluetooth 5.0", rewrite: ["description"] }, "it is a bluetooth lens", context)).toEqual({
+      type: "content_change", product: "Wireless Eyewear Audio Glasses - Bluetooth 5.0",
+      request: { rewrite: ["description"], instructions: "I have a spectacle product i want to rewrite the description it is a bluetooth lens" },
+    });
+    // Asked by no one: still a question.
+    expect(contentAction({ product: "Wireless Eyewear Audio Glasses - Bluetooth 5.0", rewrite: ["description"] }, "it is a bluetooth lens", "Seller: hi\nBot: Hello")).toMatchObject({ type: "reply" });
   });
 });

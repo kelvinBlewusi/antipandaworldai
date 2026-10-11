@@ -16,6 +16,10 @@ jest.mock("@/lib/whatsapp/client", () => ({
   sendCtaUrlIfConfigured: async () => undefined,
   sendListIfConfigured: async () => undefined,
 }));
+const emails: { to: string; subject: string; text?: string }[] = [];
+jest.mock("@/lib/email/send", () => ({
+  sendEmail: async (o: { to: string; subject: string; text?: string }) => { emails.push(o); return { success: true }; },
+}));
 let answer: (prompt: string) => string = () => '{"type":"reply","text":"Hi","link":null}';
 jest.mock("@/lib/ai/gemini-client", () => ({
   callGeminiBackend: async (_m: string, parts: { text?: string }[]) => ({ text: answer(parts.map((p) => p.text ?? "").join("\n")) }),
@@ -29,6 +33,7 @@ import { ASSISTANT_CASES } from "@/lib/evals/assistant-cases";
 beforeEach(() => {
   db = new FakeDb();
   sent.length = 0;
+  emails.length = 0;
   db.tables.app_settings = [{ key: "api_check_user", value: "owner" }];
   db.tables.whatsapp_connections = [{ user_id: "owner", phone_number: "233200000000" }];
 });
@@ -103,17 +108,71 @@ describe("the Monday job", () => {
       { created_at: ago(60), user_id: "s1", stage: "idle", message: "do the thing", action: { type: "unclear" }, outcome: "default", raw: null },
       { created_at: ago(60 * 24 * 9), user_id: "s1", stage: "idle", message: "old", action: null, outcome: "default", raw: null },
     ];
-    db.tables.whatsapp_message_log = [];
+    // The owner wrote to the bot an hour ago, so WhatsApp delivers.
+    db.tables.whatsapp_message_log = [{ created_at: ago(60), phone_number: "233200000000", direction: "inbound", message_type: "text", body_text: "hi" }];
     db.tables.assistant_eval_runs = [];
     const r = await runWeekly();
     expect(r.sent).toBe(true);
     expect(r.signs.not_understood).toBe(1);
+    expect(emails).toHaveLength(0);
     expect(sent).toHaveLength(1);
     expect(sent[0].to).toBe("233200000000");
     expect(sent[0].body).toContain("1 message read from 1 seller (last week 1)");
     expect(sent[0].body).toContain("• Agent mode (gemini-2.5-flash-lite): no run yet");
     const runs = db.tables.assistant_eval_runs as { pipeline: string; note: string; status: string }[];
     expect(runs.map((x) => [x.pipeline, x.note, x.status])).toEqual([["agent", WEEKLY, "queued"], ["front_door", WEEKLY, "queued"]]);
+  });
+
+  describe("skipping a week nothing in the AI changed", () => {
+    const monday = new Date("2026-10-12T06:41:00Z");
+    afterEach(() => { delete process.env.AI_FINGERPRINT; });
+    const runs = () => (db.tables.assistant_eval_runs as unknown[]).length;
+    const once = async (at: Date) => {
+      db.tables.whatsapp_assistant_log = [];
+      db.tables.whatsapp_message_log = [{ created_at: new Date(at.getTime() - 60_000).toISOString(), phone_number: "233200000000", direction: "inbound", message_type: "text", body_text: "hi" }];
+      sent.length = 0;
+      return runWeekly(at);
+    };
+
+    it("runs, then skips the next week while the code and models are the same, and runs again when either changes", async () => {
+      process.env.AI_FINGERPRINT = "abc";
+      db.tables.assistant_eval_runs = [];
+      expect((await once(monday)).queued).toHaveLength(2);
+      expect(runs()).toBe(2);
+
+      const next = new Date(monday.getTime() + 7 * 86_400_000);
+      expect((await once(next)).queued).toEqual([]);
+      expect(runs()).toBe(2);
+      expect(sent[0].body).toContain("Nothing in the chat's AI changed since the runs on 12 Oct, so none this week (they run by 9 Nov at the latest).");
+
+      process.env.AI_FINGERPRINT = "def";
+      expect((await once(next)).queued).toHaveLength(2);
+      expect(sent[0].body).toContain("This week's runs start now");
+
+      db.tables.app_settings.push({ key: "assistant_agent_model", value: "gemini-3.5-flash-lite" });
+      expect((await once(new Date(next.getTime() + 7 * 86_400_000))).queued).toHaveLength(2);
+    });
+
+    it("runs anyway after 4 weeks, and always when the build has no fingerprint", async () => {
+      process.env.AI_FINGERPRINT = "abc";
+      db.tables.assistant_eval_runs = [];
+      await once(monday);
+      expect((await once(new Date(monday.getTime() + 28 * 86_400_000))).queued).toHaveLength(2);
+      delete process.env.AI_FINGERPRINT;
+      expect((await once(new Date(monday.getTime() + 35 * 86_400_000))).queued).toHaveLength(2);
+    });
+  });
+
+  it("emails it when the owner hasn't written to the bot for over a day (WhatsApp wouldn't deliver)", async () => {
+    db.tables.whatsapp_assistant_log = [];
+    db.tables.whatsapp_message_log = [{ created_at: ago(60 * 30), phone_number: "233200000000", direction: "inbound", message_type: "text", body_text: "hi" }];
+    db.tables.assistant_eval_runs = [];
+    const r = await runWeekly();
+    expect(r.sent).toBe(true);
+    expect(sent).toHaveLength(0);
+    expect(emails).toHaveLength(1);
+    expect(emails[0]).toMatchObject({ to: "help.pandaworldai@gmail.com", subject: "PandaWorld: weekly report" });
+    expect(emails[0].text).toContain("/admin/warning-signs");
   });
 });
 
@@ -132,6 +191,7 @@ describe("a weekly run that does worse than the last", () => {
       { id: "last", created_at: "2026-10-05T06:41:00Z", status: "done", model: "m", pipeline: "front_door", router_model: "m", note: WEEKLY, total: ASSISTANT_CASES.length, done: ASSISTANT_CASES.length, passed: ASSISTANT_CASES.length, errors: 0, results: all(true) },
       { id: "now", created_at: "2026-10-12T06:41:00Z", status: "queued", model: "m", pipeline: "front_door", router_model: "m", note: WEEKLY, total: ASSISTANT_CASES.length, done: 0, results: [], locked_until: null },
     ];
+    db.tables.whatsapp_message_log = [{ created_at: ago(5), phone_number: "233200000000", direction: "inbound", message_type: "text", body_text: "hi" }];
     await workOnRuns(10 * 60_000);
     expect(sent).toHaveLength(1);
     expect(sent[0].body).toMatch(/^⚠️ This week's test run of the front door \(m\) got \d+ of \d+ right, down from \d+ on the same cases\./);
