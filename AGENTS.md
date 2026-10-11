@@ -3017,6 +3017,10 @@ the seller, and our own checks turned the reading down.
     - The sizes passed both ways.
     - The AI often left `said` out, so the gate still turned "the approved ones" down. `said` is now required on `bulk` (sample "all my prices").
     - "On all the products that are off" came back as all + only off. That's the same group as `inactive`, and `bulkAction` now writes it that way.
+  - After both (runs b74c2cdd and 263485ce): agent mode 243/256, the front door 232/256.
+    - The run before scored 236. Six cases that had always passed failed together there (a sale read as a price, a rename with invented fields). They passed again here: model noise.
+    - draft-variation-order/-typo, live-approved-ones, live-on-all-off and live-on-them-keep-stock pass in agent mode.
+    - Still wrong: live-approved-on-or-off ("…whether on or off"). Agent mode named the six products as a `matching` search. The front door gave listed + only approved without `said`, and the listed group's word gate turned it down.
 - **Replaying the AI's recorded answers**: __tests__/assistant-replay.test.ts
   feeds agent mode the exact tool calls the test runs recorded, through
   `agentInput`/`caseLookups`/`scoreAgent` (lib/evals/assistant-eval.ts),
