@@ -3066,6 +3066,11 @@ cause, and its fix:
   - Works on WhatsApp and the web chat (web uploads come through the same path).
   - Never used for real yet (no `jumia_product_changes` with images).
   - A photo sent first, with a caption like "add this to the dartboard", still starts a new listing.
+- **Results** (262 cases, runs b759c582 and aa01588b):
+  - Agent mode 253/262, its best; the front door 240.
+  - All 6 dart cases, the sizes and both "approved ones" cases pass in agent mode.
+  - The front door missed dart-material-add: it put the value in `adding` with empty `details`.
+  - Agent mode still gets wrong: help-autofills, help-countries-jumia, list-five-review, live-bulk-answer-0, live-describe-latest, live-v-bulk-percent, not-yet-invoice, orders-labels-cancelled, shop-name-malta.
 - Test set: 6 "dart-*" cases from these messages. Tests are in whatsapp-assistant.test.ts ("the owner's dartboard, all in one message", "a message of several parts…"), jumia-shop-more.test.ts, live-additions.test.ts, jumia-capabilities.test.ts and assistant-replay.test.ts.
 
 ### A batch Jumia turned down (owner's WhatsApp, 2026-10-11)
