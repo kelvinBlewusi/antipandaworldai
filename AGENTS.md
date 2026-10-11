@@ -2732,7 +2732,7 @@ these three were approved, plus some live changes made immediate.
 The plan from here: 1. agent mode for everyone; 2. retire the old one-call
 reader and its word rules (the front door stays, as the backup); 3. one
 definition per action (part G of the plan page); 4. a weekly warning-signs
-report and a weekly test run. Steps 1 and 2 are done.
+report and a weekly test run. Steps 1, 2 and 3 are done.
 
 - **Step 1**: app_settings `assistant_agent` = `"all"` (11 Oct, after
   94dcc39 was live). Every seller's typed message is read by agent mode
@@ -2761,6 +2761,38 @@ report and a weekly test run. Steps 1 and 2 are done.
   - intake.ts `answersAssistantQuestion`: a bare number after the
     assistant's own question always goes to it (it needed the front door or
     agent switch before).
+- **Step 3, one definition per action** (part G of the plan:
+  lib/assistant-v2/actions.ts). Each action the AI can choose is one entry
+  in `ACTION_DEFS`:
+  - `name`: its type in the chat's JSON and its agent tool's name;
+  - `line` (and `lineIn` for an area that reads it differently): what the
+    front door's reading call is told;
+  - `tool`: agent mode's function (what it does, its fields);
+  - `toJson`: the tool's arguments as the chat's JSON where they differ
+    (edit's one change → `edits`, `end_sale` → `sale: "end"`, details list
+    → record…);
+  - `sample`: a message and arguments the chat's checks must carry out.
+
+  Agent mode's `ACTION_TOOLS` and `actionJson` come from it (byte for byte
+  the tools it had); the front door keeps only which actions each area
+  offers (`AREA_ACTIONS`) plus `EVERY_READING` (reply, cannot, capability,
+  not_yet, clarify). Its shop_info reading changed in one way: the two
+  combined lines (brand_check / category_info, shops / warehouse_stock) are
+  one line each now.
+  - `ACTION_TYPES` (lib/whatsapp/assistant.ts) lists every type `carryOut`
+    does; a type missing from it doesn't compile, and neither does a type
+    without its case in `carryOut` (`const unhandled: never = action`).
+  - __tests__/assistant-actions.test.ts checks the rest: every action has an
+    agent tool and a front door area; a `lineIn` only for an area that
+    offers it; every sample comes through `parseAction` as an action the
+    chat carries out; every `action` in lib/jumia/capabilities.ts, every
+    worked example's type and every test-set answer is a defined action.
+  - Adding an action: an entry in `ACTION_DEFS`, its name in an area of
+    `AREA_ACTIONS`, its case in `parseActionRaw` and `carryOut`, its type in
+    the `AssistantAction` union and `ACTION_TYPES`, and a test-set case.
+    The checks and the code that runs it stay in assistant.ts (they share
+    the session, the shop module and the confirm taps); the tests fail
+    until every part is there.
 - **Test runs** (lib/evals/assistant-eval.ts): pipelines `"agent"` (the
   default for `queueRun`, with `agentModel()`) and `"front_door"`. Old runs
   of the one-call reader (`pipeline` "current" or null) stay in the table as

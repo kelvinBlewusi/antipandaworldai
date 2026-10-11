@@ -22,14 +22,10 @@ jest.mock("@/lib/ai/gemini-client", () => ({
 import { ASSISTANT_CASES, type EvalCase } from "@/lib/evals/assistant-cases";
 import { byArea, matchesShape, passes, queueRun, routing, runCase, workOnRuns } from "@/lib/evals/assistant-eval";
 import { contextText, frontDoor, namesInMessage, openQuestion } from "@/lib/assistant-v2/front-door";
-import { agentModel } from "@/lib/whatsapp/assistant";
+import { ACTION_TYPES, agentModel } from "@/lib/whatsapp/assistant";
 
-const ACTIONS = new Set([
-  "edit", "submit", "list", "restart", "review", "orders", "credits", "help", "reply", "live_change", "product_info", "product_text", "fees", "stock", "shop",
-  "order_status", "sales", "listings", "payouts", "payout_detail", "report", "bulk", "content_change", "brand_check", "category_info", "shops",
-  "warehouse_stock", "warehouse_order", "warehouse_shipped", "polish", "health_report", "research", "note", "unclear", "fix_rejected", "add_size", "add_photos", "draft_text",
-  "not_yet",
-]);
+// Every action the chat carries out (lib/assistant-v2/actions.ts is the one place each is defined).
+const ACTIONS = new Set<string>(ACTION_TYPES);
 const STAGES = new Set(["review", "sent", "idle", "starting", "collecting", "drafting"]);
 
 beforeEach(() => { db = new FakeDb(); prompts.length = 0; });

@@ -34,8 +34,10 @@ import {
   capabilities, parseAction, type AssistantAction, type AssistantLink, type ProductFacts, type Stage,
 } from "@/lib/whatsapp/assistant";
 
-export type Area = "listing" | "drafts" | "live_products" | "shop_info" | "orders" | "money" | "account_help" | "chat";
-const AREAS = new Set<Area>(["listing", "drafts", "live_products", "shop_info", "orders", "money", "account_help", "chat"]);
+import { AREAS as AREA_LIST, EVERY_READING, actionLines, type Area } from "@/lib/assistant-v2/actions";
+
+export type { Area };
+const AREAS = new Set<Area>(AREA_LIST);
 
 /** The prototype's own answer when it asks instead of guessing. */
 export interface Clarify { type: "clarify"; question: string; options: string[] }
@@ -177,16 +179,11 @@ function routerPrompt(input: FrontDoorInput): string {
 
 // ─── 3. Read, within the area ────────────────────────────────────────────────
 
-const CLARIFY = '{"type":"clarify","question":"<one short question, ending with ?>","options":["<2 or 3 answers they can tap, each up to 20 characters and clear on its own, e.g. \\"Stock to 10\\", not \\"10\\">"]} - only when you can\'t tell which action or which product they mean, or a change is missing the value to set (e.g. "change the drone to 10": its stock or its price?).';
-const REPLY = '{"type":"reply","text":"<your message>","link":"<a link key, or null>"} - a question you answer in a line or two; a hello; anything this area\'s actions don\'t cover.';
-const CANNOT = '{"type":"cannot","what":"<a key from Not possible from here>"} - they ask for (or ask whether you can do) one of these: PandaWorld gives the true answer and what it can do instead.';
 /**
  * "Can you…?" answered from the capability list, and what PandaWorld doesn't
  * do answered with one fixed line and noted (owner, 2026-10-11): in every
- * reading, the chat's own prompt and agent mode's examples.
+ * reading, and agent mode's examples.
  */
-export const CAPABILITY_ACTION = '{"type":"capability","what":"<a key from What the chat does>"} - they ask whether you can do something ("can you…?", "is it possible to…?", "do you do…?") without saying what to do it to: PandaWorld answers from its list, with the words that do it. When they say what to do and to which product ("can you set the kettle\'s stock to 20?", "can you fix my rejected products?"), do it with its action instead.';
-export const NOT_YET_ACTION = '{"type":"not_yet","what":"<what they asked for, in a few words>","outside":false} - they ask for something no action here does and that isn\'t on Not possible: PandaWorld says it can\'t do that yet and notes the request. "outside":true when it has nothing to do with Jumia, selling or PandaWorld (the weather, football, homework).';
 export const NOT_YET_EXAMPLES = [
   '"can you change my prices?" → {"type":"capability","what":"live_price"}',
   '"can you post my products on Instagram?" → {"type":"not_yet","what":"post products on Instagram","outside":false}',
@@ -195,82 +192,21 @@ export const NOT_YET_EXAMPLES = [
 /** The rule beside them. */
 export const NEVER_CANT = "- Never say PandaWorld can't do something, and never send them to Vendor Center to do it: what isn't possible is cannot, what PandaWorld doesn't do is not_yet, and anything outside Jumia, selling and PandaWorld is not_yet with \"outside\":true.";
 
-const ACTIONS: Record<Area, string[]> = {
-  listing: [
-    '{"type":"list","count":<number>} - they want to list new products now and give how many ("2 shirts and a fridge" is 3).',
-    '{"type":"restart"} - they want to list but give no number, or start a new batch, or stop or start over the batch they are sending.',
-    '{"type":"step"} - while a product is being sent: its details (price, sizes, colours, quantity, brand, condition, SKU, "use as note"), or that its photos are done.',
-    '{"type":"category_info","product":"<the kind of product>"} - which category, or what Jumia needs, for a kind of product.',
-  ],
-  drafts: [
-    '{"type":"edit","edits":[{"products":[<draft numbers>],"said":"<their words for which draft, or null>","changes":{...},"ask":false}]} - change drafts. "changes" holds ONLY what they asked to change:',
-    '  "price" (number), "quantity" (whole number), "variations" (the full list the draft should have; where its category lists options, each as',
-    '  {"said":"<their words>","option":"<the ONE option they mean>"}: "Large" is L), "title", "brand", "color" (copied from the message),',
-    '  "sale": true, "other": "<a field name>". Every number and word from the message. "ask": true when their words fit more than one draft.',
-    '{"type":"submit","products":"all" or [<numbers>]} - send drafts to Jumia.',
-    '{"type":"polish","product":<draft number or null>} - make polished photos for a draft.',
-    '{"type":"draft_text","products":[<draft numbers>]} - show drafts as drafted: name, price, sizes, highlights and description. A product already on Jumia is product_text.',
-    '{"type":"review"} - open their drafts.',
-    '{"type":"restart"} - start a new batch, or stop this one.',
-  ],
-  live_products: [
-    '{"type":"live_change","product":"<their words for the product>","stock":<number>} - change one product already on Jumia. Instead of "stock",',
-    '  exactly one of: "price":<number>, "sale_price":<number> (dates are read from the message), "sale":"end", "active":true or false.',
-    '  Several products, the same change: "products":["<words>","<words>"]. Values from the message.',
-    '{"type":"bulk","scope":"all" or "out_of_stock" or "low_stock" or "inactive" or "active" or "matching" or "listed","words":"<their words, for matching>" or null,',
-    '  plus one of "price_pct", "sale_pct", "stock", "price", "sale_price", "sale":"end", "active"} - one change to many products by a rule;',
-    '  "listed" is the products you last listed for them ("those", "the last 10", "all" right after your list).',
-    '{"type":"content_change","product":"<the product>","name":"<copied>" or null,"description":"<copied>" or null,"highlights":null,"brand":null,"rewrite":["name","description","highlights"] or []} - a live product\'s',
-    '  name, description or highlights: their own text copied whole, or "rewrite" for what they ask YOU to write (PandaWorld writes it with AI and shows it before one tap).',
-    '  Its other details go in the same action: "details":{"<the detail in their words: colour, material, weight, model…>":"<value copied>"},',
-    '  "barcode":"<digits copied>", "size":{"from":"<the size now, or null>","to":"<the new size name>"} (renaming one of its sizes).',
-    '{"type":"add_size","product":"<their words>","size":"<the new size or colour, copied>","stock":<number> or null,"price":<number> or null} - a new size or colour for a product already on Jumia, its stock and price from the message.',
-    '{"type":"add_photos","product":"<their words>"} - more photos for a product already on Jumia (they send them next).',
-    '{"type":"product_info","product":"<their words>"} - when it is really a question about a product (is it on, approved, in stock).',
-    '{"type":"product_text","product":"<their words>"} - show a product\'s name, description and highlights as Jumia has them now, so they can read or edit them.',
-    '{"type":"fix_rejected","product":"<their words>" or null,"reason":"<Jumia\'s reason as they pasted it>" or null} - fix products Jumia\'s quality check rejected: null product to see them and pick one.',
-    '{"type":"warehouse_order","items":[{"product":"<their words>","quantity":<number>}]} - send stock to Jumia\'s warehouse.',
-    '{"type":"warehouse_shipped","po":"<from the message>","tracking":"<from the message>","carrier":null} - a warehouse delivery has shipped.',
-  ],
-  shop_info: [
-    '{"type":"product_info","product":"<their words for the product>"} - where one product is: on or off, quality check, price, sale, stock.',
-    '{"type":"stock","product":"<their words>" or null,"filter":"out" or "low" or null} - how many are left of a product, or what is out of stock or low.',
-    '{"type":"shop","filter":"all" or "inactive" or "rejected"} - an overview with counts (on, off, out of stock, waiting, rejected, deleted), or the products turned off, or rejected by quality check.',
-    '{"type":"fix_rejected","product":"<their words>" or null,"reason":"<Jumia\'s reason as they pasted it>" or null} - fix products Jumia\'s quality check rejected: null product to see them and pick one.',
-    '{"type":"product_text","product":"<their words>"} - one product\'s name, description and highlights as Jumia has them now ("show me its description", "print the description so I can edit it").',
-    '{"type":"research","needs":[<up to 4 reads>]} - read their shop and answer with what it shows, organised as asked: their newest or oldest',
-    '  products, products sorted or filtered, orders with their items, sales by product, or several at once. Reads:',
-    '  {"source":"products","sort":"newest" or "oldest" or "price_high" or "price_low" or "stock_low" or "stock_high" or "name","filter":"all" or',
-    '  "active" or "inactive" or "rejected" or "pending" or "out_of_stock" or "low_stock" or "on_sale","words":"<their words>" or null,',
-    '  "limit":<up to 30; 10 if not said; 30 for "all" of a group>,"since":null or a period}; {"source":"orders","period":<period>,"status":null,"limit":<up to 30>};',
-    '  A list longer than 30 comes 30 at a time: give the first 30 (the answer tells them to say "more" for the next).',
-    '  {"source":"product_sales","period":<period>}; {"source":"sales_summary","period":<period>}; {"source":"payouts"};',
-    '  {"source":"pandaworld_listings","period":<period>}. A period is "today", "yesterday", "week", "month" or "quarter".',
-    '{"type":"report","kind":"best_sellers" or "slow_movers" or "restock" or "returns","period":"week" or "month" or "quarter"} - one report.',
-    '{"type":"health_report"} - a full health check of their shop ("write a report on my shop", "how is my shop doing").',
-    '{"type":"listings","period":"today" or "yesterday" or "week" or "month" or "quarter"} - how many they listed with PandaWorld.',
-    '{"type":"brand_check","brand":"<from the message>","product":null} / {"type":"category_info","product":"<kind of product>"}.',
-    '{"type":"shops"} - the shops under their Jumia account. {"type":"warehouse_stock","product":"<their words>"} - what Jumia\'s warehouse holds.',
-  ],
-  orders: [
-    '{"type":"orders"} - orders waiting to be packed.',
-    '{"type":"order_status","number":"<the order number from the message or the conversation>"} - one order.',
-    '{"type":"sales","period":"today" or "yesterday" or "week" or "month" or "quarter","status":null or one or a list of "cancelled",',
-    '  "delivered","returned","failed","pending","ready_to_ship","shipped"} - their orders and sales in a period; "quarter" is 90 days, also "ever".',
-  ],
-  money: [
-    '{"type":"credits"} - their credit balance.',
-    '{"type":"payouts"} - the last Jumia payout and what is not paid yet.',
-    '{"type":"payout_detail","mode":"history" or "breakdown","statement":"<a statement number from the message>" or null} - every statement, or one in detail.',
-    '{"type":"fees","product":"<their words>","price":<a number from the message> or null} - what Jumia takes and what they receive when it sells.',
-  ],
-  account_help: [
-    '{"type":"help"} - what PandaWorld can do, when they ask in general.',
-    '{"type":"credits"} - their credit balance.',
-  ],
-  chat: [
-    '{"type":"help"} - what PandaWorld can do, when they ask in general.',
-  ],
+/**
+ * The actions each area's reading offers, in order: each is defined once in
+ * lib/assistant-v2/actions.ts (its line here, its tool in agent mode). Every
+ * reading also has EVERY_READING (reply, cannot, capability, not_yet,
+ * clarify).
+ */
+export const AREA_ACTIONS: Record<Area, string[]> = {
+  listing:       ["list", "restart", "step", "category_info"],
+  drafts:        ["edit", "submit", "polish", "draft_text", "review", "restart"],
+  live_products: ["live_change", "bulk", "content_change", "add_size", "add_photos", "product_info", "product_text", "fix_rejected", "warehouse_order", "warehouse_shipped"],
+  shop_info:     ["product_info", "stock", "shop", "fix_rejected", "product_text", "research", "report", "health_report", "listings", "brand_check", "category_info", "shops", "warehouse_stock"],
+  orders:        ["orders", "order_status", "sales"],
+  money:         ["credits", "payouts", "payout_detail", "fees"],
+  account_help:  ["help", "credits"],
+  chat:          ["help"],
 };
 
 /**
@@ -367,12 +303,8 @@ function readerPrompt(areas: Area[], input: FrontDoorInput): string {
     ] : []),
     "",
     "Actions:",
-    ...Array.from(new Set(areas.flatMap((a) => ACTIONS[a]))),
-    REPLY,
-    CANNOT,
-    CAPABILITY_ACTION,
-    NOT_YET_ACTION,
-    CLARIFY,
+    ...Array.from(new Set(areas.flatMap((a) => actionLines(AREA_ACTIONS[a], a)))),
+    ...actionLines(EVERY_READING),
     "",
     "Examples (message → JSON):",
     ...areas.flatMap((a) => EXAMPLES[a]),

@@ -251,6 +251,20 @@ export type AssistantAction =
   | { type: "not_yet"; what: string; outside: boolean; text?: string; blocked?: string }
   | { type: "unclear" };
 
+/**
+ * Every action type the chat carries out (carryOut), for the tests that
+ * check each AI action (lib/assistant-v2/actions.ts) is one of them. One
+ * missing from this list doesn't compile.
+ */
+export const ACTION_TYPES = [
+  "edit", "submit", "list", "restart", "review", "orders", "credits", "help", "reply", "live_change", "product_info", "product_text",
+  "draft_text", "fix_rejected", "add_size", "add_photos", "fees", "stock", "shop", "order_status", "sales", "listings", "payouts",
+  "payout_detail", "report", "bulk", "content_change", "brand_check", "category_info", "shops", "warehouse_stock", "warehouse_order",
+  "warehouse_shipped", "polish", "health_report", "research", "note", "not_yet", "unclear",
+] as const satisfies readonly AssistantAction["type"][];
+const everyTypeListed: [Exclude<AssistantAction["type"], (typeof ACTION_TYPES)[number]>] extends [never] ? true : false = true;
+void everyTypeListed;
+
 /** "quarter" is the last 90 days: as far back as Jumia's orders go. */
 export type Period = "today" | "yesterday" | "week" | "month" | "quarter";
 const PERIODS = new Set<Period>(["today", "yesterday", "week", "month", "quarter"]);
@@ -2221,7 +2235,9 @@ async function carryOut(
     case "unclear":
       return "default";
   }
-  return "default";
+  // Every action has its case above: a new one without it doesn't compile.
+  const unhandled: never = action;
+  return unhandled;
 }
 
 /**
