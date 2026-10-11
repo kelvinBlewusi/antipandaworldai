@@ -243,3 +243,16 @@ describe("the agent's model (model comparison, 2026-10-11)", () => {
     expect(agentModelSpec("gemini-3.8-flash:low:x")).toBeNull();
   });
 });
+
+describe("the tools' lists", () => {
+  it("every list has a most it may hold (an edit ran to 10 s adding empty entries)", () => {
+    const uncapped: string[] = [];
+    const walk = (schema: Record<string, unknown>, path: string) => {
+      if (schema.type === "array" && typeof schema.maxItems !== "number") uncapped.push(path);
+      if (schema.items) walk(schema.items as Record<string, unknown>, `${path}[]`);
+      for (const [k, v] of Object.entries((schema.properties ?? {}) as Record<string, Record<string, unknown>>)) walk(v, `${path}.${k}`);
+    };
+    for (const t of AGENT_TOOLS) walk(t.parameters as Record<string, unknown>, t.name);
+    expect(uncapped).toEqual([]);
+  });
+});
