@@ -58,11 +58,17 @@ export interface ActionDef {
   sample?: { message: string; args: Args };
 }
 
-/** "end_sale": true is the chat's "sale": "end". */
-const endSale = (name: string) => (args: Args): Args => {
+/**
+ * A change to live products: "end_sale": true is the chat's "sale": "end",
+ * and a change of 0% or to a price of 0 is no change, left out (test run
+ * e14c46b9, 11 Oct: 3.5 Flash-Lite filled every field of bulk with zero, and
+ * the chat read a 0% price change before the stock of 0 they asked for).
+ */
+const liveChange = (name: string) => (args: Args): Args => {
   const out: Args = { type: name, ...args };
   if (args.end_sale === true) out.sale = "end";
   delete out.end_sale;
+  for (const key of ["price_pct", "sale_pct", "price", "sale_price"]) if (out[key] === 0) delete out[key];
   return out;
 };
 
@@ -180,7 +186,7 @@ export const ACTION_DEFS: ActionDef[] = [
         end_sale: bool("End its sale."), active: bool("true to turn it ON, false to turn it OFF."), all: bool("Every product their words fit (\"all the hard hats\")."),
       },
     },
-    toJson: endSale("live_change"),
+    toJson: liveChange("live_change"),
     sample: { message: "set the kettle stock to 5", args: { product: "kettle", stock: 5 } },
   },
   {
@@ -201,7 +207,7 @@ export const ACTION_DEFS: ActionDef[] = [
       },
       required: ["scope"],
     },
-    toJson: endSale("bulk"),
+    toJson: liveChange("bulk"),
     sample: { message: "raise all my prices by 5%", args: { scope: "all", price_pct: 5 } },
   },
   {
