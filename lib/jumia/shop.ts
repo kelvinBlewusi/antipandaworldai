@@ -325,7 +325,9 @@ const words = (s: string) =>
  */
 export function findProducts(products: ShopProduct[], query: string, max = 10): ShopProduct[] {
   const live = products.filter((p) => p.status !== "DELETED");
-  const q = query.trim().toLowerCase();
+  // "SKU GEMMALLUSBWF", "sku: …": the SKU itself (owner's chat, 9 Oct: it
+  // matched two products and the colour change needed six messages).
+  const q = query.trim().toLowerCase().replace(/^sku\b[\s:#.-]*/, "");
   const bySku = live.filter((p) => p.sellerSku.toLowerCase() === q);
   if (bySku.length > 0) return bySku;
 

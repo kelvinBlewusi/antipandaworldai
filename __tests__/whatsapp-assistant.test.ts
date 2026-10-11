@@ -20,6 +20,7 @@ jest.mock("@/lib/whatsapp/client", () => ({
   sendButtonsIfConfigured: async (_to: string, body: string, b: { id: string }[]) => { sent.push({ kind: "buttons", body, rows: b.map((x) => x.id) }); },
   sendCtaUrlIfConfigured:  async (_to: string, body: string, button: string, url: string) => { sent.push({ kind: "cta", body, button, url }); },
   sendListIfConfigured:    async (_to: string, body: string, _b: string, r: { id: string }[]) => { sent.push({ kind: "list", body, rows: r.map((x) => x.id) }); },
+  sendImagesIfConfigured:  async (_to: string, urls: string[], caption: string) => { sent.push({ kind: "images", body: caption, rows: urls }); },
 }));
 
 const orderCalls: string[] = [];
@@ -34,6 +35,8 @@ let aiCalls = 0;
 const toolReplies: { name: string; args: Record<string, unknown> }[][] = [];
 // The tools each agent turn could call (null: any).
 const toolAllowed: (string[] | null)[] = [];
+// What each agent turn was given, as JSON: the conversation and the lookups' answers.
+const toolTurns: string[] = [];
 // The front door's sorting calls, answered "chat" unless a test scripts the area.
 const routerPrompts: string[] = [];
 jest.mock("@/lib/ai/gemini-client", () => ({
@@ -49,9 +52,10 @@ jest.mock("@/lib/ai/gemini-client", () => ({
     if (text == null) throw new Error("no AI reply scripted");
     return { text, model, backend: "vertex" };
   },
-  callGeminiWithTools: async (_model: string, _turns: unknown[], opts: { system: string; allowed?: string[] }) => {
+  callGeminiWithTools: async (_model: string, turns: unknown[], opts: { system: string; allowed?: string[] }) => {
     aiCalls++;
     aiPrompts.push(opts.system);
+    toolTurns.push(JSON.stringify(turns));
     toolAllowed.push(opts.allowed ?? null);
     const calls = toolReplies.shift();
     if (calls == null) throw new Error("no tool calls scripted");
@@ -71,7 +75,18 @@ jest.mock("@/lib/whatsapp/shop", () => ({
   answerFees:        async (...a: unknown[]) => { shopCalls.push(["answerFees", ...a.slice(2)]); return "fees"; },
   proposeBulkChange: async (...a: unknown[]) => { shopCalls.push(["proposeBulkChange", ...a.slice(2)]); return "bulk"; },
   proposeContentChange: async (...a: unknown[]) => { shopCalls.push(["proposeContentChange", ...a.slice(2)]); return "content"; },
-  answerProductText: async (...a: unknown[]) => { shopCalls.push(["answerProductText", ...a.slice(2)]); return "text"; },
+  answerProductText: async (...a: unknown[]) => { shopCalls.push(["answerProductText", ...a.slice(2, 3)]); return "text"; },
+  // Two sets fit "nasco kettle": the "which one?" the shop module would ask.
+  answerProductPhotos: async (...a: unknown[]) => {
+    shopCalls.push(["answerProductPhotos", ...a.slice(2, 3)]);
+    const which = a[3] as ((sets: unknown[]) => Promise<string>) | undefined;
+    return a[2] === "nasco kettle" && which
+      ? which([{ sellerSku: "NAS-K", name: "Nasco Electric Kettle 1.7L" }, { sellerSku: "NAS-K2", name: "Nasco Electric Kettle 2.2L Stainless" }])
+      : "photos";
+  },
+  productDetailsLookup: () => async (words: string) => (words.includes("kettle") ? ["Name: Nasco Electric Kettle 1.7L\nDetails: color=Silver; what_is_in_the_box=1 kettle, 1 base"] : []),
+  whereLine: () => "ON · approved · price GHS 100 · stock 3",
+  shorten: (s: string, n: number) => (s.length <= n ? s : `${s.slice(0, n - 1)}…`),
   sendLong:          async (_to: string, body: string) => { sent.push({ kind: "text", body }); },
   htmlToText:        (html: string) => html.replace(/<li>/g, "• ").replace(/<[^>]+>/g, " ").replace(/[ \t]+/g, " ").trim(),
   MAX_GROUP: 20,
@@ -85,7 +100,7 @@ jest.mock("@/lib/jumia/categories", () => ({
 }));
 
 import {
-  NOT_YET_TEXT, OUTSIDE_TEXT, agentFor, agentModel, answerLiveValue, claimsInability, assistantEnabled, assistantFor, assistantLinks, cleanReply, countBacked, fitsDraft, isStateQuestion, looksLikeQuestion, messageNumbers,
+  NOT_YET_TEXT, OUTSIDE_TEXT, agentFor, agentModel, answerLiveValue, answerProductPick, claimsInability, assistantEnabled, assistantFor, assistantLinks, cleanReply, countBacked, fitsDraft, isStateQuestion, looksLikeQuestion, messageNumbers,
    draftNumberIn, draftTextLines,  sameName, namesAProduct, newestWithin, recentConversation, saidIsValues, saleWindow, splitProducts, parseAction, plainQuickEdit, runAssistant, verifyChanges, type ProductFacts,
 } from "@/lib/whatsapp/assistant";
 import { assistantGate } from "@/lib/whatsapp/assistant-limits";
@@ -109,6 +124,7 @@ beforeEach(() => {
   routerPrompts.length = 0;
   toolReplies.length = 0;
   toolAllowed.length = 0;
+  toolTurns.length = 0;
   shopCalls.length = 0;
   aiCalls = 0;
 });
@@ -535,6 +551,77 @@ describe("a draft's own text (owner's WhatsApp, 2026-10-10)", () => {
     expect(sent[0].body).toContain("Tummy control");
     expect(sent[0].body).toContain("Soft and stretchy.");
     expect(sent[1]).toMatchObject({ kind: "cta", button: "Review listings" });
+  });
+});
+
+describe("a product's photos, anything about it, and which one when several fit (owner, 2026-10-11)", () => {
+  const session = (extra: Partial<WhatsAppSession> = {}) =>
+    ({ phoneNumber: "233", userId: "seller", state: "awaiting_count", batchId: null, lastSubmittedBatchId: null, ...extra }) as WhatsAppSession;
+
+  it("reads the owner's two messages as photos of a product in the shop, whatever its status", () => {
+    const links = assistantLinks();
+    expect(parseAction('{"type":"product_photos","product":"wellington boot"}', "show me the images of the wellington boot in the shop", [], links))
+      .toEqual({ type: "product_photos", product: "wellington boot" });
+    expect(parseAction('{"type":"product_photos","product":"fan"}', "i HAVE a fan in the shop kindly show me the pictures for that product here", [], links))
+      .toEqual({ type: "product_photos", product: "fan" });
+    expect(parseAction('{"type":"product_photos","product":"the product"}', "show me the pictures", [], links))
+      .toMatchObject({ type: "reply", text: expect.stringContaining("Which product's photos?") });
+  });
+
+  it("a draft's photos are the ones it was drafted from", async () => {
+    const now = new Date().toISOString();
+    db.tables.app_settings = [{ key: "assistant_agent", value: "all" }];
+    db.tables.listings = [
+      { id: "l1", user_id: "seller", whatsapp_batch_id: "b1", whatsapp_seq: 1, title: "Pedestal Fan", status: "draft", created_at: now, images: ["https://img/1.jpg", "https://img/2.jpg"] },
+    ];
+    toolReplies.push([{ name: "product_photos", args: { product: "draft 1" } }]);
+    expect(await runAssistant("seller", "233", session({ batchId: "b1" }), "show me the photos of draft 1", "review")).toBe("handled");
+    expect(shopCalls).toEqual([]);
+    expect(sent[0]).toMatchObject({ kind: "images", body: "Product 1 (Pedestal Fan): 2 photos, as drafted.", rows: ["https://img/1.jpg", "https://img/2.jpg"] });
+  });
+
+  it("several fit: a list to tap, and the photos of the one picked, with no new message to the AI", async () => {
+    db.tables.app_settings = [{ key: "assistant_agent", value: "all" }];
+    db.tables.whatsapp_sessions = [{ phone_number: "233", user_id: "seller", state: "awaiting_count" }];
+    toolReplies.push([{ name: "product_photos", args: { product: "nasco kettle" } }]);
+    expect(await runAssistant("seller", "233", session(), "show me the pictures of the nasco kettle", "idle")).toBe("handled");
+    expect(sent[0]).toMatchObject({ kind: "list", body: "2 of your products fit. Which one do you mean?", rows: ["ppick:0", "ppick:1"] });
+    const pending = (db.tables.whatsapp_sessions as { assistant_pending: Record<string, unknown> }[])[0].assistant_pending;
+    expect(pending).toMatchObject({ kind: "product_pick", action: { type: "product_photos", product: "nasco kettle" }, skus: ["NAS-K", "NAS-K2"] });
+
+    const calls = aiCalls;
+    const asked = session({ assistantPending: pending as never });
+    expect(await answerProductPick("seller", "233", asked, "ppick:1")).toBe(true);
+    expect(shopCalls.at(-1)).toEqual(["answerProductPhotos", "NAS-K2"]);
+    // Typed as the row's number, or as the SKU.
+    expect(await answerProductPick("seller", "233", asked, "1")).toBe(true);
+    expect(shopCalls.at(-1)).toEqual(["answerProductPhotos", "NAS-K"]);
+    expect(await answerProductPick("seller", "233", asked, "sku nas-k2")).toBe(true);
+    expect(shopCalls.at(-1)).toEqual(["answerProductPhotos", "NAS-K2"]);
+    expect(aiCalls).toBe(calls);
+    expect((db.tables.whatsapp_assistant_log as { outcome: string }[]).at(-1)?.outcome).toBe("picked NAS-K2: photos");
+    // Anything else: the question goes and the message is read as usual.
+    expect(await answerProductPick("seller", "233", asked, "actually show me my orders")).toBe(false);
+    expect(await answerProductPick("seller", "233", session(), "1")).toBe(false);
+  });
+
+  it("an old list isn't answered", async () => {
+    const at = new Date(Date.now() - 2 * 24 * 3600_000).toISOString();
+    const old = session({ assistantPending: { kind: "product_pick", action: { type: "product_photos", product: "nasco kettle" }, skus: ["NAS-K"], at } });
+    expect(await answerProductPick("seller", "233", old, "1")).toBe(false);
+    expect(shopCalls).toEqual([]);
+  });
+
+  it("agent mode reads the product from Jumia to answer a question about it", async () => {
+    db.tables.app_settings = [{ key: "assistant_agent", value: "all" }];
+    toolReplies.push(
+      [{ name: "product_details", args: { words: "kettle" } }],
+      [{ name: "reply", args: { text: "It's silver, and the box has the kettle and its base." } }],
+    );
+    expect(await runAssistant("seller", "233", session(), "what colour is my kettle and what comes in the box?", "idle")).toBe("handled");
+    expect(toolTurns[1]).toContain("color=Silver; what_is_in_the_box=1 kettle, 1 base");
+    expect(sent.at(-1)?.body).toBe("It's silver, and the box has the kettle and its base.");
+    expect(shopCalls).toEqual([]);
   });
 });
 
@@ -1248,6 +1335,21 @@ describe("honest \"can't\" (owner, 2026-10-11)", () => {
     await runAssistant("seller", "233", session(), "what's the weather in accra", "idle");
     expect(sent).toEqual([{ kind: "text", body: OUTSIDE_TEXT }]);
     expect(wishes()).toHaveLength(1);
+  });
+
+  // Owner, 2026-10-11: "if our system has no way to do the thing, how do we show it the way to do what is possible".
+  it("not_yet offers the nearest thing the chat does, in the list's own words", async () => {
+    const links = assistantLinks();
+    const read = parseAction('{"type":"not_yet","what":"other sellers\' prices","outside":false,"instead":"fees"}', "what do other sellers charge for the kettle?", [], links);
+    expect(read).toMatchObject({ type: "not_yet", what: "other sellers' prices", text: expect.stringMatching(/^I can't do that yet\. I've noted it\. What I can do instead: ask e\.g\. "how much will I receive/) });
+    // A key the chat doesn't do, or something outside Jumia: just the line.
+    expect(parseAction('{"type":"not_yet","what":"x","outside":false,"instead":"delete_product"}', "x", [], links)).toEqual({ type: "not_yet", what: "x", outside: false });
+    expect(parseAction('{"type":"not_yet","what":"the weather","outside":true,"instead":"sales"}', "what's the weather", [], links)).toEqual({ type: "not_yet", what: "the weather", outside: true });
+
+    aiReplies.push('{"type":"not_yet","what":"other sellers\' prices","outside":false,"instead":"fees"}');
+    expect(await runAssistant("seller", "233", session(), "what do other sellers charge for the kettle?", "idle")).toBe("handled");
+    expect(sent[0].body).toContain("What I can do instead:");
+    expect(wishes()).toEqual([expect.objectContaining({ request: "other sellers' prices" })]);
   });
 
   it("agent mode: a reply that says it can't isn't sent; it's asked once more without reply", async () => {

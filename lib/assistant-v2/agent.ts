@@ -51,6 +51,13 @@ export const LOOKUP_TOOLS: GeminiTool[] = [{
   name: "find_products",
   description: "Look up which of their Jumia products match some words: each one's full name, ON or OFF, quality check, stock and price, from PandaWorld's saved copy of their shop. Only to tell which product they mean when it isn't clear; never to answer them (the actions read Jumia). Never shown to the seller.",
   parameters: { type: "object", properties: { words: { type: "string", description: "Words from their message naming the product(s)." } }, required: ["words"] },
+}, {
+  // Owner, 2026-10-11: tools for what's possible, so a question about a
+  // product doesn't need an action of its own ("what's in the box", "what
+  // colour is it listed as", "why was it rejected").
+  name: "product_details",
+  description: "Read everything Jumia has on one of their products now, whatever its status (ON, OFF, rejected, waiting for quality check): name, brand, category, each size with its SKU, ON/OFF, quality check and Jumia's reason, price, sale and stock, the description, highlights, every detail, how many photos. To answer a question about that product, or to know what to change. Several matches: their names, to ask which. Never shown to the seller as it is.",
+  parameters: { type: "object", properties: { words: { type: "string", description: "Their words for the product, or its SKU." } }, required: ["words"] },
 }];
 
 /** Actions: each is one of the chat's own actions (lib/assistant-v2/actions.ts), checked and carried out by the chat. */
@@ -81,7 +88,7 @@ export function agentSystem(listingCost = 2): string {
     "The first message tells you where the seller is, what they've been shown, who they are, and their new message.",
     "", "What PandaWorld can do (all true; nothing else is: there is no team doing things by hand):", capabilities(listingCost),
     "", "Not possible from here (answer these with cannot):", cannotList(),
-    "", "What the chat does, by key (for capability):", canList(),
+    "", "What the chat does, by key (for capability, and not_yet's instead):", canList(),
     "", siteGuide(),
     "",
     "Examples (message → the tool and its arguments, as JSON):",
@@ -92,9 +99,10 @@ export function agentSystem(listingCost = 2): string {
     "- Call the tool that does what they ask. When they ask for two or three different things, call a tool for each (at most 3), in the order they asked. One request is one tool.",
     "- Read the message for what they want now. The open question is context: a message that answers it belongs with what the question was about (a description the bot asked for a live product is content_change); anything else is a new request.",
     "- Which product: from the products you last listed (\"the approved ones\" are those whose quality check passed, ON or OFF; \"my latest uploaded product\" is the first of a list of their newest), the products the message names, or the conversation (\"those products\" after an order: that order's products). Put their names in the tool. Only when you still can't tell, look it up (find_products), at most twice; then call the tool for what they asked.",
-    "- A lookup is never an answer: stock, prices, counts and lists come from the tools that read them (product_info, stock, shop, research). Never tell them a product isn't in their shop.",
+    "- find_products is never an answer: stock, prices, counts and lists come from the tools that read them (product_info, stock, shop, research). Never tell them a product isn't in their shop.",
+    "- product_details is Jumia's own data on one product now: a question about that product (what's in the box, its colour or material, its sizes, its barcode, why it was rejected, what its description says) is answered from it with reply, in a line or two. To show its photos: product_photos; its description to read or edit: product_text; where it is (ON/OFF, stock, price): product_info.",
     "- Every number and word you put in a tool's arguments must be in their message (or, for which product, the recent conversation). Never guess or invent a value.",
-    "- You don't have their products' descriptions, highlights, prices, stock or sales: never write them yourself; use the tool that reads them.",
+    "- You don't have their products' descriptions, highlights, prices, stock or sales unless product_details just gave them: never make them up; read them (product_details, or the tool that shows them).",
     "- Drafts are only the ones listed under \"Drafts in their batch\": shown with draft_text, changed with edit, by their numbers (one edit call per different change: each entry of the examples' \"edits\" is one call). A product already in their shop is read with product_text or product_info and changed with live_change, bulk or content_change, even while drafts wait.",
     "- A change to a product (\"change the drone to 10\", \"restock the kettle\", \"set X to 50 pcs\") is a change, never listing new products. Changing a name, description or highlights with no new text means writing it (content_change with rewrite).",
     "- While a batch's products are being sent, their details (sizes, pieces, prices, SKUs, \"those are 3 different products\") are step: no lookup.",
@@ -134,6 +142,8 @@ export function agentPrompt(input: FrontDoorInput): string {
 /** What the agent can look up while deciding. */
 export interface AgentLookups {
   findProducts: (words: string) => Promise<string[]>;
+  /** Everything Jumia has on one product (lib/whatsapp/shop.ts productDetailsLookup); absent in the test set. */
+  productDetails?: (words: string) => Promise<string[]>;
 }
 
 const QC: Record<string, string> = { APPROVED: "approved", PENDING: "waiting for quality check", NOT_READY_TO_QC: "waiting for quality check", REJECTED: "rejected by quality check" };
@@ -275,7 +285,10 @@ export async function agentRead(
     // Look it up, answer the model, and let it decide.
     const answers = await Promise.all(looked.map(async (c) => {
       const words = typeof c.args.words === "string" ? c.args.words : "";
-      const found = (await lookups.findProducts(words).catch(() => [] as string[])).slice(0, 12);
+      const read = c.name === "product_details"
+        ? (lookups.productDetails ?? (async (w: string) => (await lookups.findProducts(w)).map((l) => `${l} (its details can't be read here)`)))
+        : lookups.findProducts;
+      const found = (await read(words).catch(() => [] as string[])).slice(0, 12);
       return { functionResponse: { ...(c.id ? { id: c.id } : {}), name: c.name, response: { result: found.length > 0 ? found : NO_MATCH } } };
     }));
     log.push(`→ ${JSON.stringify(answers.map((a) => a.functionResponse.response.result)).slice(0, 300)}`);

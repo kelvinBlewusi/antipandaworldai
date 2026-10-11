@@ -27,7 +27,7 @@
 
 import { createServerClient } from "@/lib/supabase/server";
 import {
-  sendButtonsIfConfigured, sendCtaUrlIfConfigured, sendListIfConfigured, sendTextIfConfigured,
+  sendButtonsIfConfigured, sendCtaUrlIfConfigured, sendImagesIfConfigured, sendListIfConfigured, sendTextIfConfigured,
 } from "@/lib/whatsapp/client";
 import { INTERACTIVE_BODY_MAX, splitForText } from "@/lib/whatsapp/text-limits";
 import { appUrl } from "@/lib/whatsapp/app-url";
@@ -608,7 +608,7 @@ export async function rewriteContent(
  * when they ask for a rewrite, and shown before the tap. A brand must be one
  * Jumia knows, and not forbidden in the product's category.
  */
-export async function proposeContentChange(userId: string, phone: string, query: string, req: ContentRequest): Promise<string> {
+export async function proposeContentChange(userId: string, phone: string, query: string, req: ContentRequest, which?: WhichProduct): Promise<string> {
   const ctx = await shopContext(userId, phone, CHANGES_FEATURE, CHANGES);
   if (!ctx) return "blocked";
   const products = await catalog(ctx);
@@ -621,6 +621,7 @@ export async function proposeContentChange(userId: string, phone: string, query:
   // Its sizes or colours are one product here: its content is the set's.
   const sets = Array.from(new Map(found.map((p) => [p.setSid ?? p.sid, p])).values());
   if (sets.length > 1) {
+    if (which) return which(sets);
     await sendLong(phone, [
       `"${shorten(query, 40)}" could be ${sets.length} products. Which one?`,
       ...sets.slice(0, 6).map((p) => `• ${shorten(p.name, 60)} (SKU ${p.sellerSku})`),
@@ -1257,7 +1258,14 @@ export async function answerProductInfo(userId: string, phone: string, query: st
  * for me so I can edit it" got one the AI wrote itself). Free, like the
  * rest of reading their shop.
  */
-export async function answerProductText(userId: string, phone: string, query: string): Promise<string> {
+/**
+ * Several of their products fit what they said: asked as a list to tap, with
+ * what they asked for kept for the one they pick (lib/whatsapp/assistant.ts
+ * whichOf). Without it, the names are said and they ask again.
+ */
+export type WhichProduct = (sets: ShopProduct[]) => Promise<string>;
+
+export async function answerProductText(userId: string, phone: string, query: string, which?: WhichProduct): Promise<string> {
   const ctx = await shopContext(userId, phone, "shop_whatsapp", "your live products");
   if (!ctx) return "blocked";
   const products = await catalog(ctx);
@@ -1270,6 +1278,7 @@ export async function answerProductText(userId: string, phone: string, query: st
   // Its sizes or colours share one text: the set's.
   const sets = Array.from(new Map(found.map((p) => [p.setSid ?? p.sid, p])).values());
   if (sets.length > 1) {
+    if (which) return which(sets);
     await sendLong(phone, [
       `"${shorten(query, 40)}" could be ${sets.length} products. Which one?`,
       ...sets.slice(0, 6).map((p) => `• ${shorten(p.name, 60)} (SKU ${p.sellerSku})`),
@@ -1291,6 +1300,116 @@ export async function answerProductText(userId: string, phone: string, query: st
     "", "_Read from Jumia just now._ To change it, send the new text (\"change its description to …\"), or say \"rewrite its description\" and I'll write one for you to check.",
   ].join("\n"));
   return `text of ${product.sellerSku}`;
+}
+
+/** Where one row of a product is, in a few words: ON/OFF, its quality check, price, sale and stock. Pure. */
+export function whereLine(p: ShopProduct): string {
+  const qc = p.qcStatus === "REJECTED" ? `rejected by Jumia's quality check${p.qcReason ? ` (${shorten(p.qcReason, 160)})` : ""}`
+    : p.qcStatus === "APPROVED" ? "approved" : p.qcStatus ? "waiting for Jumia's quality check" : "quality check unknown";
+  const status = p.status === "ACTIVE" ? "ON" : p.status === "INACTIVE" ? "OFF" : p.status === "DELETED" ? "deleted" : "not on Jumia in their country yet";
+  const money = (n: number | null) => (n == null ? "?" : `${p.currency ?? ""} ${n}`.trim());
+  const sale = p.salePrice != null ? `, on sale at ${money(p.salePrice)}${p.saleEnd ? ` until ${p.saleEnd.slice(0, 10)}` : ""}` : "";
+  return `${status} · ${qc} · price ${money(p.price)}${sale} · stock ${p.stock ?? "?"}`;
+}
+
+/**
+ * Everything Jumia has on one product, as the agent reads it (its
+ * product_details lookup, lib/assistant-v2/agent.ts): name, brand,
+ * category, each size with where it is, the description, highlights,
+ * every detail, and how many photos. So any question about it ("what's in
+ * the box", "what colour is it listed as", "why was it rejected") is
+ * answered from Jumia, whatever its status. Pure.
+ */
+export function productFactsText(set: ProductSet, rows: ShopProduct[]): string {
+  const bySku = new Map(rows.map((r) => [r.sellerSku, r]));
+  const highlights = htmlToText(set.attributes.find((a) => a.name === "short_description")?.value ?? "");
+  const details = set.attributes.filter((a) => a.name !== "short_description" && a.value);
+  return [
+    `Name: ${set.name}`,
+    `Brand: ${set.brand?.name ?? "?"} · Category: ${set.category?.name ?? "?"}${set.parentSku ? ` · Parent SKU: ${set.parentSku}` : ""}`,
+    `Sizes or variations (${set.variations.length}):`,
+    ...set.variations.map((v) => {
+      const row = bySku.get(v.sellerSku);
+      const own = v.attributes.filter((a) => a.value).map((a) => `${a.name}=${shorten(a.value, 60)}`).join("; ");
+      return `- ${v.variation ?? "(one size)"} · SKU ${v.sellerSku}${v.barcode ? ` · barcode ${v.barcode}` : ""}${row ? ` · ${whereLine(row)}` : ""}${own ? ` · ${own}` : ""}`;
+    }),
+    `Photos: ${set.images.length} (the main one first)`,
+    `Description: ${shorten(htmlToText(set.description), 1500) || "(none)"}`,
+    `Highlights: ${shorten(highlights, 600) || "(none)"}`,
+    `Details: ${details.map((a) => `${a.name}=${shorten(htmlToText(a.value), 120)}`).join("; ").slice(0, 2000) || "(none)"}`,
+  ].join("\n");
+}
+
+/**
+ * A product's photos, whatever its status (live, OFF, rejected, waiting for
+ * the quality check): every one Jumia has, main first, as an album on the
+ * Listing Assistant's page and one after another on WhatsApp (owner's chat,
+ * 10 Oct: "show me the pictures for that product here" got its text).
+ */
+export async function answerProductPhotos(userId: string, phone: string, query: string, which?: WhichProduct): Promise<string> {
+  const ctx = await shopContext(userId, phone, "shop_whatsapp", "your live products");
+  if (!ctx) return "blocked";
+  const products = await catalog(ctx);
+  if (!products) return "no catalog";
+  const found = findProducts(products, query);
+  if (found.length === 0) {
+    await sendTextIfConfigured(phone, `I couldn't find "${shorten(query, 60)}" among your ${products.length} Jumia products. Try its name as it shows on Jumia, or its SKU.`);
+    return "not found";
+  }
+  // Its sizes or colours share their photos: the set's.
+  const sets = Array.from(new Map(found.map((p) => [p.setSid ?? p.sid, p])).values());
+  if (sets.length > 1) {
+    if (which) return which(sets);
+    await sendLong(phone, [
+      `"${shorten(query, 40)}" could be ${sets.length} products. Which one?`,
+      ...sets.slice(0, 6).map((p) => `• ${shorten(p.name, 60)} (SKU ${p.sellerSku})`),
+    ].join("\n"));
+    return `photos unclear: ${sets.length}`;
+  }
+  const product = sets[0];
+  const set = await fetchProductSet(ctx.token, product.sellerSku);
+  if (!set.ok || !set.data) {
+    await sendTextIfConfigured(phone, `I couldn't read ${shorten(product.name, 60)} from Jumia just now${set.ok ? "" : `: ${set.message}`}. Try again in a minute.`);
+    return "set unreadable";
+  }
+  const images = [...set.data.images].sort((a, b) => Number(b.primary) - Number(a.primary)).map((i) => i.url).filter(Boolean);
+  if (images.length === 0) {
+    await sendTextIfConfigured(phone, `${shorten(set.data.name || product.name, 60)} has no photos on Jumia yet. Say "add photos to" and its name, and send them.`);
+    return `no photos for ${product.sellerSku}`;
+  }
+  await sendImagesIfConfigured(phone, images, [
+    `*${shorten(set.data.name || product.name, 80)}* (SKU ${product.sellerSku}): ${images.length} photo${images.length === 1 ? "" : "s"}, the main one first.`,
+    whereLine(product),
+  ].join("\n"));
+  return `photos of ${product.sellerSku} (${images.length})`;
+}
+
+/**
+ * The agent's product_details lookup for this seller: the products their
+ * words name, and when that's one product, everything Jumia has on it now
+ * (productFactsText). Read only, never shown to the seller as it is. Never
+ * throws.
+ */
+export function productDetailsLookup(userId: string): (words: string) => Promise<string[]> {
+  return async (words: string) => {
+    try {
+      const creds = await getValidJumiaCredentials(userId);
+      const products = (await shopProducts(userId)).filter((p) => p.status !== "DELETED");
+      const found = findProducts(products, words);
+      const sets = Array.from(new Map(found.map((p) => [p.setSid ?? p.sid, p])).values());
+      if (sets.length === 0) return [];
+      if (sets.length > 1) {
+        return [`These ${sets.length} products fit; ask which one they mean, or read one by its SKU:`, ...sets.slice(0, 8).map((p) => `- ${p.name} (SKU ${p.sellerSku})`)];
+      }
+      const set = await fetchProductSet(creds.accessToken, sets[0].sellerSku);
+      if (!set.ok || !set.data) return [`${sets[0].name} (SKU ${sets[0].sellerSku}) couldn't be read from Jumia just now.`];
+      // Every size of it, not only the ones their words matched.
+      const rows = products.filter((p) => (p.setSid ?? p.sid) === (sets[0].setSid ?? sets[0].sid));
+      return [productFactsText(set.data, rows)];
+    } catch (e) {
+      return [`Their products couldn't be read just now: ${(e as Error).message.slice(0, 100)}`];
+    }
+  };
 }
 
 /**

@@ -200,9 +200,9 @@ export const NEVER_CANT = "- Never say PandaWorld can't do something, and never 
  */
 export const AREA_ACTIONS: Record<Area, string[]> = {
   listing:       ["list", "restart", "step", "category_info"],
-  drafts:        ["edit", "submit", "polish", "draft_text", "review", "restart"],
-  live_products: ["live_change", "bulk", "content_change", "add_size", "add_photos", "product_info", "product_text", "fix_rejected", "warehouse_order", "warehouse_shipped"],
-  shop_info:     ["product_info", "stock", "shop", "fix_rejected", "product_text", "research", "report", "health_report", "listings", "brand_check", "category_info", "shops", "warehouse_stock"],
+  drafts:        ["edit", "submit", "polish", "draft_text", "product_photos", "review", "restart"],
+  live_products: ["live_change", "bulk", "content_change", "add_size", "add_photos", "product_info", "product_text", "product_photos", "fix_rejected", "warehouse_order", "warehouse_shipped"],
+  shop_info:     ["product_info", "stock", "shop", "fix_rejected", "product_text", "product_photos", "research", "report", "health_report", "listings", "brand_check", "category_info", "shops", "warehouse_stock"],
   orders:        ["orders", "order_status", "sales"],
   money:         ["credits", "payouts", "payout_detail", "fees"],
   account_help:  ["help", "credits"],
@@ -256,6 +256,7 @@ export const EXAMPLES: Record<Area, string[]> = {
     '"what did you list for me from this chat?" → {"type":"research","needs":[{"source":"pandaworld_listings","period":"month"}]}',
     '"give me the stock of all my on products" → {"type":"research","needs":[{"source":"products","sort":"stock_low","filter":"active","words":null,"limit":30,"since":null}]}',
     '"print the neck fan\'s description here so I can edit it" → {"type":"product_text","product":"neck fan"}',
+    '"i have a fan in the shop, show me the pictures for that product here" → {"type":"product_photos","product":"fan"}',
     '"can you fix my rejected products?" → {"type":"fix_rejected","product":null,"reason":null}',
   ],
   orders: [
@@ -296,7 +297,7 @@ function readerPrompt(areas: Area[], input: FrontDoorInput): string {
     ...(input.memory ? ["", "What you remember about them from earlier (to understand them; never quote it):", input.memory] : []),
     "", "What PandaWorld can do (all true; nothing else is: there is no team doing things by hand):", capabilities(input.listingCost ?? 2),
     "", "Not possible from here (Jumia only allows it in Vendor Center, or nobody can): answer these with cannot:", cannotList(),
-    "", "What the chat does, by key (for capability):", canList(),
+    "", "What the chat does, by key (for capability, and not_yet's instead):", canList(),
     ...(replyArea ? [
       "", siteGuide(),
       "", "Links you can send (put the key in \"link\"):", ...Object.entries(input.links).map(([k, l]) => `- ${k}: ${l.what}`),

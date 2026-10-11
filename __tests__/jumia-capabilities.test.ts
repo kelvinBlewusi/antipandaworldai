@@ -62,6 +62,14 @@ describe("the list of what's possible", () => {
     for (const t of said) expect({ t, api: /\bAPI\b(?! key)/.test(t) }).toEqual({ t, api: false });
   });
 
+  // Owner, 2026-10-11: "if our system has no way to do the thing, how do we
+  // show it the way to do what is possible": every "can't" says what can.
+  it("every answer that says it can't here offers the nearest thing that can be done", () => {
+    for (const c of CAPABILITIES.filter((x) => x.status === "vendor_center" || x.status === "impossible" || x.status === "not_built")) {
+      expect({ id: c.id, offers: /\bI(?: can|'ll)\b/.test(c.answer ?? "") }).toEqual({ id: c.id, offers: true });
+    }
+  });
+
   it("the AI is told only what isn't possible, by key, and gets back the fixed answer", () => {
     expect(cannotList()).toContain("- delete_product: Delete a product");
     expect(cannotList()).not.toContain("live_stock");

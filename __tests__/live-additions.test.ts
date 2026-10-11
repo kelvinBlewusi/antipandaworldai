@@ -73,6 +73,18 @@ describe("fixing a rejected product from the chat", () => {
     expect(plan).toMatchObject({ kind: "rewrite", fields: ["name"], instructions: expect.stringContaining("Wrong Title") });
   });
 
+  it("does what the seller asked as well as what Jumia's reason says (owner, 2026-10-11)", () => {
+    const why = "Jumia's quality check rejected it (Wrong Title).";
+    const plan = fixPlan({ kind: "redraft", why }, "Portable USB Neck Fan – 360°", "Wrong Title", undefined,
+      "fix the neck fan, and say in the description that it charges by USB-C");
+    expect(plan).toMatchObject({ kind: "rewrite", fields: ["name", "description"], intro: expect.stringContaining("as you asked") });
+    expect((plan as { instructions: string }).instructions).toContain("Wrong Title");
+    expect((plan as { instructions: string }).instructions).toContain('What the seller asked for: "fix the neck fan, and say in the description that it charges by USB-C"');
+    // Their words alone, when Jumia's reason names no field.
+    expect(fixPlan({ kind: "redraft", why }, "Neck Fan", "Poor quality content", undefined, "the highlights are too long")).toMatchObject({ fields: ["highlights"] });
+    expect(fixPlan({ kind: "redraft", why }, "Neck Fan", "Poor quality content", undefined, "fix it")).toMatchObject({ fields: ["name", "description"] });
+  });
+
   it("asks for what only the seller knows, in the words that change it", () => {
     const brand = fixPlan({ kind: "ask_brand", why: " (Wrong Brand)" }, "Portable USB Neck Fan – 360°", "Wrong Brand");
     expect(brand).toMatchObject({ kind: "say", text: expect.stringContaining("change the portable usb neck fan's brand to") });
@@ -174,9 +186,9 @@ describe("more photos for a live product", () => {
       .toEqual({ type: "fix_rejected", product: null, reason: null });
     expect(parseAction('{"type":"fix_rejected","product":"neck fan","reason":"Wrong Title, the name doesn\'t say what it is"}',
       "fix the neck fan: Wrong Title, the name doesn't say what it is", [], links))
-      .toEqual({ type: "fix_rejected", product: "neck fan", reason: "Wrong Title, the name doesn't say what it is" });
+      .toEqual({ type: "fix_rejected", product: "neck fan", reason: "Wrong Title, the name doesn't say what it is", asked: "fix the neck fan: Wrong Title, the name doesn't say what it is" });
     expect(parseAction('{"type":"fix_rejected","product":"neck fan","reason":"Blurry photos"}', "fix the neck fan", [], links))
-      .toEqual({ type: "fix_rejected", product: "neck fan", reason: null });
+      .toEqual({ type: "fix_rejected", product: "neck fan", reason: null, asked: "fix the neck fan" });
   });
 });
 

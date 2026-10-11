@@ -2869,6 +2869,89 @@ report and a weekly test run. All four are done (11 Oct).
   reply is the reading call's. Prompt checks now look at the front door's
   reading prompt. The word-rule tests became "the AI's choice stands" tests.
 
+### Tools for what Jumia allows (owner, 2026-10-11: "get the API doc now so we learn from there… if our system has no way to do the thing how do we show it the way to do what is possible")
+
+The approach: the chat gets general tools that match what Jumia allows (read
+anything about a product, change what Jumia lets change), which the AI
+combines however a seller phrases it, instead of a rule per phrase. Where
+Jumia allows nothing, the answer says what can be done instead.
+
+- **Jumia's spec in the repo**: docs/jumia-api (fetched 11 Oct; refresh with
+  scripts/fetch-jumia-spec.mjs, which sends a User-Agent or Jumia's CDN
+  answers 403). __tests__/jumia-spec.test.ts fails when a documented request
+  isn't behind a capability or in `UNUSED_REQUESTS` with a reason, or when
+  `UPDATE_TABLE` (lib/jumia/capabilities.ts) differs from Jumia's "Allow
+  Update" table. What the spec settles:
+  - a product read gives every photo and each country's QC reason and comment, whatever its status;
+  - nothing limits content updates to approved products;
+  - the main photo, main category, parent SKU and price can't change through an update (price and sale have their own feed, for approved products);
+  - status takes ACTIVE or INACTIVE only, so there's no delete.
+- **Never "API" to a seller**: answers say what "Jumia only allows in Vendor
+  Center". __tests__/jumia-capabilities.test.ts keeps "API" out of every
+  `yes` and `answer` (PandaWorld's own "API key" excepted).
+- **Reading any product** (`product_photos`, `product_details`):
+  - `product_photos` (lib/whatsapp/shop.ts `answerProductPhotos`): every
+    photo Jumia has, the main one first, sent as images with name, SKU and
+    `whereLine` ("ON · approved · price GHS 99.5 · stock 3"; a rejected one
+    adds the reason). Works in any status. A draft named by its name or
+    number ("draft 2") gets the photos it was drafted from.
+  - `product_details` is an agent lookup like `find_products`
+    (lib/assistant-v2/agent.ts `LOOKUP_TOOLS`). `productDetailsLookup` reads
+    the product from Jumia now and gives `productFactsText`: name, brand,
+    category, parent SKU, each size with SKU, barcode, `whereLine` and
+    details, the photo count, description, highlights and details. The
+    agent answers any question about the product from it with `reply`.
+    Several matches give their names and SKUs to ask which; none gives [].
+  - `findProducts` takes "SKU GEMMALLUSBF" as the SKU.
+- **"Which one?" keeps the request** (owner's chat, 9–10 Oct: the question
+  came as plain text and the request was lost):
+  - When several products fit, `answerProductText`, `answerProductPhotos`
+    and `proposeContentChange` call a `WhichProduct` callback.
+    `whichOf` (lib/whatsapp/assistant.ts) stores
+    `assistantPending: { kind: "product_pick", action, skus }` and sends a
+    list (`ppick:<i>`, up to 10 rows).
+  - intake.ts answers it before anything else (`answerProductPick`): a tap,
+    the row's number as typed, or one of the SKUs. The stored action is
+    then carried out on that SKU with no new AI call.
+  - Anything else drops the question, and the message is read as usual. A
+    list older than `PENDING_TTL_MS` isn't answered.
+- **Changing any product**: name, description, highlights, brand, details,
+  barcode and size names change in any status (`content_change`). Stock,
+  price, sale and ON/OFF wait for the first QC approval (`before_qc`).
+- **Fixing a rejected product the seller's way**: `fix_rejected` carries
+  `asked` (their message). `fixPlan(…, said)`:
+  - rewrites the fields Jumia's reason names plus the ones their words name
+    (`namedFields`);
+  - gives the writer both: "What the seller asked for: …".
+  When Jumia sent no reason but their words name a field ("the description
+  is too short"), it rewrites that field instead of asking them to paste
+  Vendor Center's reason. When they already give the value (a brand, a
+  detail), the tool description points the agent to `content_change`.
+- **The nearest thing that can be done**:
+  - Every `vendor_center`, `impossible` and `not_built` answer says what the
+    chat can do instead ("I can…"). A test checks every one.
+  - `not_yet` takes `instead`: a key from What the chat does (other
+    sellers' prices → `fees`). The reply becomes `NOT_YET_TEXT` plus
+    `insteadLine(key)`: "What I can do instead: " and that capability's own
+    words. Never the AI's own words. A key the chat doesn't do, or
+    `outside`, adds nothing.
+- **Test set**: 8 new cases, all scored on the action type:
+  - the owner's three messages: fan pictures, then "SKU GEMMALLUSBF this one", and the wellington boot's images;
+  - a draft's photos;
+  - a product question;
+  - a rejected product's rewrite;
+  - a fix with the brand given;
+  - other sellers' prices.
+  In test runs, `product_details` answers with the product's name and the
+  same stand-in details for every product.
+- **Not yet confirmed in practice**: an update to a rejected product being
+  taken and re-checked by Jumia. The spec allows it, and two such fixes for
+  the owner's shop are waiting for the owner's tap.
+- Tests: whatsapp-assistant.test.ts ("a product's photos, anything about it,
+  and which one"), jumia-shop-more.test.ts (photos, which-one, full facts,
+  the seller's way of fixing a rejected product), live-additions.test.ts,
+  jumia-capabilities.test.ts, jumia-spec.test.ts.
+
 ### A batch Jumia turned down (owner's WhatsApp, 2026-10-11)
 
 "RESTOCK everything in the shop to 10 pcs" became 267 products in 2 feeds.

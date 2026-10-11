@@ -54,6 +54,18 @@ export interface LiveValueAsk {
 }
 
 /**
+ * "Which product?" asked as a list to tap, when what the seller said fits
+ * several (lib/whatsapp/assistant.ts whichOf): what they asked for, kept for
+ * the one they pick, by SKU in the list's order.
+ */
+export interface ProductPickAsk {
+  kind:   "product_pick";
+  action: Record<string, unknown>;
+  skus:   string[];
+  at:     string;
+}
+
+/**
  * Photos coming in for a live product (lib/whatsapp/live-photos.ts): the
  * change they go in, its product's name, and how many more it can take.
  */
@@ -173,7 +185,7 @@ export interface WhatsAppSession {
    * for the tap or the number. Null when none is outstanding; anything
    * that isn't an answer drops it. See lib/whatsapp/assistant.ts.
    */
-  assistantPending: AssistantPending | LiveValueAsk | AddPhotosAsk | null;
+  assistantPending: AssistantPending | LiveValueAsk | AddPhotosAsk | ProductPickAsk | null;
   /** The products the assistant last listed (ListedProducts). */
   lastListed: ListedProducts | null;
 }
@@ -207,7 +219,7 @@ function fromRow(row: Record<string, unknown>): WhatsAppSession {
     lastSubmittedBatchId: (row.last_submitted_batch_id as string | null) ?? null,
     batchQuiet: (row.batch_quiet as boolean | null) ?? null,
     preferredBatchQuiet: (row.preferred_batch_quiet as boolean | null) ?? null,
-    assistantPending: (row.assistant_pending as AssistantPending | LiveValueAsk | AddPhotosAsk | null) ?? null,
+    assistantPending: (row.assistant_pending as AssistantPending | LiveValueAsk | AddPhotosAsk | ProductPickAsk | null) ?? null,
     lastListed: (row.last_listed as ListedProducts | null) ?? null,
   };
 }
@@ -343,7 +355,7 @@ export async function updateSession(
     lastSubmittedBatchId: string | null;
     batchQuiet: boolean | null;
     preferredBatchQuiet: boolean | null;
-    assistantPending: AssistantPending | LiveValueAsk | AddPhotosAsk | null;
+    assistantPending: AssistantPending | LiveValueAsk | AddPhotosAsk | ProductPickAsk | null;
     lastListed: ListedProducts | null;
   }>,
 ): Promise<void> {

@@ -51,7 +51,7 @@ import { creditReach } from "@/lib/billing/credit-status";
 import { checkRestrictedBrand } from "@/lib/jumia/prohibited-catalog";
 import { priceMinimumForUser, isBelowMinimum, money } from "@/lib/jumia/price-minimums";
 import {
-  sendButtonsIfConfigured, sendCtaUrlIfConfigured, sendListIfConfigured, sendTextIfConfigured,
+  sendButtonsIfConfigured, sendCtaUrlIfConfigured, sendImagesIfConfigured, sendListIfConfigured, sendTextIfConfigured,
 } from "@/lib/whatsapp/client";
 import {
   COUNT_QUICK_PICKS, MAX_BATCH_SIZE, buyCreditsUrl, extractDateRange, extractSalePrice, findDateIn, focusedEditorUrl, whatsappListingsUrl,
@@ -66,7 +66,8 @@ import { currentPack, featureAccess, featureMinPackName, type FeatureId } from "
 import {
   BULK_MAX, BULK_PARTS_MAX, MAX_GROUP, answerFees, answerListings, answerOrderStatus, answerPayouts, answerProductInfo, answerProductText, answerProducts,
   answerSales, answerStock, htmlToText, sendLong,
-  proposeAddSize, proposeBulkChange, proposeContentChange, proposeLiveChange, type AddSizeRequest, type BulkScope, type ContentRequest,
+  answerProductPhotos, productDetailsLookup, proposeAddSize, proposeBulkChange, proposeContentChange, proposeLiveChange, shorten, whereLine,
+  type AddSizeRequest, type BulkScope, type ContentRequest, type WhichProduct,
 } from "@/lib/whatsapp/shop";
 import { fixRejected } from "@/lib/whatsapp/fix-rejected";
 import {
@@ -75,7 +76,7 @@ import {
 } from "@/lib/whatsapp/shop-insights";
 import { shopProducts, type LiveChange, type ShopProduct } from "@/lib/jumia/shop";
 import { answerResearch, parseNeeds, type ResearchNeed } from "@/lib/whatsapp/shop-research";
-import { cannotAnswer, capability, capabilityAnswer } from "@/lib/jumia/capabilities";
+import { cannotAnswer, capability, capabilityAnswer, insteadLine } from "@/lib/jumia/capabilities";
 import { INTERACTIVE_BODY_MAX, splitForText } from "@/lib/whatsapp/text-limits";
 import { assistantGate, assistantSwitchedOn } from "@/lib/whatsapp/assistant-limits";
 import { blankCodes, noteSellerMessage, sellerMemory } from "@/lib/whatsapp/seller-memory";
@@ -205,10 +206,13 @@ export type AssistantAction =
   | { type: "live_change"; product: string; change: LiveChange; fromContext?: boolean; others?: string[]; all?: boolean }
   | { type: "product_info"; product: string }
   | { type: "product_text"; product: string }
+  /** A product's photos, whatever its status; `seq` when it's a draft here. */
+  | { type: "product_photos"; product: string; seq?: number }
   /** Drafts' own text as drafted (name, price, sizes, highlights, description), from the listing rows. */
   | { type: "draft_text"; seqs: number[] }
   /** Products Jumia's quality check rejected: the list (no product), or one's fix; `reason` is Jumia's, pasted by the seller. */
-  | { type: "fix_rejected"; product: string | null; reason: string | null }
+  /** asked: the seller's own message, for what they want the fix to do. */
+  | { type: "fix_rejected"; product: string | null; reason: string | null; asked?: string }
   /** A new size (or colour) for a live product, with its stock and price (lib/whatsapp/shop.ts proposeAddSize). */
   | { type: "add_size"; product: string; request: AddSizeRequest }
   /** More photos for a live product, sent next (lib/whatsapp/live-photos.ts). */
@@ -258,7 +262,7 @@ export type AssistantAction =
  */
 export const ACTION_TYPES = [
   "edit", "submit", "list", "restart", "review", "orders", "credits", "help", "reply", "live_change", "product_info", "product_text",
-  "draft_text", "fix_rejected", "add_size", "add_photos", "fees", "stock", "shop", "order_status", "sales", "listings", "payouts",
+  "draft_text", "product_photos", "fix_rejected", "add_size", "add_photos", "fees", "stock", "shop", "order_status", "sales", "listings", "payouts",
   "payout_detail", "report", "bulk", "content_change", "brand_check", "category_info", "shops", "warehouse_stock", "warehouse_order",
   "warehouse_shipped", "polish", "health_report", "research", "note", "not_yet", "unclear",
 ] as const satisfies readonly AssistantAction["type"][];
@@ -296,8 +300,9 @@ export function capabilities(listingCost = LIVE_LISTING_CREDIT_COST): string {
     `- Their live Jumia products, found by name among everything in their shop: change a product's stock, price, a sale price with its dates, end its sale, or turn it on or off, for one product or several named together (up to ${MAX_GROUP}). One product's stock, ON/OFF or ending its sale is done straight away when they name it; a price, a sale, a product taken from the conversation, or several products wait for one tap to confirm; where a product is (on or off, Jumia's quality check, price, sale, stock); how many are left; what's out of stock or low; which products are turned off or rejected by Jumia's quality check.`,
     `- Rules for many products at once, shown in full before one tap: prices up or down by a percentage, a sale a percentage off (with dates), a stock or price, ending sales, turning on or off; for all their products, the ones out of stock, low, off or on, or all that match words ("all perfumes"); up to ${BULK_MAX} products per tap, and a bigger rule in parts of ${BULK_MAX}, one tap each (up to ${BULK_MAX * BULK_PARTS_MAX}).`,
     "- A live product's name, description and highlights shown as Jumia has them now (product_text). Changing them, or the brand: the seller's own text, or rewritten by AI from what Jumia has now with their instructions (\"remove the word X from the name\"), shown before one tap. Also its other details (colour, material, weight, model and whatever its category takes, checked against Jumia's options), its barcode, or a size's name. Jumia checks content changes again. More photos after its main one (add_photos: they send them, then Done, and they go to Jumia), and a new size or colour with its own stock and price (add_size: one tap; Jumia's quality check looks at it like a new product). Its main photo and category are changed in Vendor Center.",
+    "- A product's photos (product_photos): every photo Jumia has, the main one first, whatever its status (ON, OFF, rejected, waiting for the quality check), or a draft's photos. Anything about one product, read from Jumia just now (its details, sizes, barcode, description, Jumia's reason for rejecting it), answered in a line or two. Its name, description, highlights, brand, details, barcode and size names change whatever its status too; only stock, price, sale and ON/OFF wait for its first approval.",
     "- Reports: best sellers, products with no sale, what runs out soon at the rate it sells, returns and failed deliveries, for the last 7, 30 or 90 days.",
-    "- Products rejected by Jumia's quality check: which ones, with Jumia's reason when Jumia sends one with the product (often it doesn't: then the reason is only in Vendor Center, never guessed). Fixing them (fix_rejected): one listed through PandaWorld gets its Fix & resubmit (redrafted, or the seller asked for what only they know, and sent again); one listed another way gets a rewritten name or description, a brand or a detail from the seller, shown before one tap, and Jumia checks it again. Its category, main photo or price before approval can't change through Jumia's API: those are changed in Vendor Center, or it is listed again here.",
+    "- Products rejected by Jumia's quality check: which ones, with Jumia's reason when Jumia sends one with the product (often it doesn't: then the reason is only in Vendor Center, never guessed). Fixing them (fix_rejected): one listed through PandaWorld gets its Fix & resubmit (redrafted, or the seller asked for what only they know, and sent again); one listed another way gets a rewritten name or description, a brand or a detail from the seller, shown before one tap, and Jumia checks it again. Its category, main photo or price before approval Jumia only lets change in Vendor Center; or it is listed again here. Never say \"API\" to a seller.",
     "- Payouts: the last Jumia payout and the statement not yet paid; every statement of the last 90 days; one statement's fees, refunds and balances. A message when Jumia pays: Pro and up.",
     "- Lists of products show up to 30 at a time, so a message stays readable on a phone; \"more\" shows the next 30. The shop overview also counts the products deleted on Jumia.",
     "- What PandaWorld keeps itself: every product listed through it (from WhatsApp, the website or the extension), with its status and date; the chat's own history of the last messages.",
@@ -1138,7 +1143,10 @@ function parseActionRaw(
     }
     case "not_yet": {
       const what = typeof parsed.what === "string" && parsed.what.trim() ? parsed.what.trim().slice(0, 200) : message.trim().slice(0, 200);
-      return { type: "not_yet", what, outside: parsed.outside === true };
+      const outside = parsed.outside === true;
+      // The nearest thing the chat does, in the list's own words, never the AI's.
+      const instead = outside ? null : insteadLine(String(parsed.instead ?? ""));
+      return { type: "not_yet", what, outside, ...(instead ? { text: `${NOT_YET_TEXT} ${instead}` } : {}) };
     }
     case "capability":
     case "can": {
@@ -1172,7 +1180,8 @@ function parseActionRaw(
       // test run of 11 Oct): something PandaWorld doesn't do, so not_yet;
       // one it does has its own key and never lands here.
       if (capability(id)) return { type: "unclear" };
-      return { type: "not_yet", what: id ? id.replace(/_/g, " ").slice(0, 200) : message.trim().slice(0, 200), outside: false };
+      const instead = insteadLine(String(parsed.instead ?? ""));
+      return { type: "not_yet", what: id ? id.replace(/_/g, " ").slice(0, 200) : message.trim().slice(0, 200), outside: false, ...(instead ? { text: `${NOT_YET_TEXT} ${instead}` } : {}) };
     }
     case "draft_text": {
       // Reading a draft changes nothing: any of theirs, said or not; the only one when none is named.
@@ -1187,6 +1196,15 @@ function parseActionRaw(
       if (draft != null) return { type: "draft_text", seqs: [draft] };
       return namesAProduct(product) && (productBacked(product, message) || productBacked(product, context))
         ? { type: "product_text", product } : ask("Which product? Tell me its name as it shows on Jumia, e.g. \"show me the neck fan's description\".");
+    }
+    case "product_photos":
+    case "photos": {
+      const product = typeof parsed.product === "string" ? parsed.product.trim().slice(0, 120) : "";
+      // A draft by its name, or by its number ("draft 1", "product 2").
+      const draft = draftNamed(product) ?? draftNumberIn(product, products);
+      if (draft != null) return { type: "product_photos", product, seq: draft };
+      return namesAProduct(product) && (productBacked(product, message) || productBacked(product, context))
+        ? { type: "product_photos", product } : ask("Which product's photos? Tell me its name as it shows on Jumia, e.g. \"show me the kettle's photos\".");
     }
     case "add_size": {
       const product = typeof parsed.product === "string" ? parsed.product.trim().slice(0, 120) : "";
@@ -1212,7 +1230,8 @@ function parseActionRaw(
       const product = named && namesAProduct(named) && (productBacked(named, message) || productBacked(named, context)) ? named : null;
       const said = typeof parsed.reason === "string" ? parsed.reason.trim().slice(0, 600) : "";
       const reason = said.length >= 4 && message.toLowerCase().includes(said.toLowerCase().slice(0, 40)) ? said : null;
-      return { type: "fix_rejected", product, reason };
+      // Their own words go with it: what they want the fix to do ("…and make the name shorter").
+      return product ? { type: "fix_rejected", product, reason, asked: message.trim().slice(0, 400) } : { type: "fix_rejected", product, reason };
     }
     case "fees":
     case "calculator": {
@@ -1616,7 +1635,9 @@ export async function interpretThroughAgent(
     seller: seller.lines, links, currency, web: opts.web ?? false, shopNames: shop.map((p) => p.name).filter(Boolean), listingCost,
     position: opts.position, memory, ...(opts.answered ? { answered: opts.answered } : {}),
   };
-  const read = await agentRead(input, geminiAgentCall(model, agentSystem(listingCost), { feature: "assistant", userId }), catalogLookups(shop));
+  const read = await agentRead(input, geminiAgentCall(model, agentSystem(listingCost), { feature: "assistant", userId }), {
+    ...catalogLookups(shop), productDetails: productDetailsLookup(userId),
+  });
   return { actions: read.actions, clarify: read.clarify, links, raw: `[agent ${model}] ${read.raw}` };
 }
 
@@ -2141,7 +2162,18 @@ async function carryOut(
     case "product_info":
       return answerProductInfo(userId, phone, action.product);
     case "product_text":
-      return answerProductText(userId, phone, action.product);
+      return answerProductText(userId, phone, action.product, whichOf(userId, phone, action));
+    case "product_photos": {
+      if (action.seq != null) {
+        // A draft here: the photos it was drafted from (and any polished ones).
+        const draft = products.find((p) => p.seq === action.seq);
+        const images = ((draft?.listing.images ?? []) as string[]).filter((u) => typeof u === "string" && /^https?:/.test(u));
+        if (!draft || images.length === 0) return answerProductPhotos(userId, phone, action.product, whichOf(userId, phone, action));
+        await sendImagesIfConfigured(phone, images, `Product ${draft.seq}${draft.listing.title ? ` (${draft.listing.title})` : ""}: ${images.length} photo${images.length === 1 ? "" : "s"}, as drafted.`);
+        return `draft photos ${draft.seq} (${images.length})`;
+      }
+      return answerProductPhotos(userId, phone, action.product, whichOf(userId, phone, action));
+    }
     case "draft_text": {
       const shown = products.filter((p) => action.seqs.includes(p.seq));
       if (!batchId || shown.length === 0) return "default";
@@ -2151,7 +2183,7 @@ async function carryOut(
       return `draft text ${shown.map((p) => p.seq).join(", ")}`;
     }
     case "fix_rejected":
-      return fixRejected(userId, phone, action.product, action.reason);
+      return fixRejected(userId, phone, action.product, action.reason, action.asked ?? null);
     case "add_size":
       return proposeAddSize(userId, phone, action.product, action.request);
     case "add_photos": {
@@ -2182,7 +2214,7 @@ async function carryOut(
     case "bulk":
       return proposeBulkChange(userId, phone, action.scope, action.words, action.change, action.scope === "listed" ? session.lastListed?.sids ?? [] : []);
     case "content_change":
-      return proposeContentChange(userId, phone, action.product, action.request);
+      return proposeContentChange(userId, phone, action.product, action.request, whichOf(userId, phone, action));
     case "brand_check":
       return answerBrand(userId, phone, action.brand, action.product);
     case "category_info":
@@ -2292,6 +2324,54 @@ export async function answerLiveValue(userId: string, phone: string, session: Wh
   if (!change) return false;
   const outcome = await proposeLiveChange(userId, phone, pending.products.length === 1 ? pending.products[0] : pending.products, change, { preferSid: pending.preferSid });
   await logTurn(userId, "idle", text ?? "", null, `answered ${pending.field}: ${outcome}`);
+  return true;
+}
+
+/**
+ * Several of their products fit what they said (owner's chat, 9 Oct: "set
+ * the neck fan's colour to white" took six messages, the "which one?" being
+ * plain text and the change forgotten): asked as a list to tap, and what
+ * they asked for kept for the one they pick (answerProductPick).
+ */
+function whichOf(_userId: string, phone: string, action: AssistantAction): WhichProduct {
+  return async (sets) => {
+    const shown = sets.slice(0, 10);
+    await updateSession(phone, {
+      assistantPending: { kind: "product_pick", action: action as unknown as Record<string, unknown>, skus: shown.map((p) => p.sellerSku), at: new Date().toISOString() },
+    });
+    await sendListIfConfigured(phone,
+      `${sets.length} of your products fit. Which one do you mean?${sets.length > shown.length ? ` (The first ${shown.length}; say its SKU for another.)` : ""}`,
+      "Choose product",
+      shown.map((p, i) => ({
+        id: `ppick:${i}`,
+        title: shorten(p.name, 24),
+        description: shorten(`SKU ${p.sellerSku} · ${whereLine(p)}`, 72),
+      })));
+    return `asked which of ${sets.length}`;
+  };
+}
+
+/**
+ * The answer to whichOf's list: a tap (`ppick:1`), the number of a row as
+ * typed ("2"), or one of the SKUs. What they asked for is then carried out
+ * on that product. False for anything else: the question goes, and the
+ * message is read as usual.
+ */
+export async function answerProductPick(userId: string, phone: string, session: WhatsAppSession, text: string | undefined): Promise<boolean> {
+  const pending = session.assistantPending;
+  if (!pending || !("kind" in pending) || pending.kind !== "product_pick") return false;
+  await updateSession(phone, { assistantPending: null });
+  if (Date.now() - new Date(pending.at).getTime() > PENDING_TTL_MS) return false;
+  const t = (text ?? "").trim();
+  const tap = /^ppick:(\d{1,2})$/i.exec(t);
+  const typed = /^#?(\d{1,2})[.!]?$/.exec(t);
+  const sku = tap ? pending.skus[Number(tap[1])]
+    : typed ? pending.skus[Number(typed[1]) - 1]
+    : pending.skus.find((s) => s.toLowerCase() === t.toLowerCase().replace(/^sku\b[\s:#.-]*/, ""));
+  if (!sku) return false;
+  const action = { ...pending.action, product: sku } as unknown as AssistantAction;
+  const done = await carryOut(userId, phone, "idle", session.batchId ?? null, [], action, t, assistantLinks(), session);
+  await logTurn(userId, "idle", t, action, `picked ${sku}: ${done}`);
   return true;
 }
 

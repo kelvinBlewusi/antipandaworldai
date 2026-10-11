@@ -261,7 +261,7 @@ export const ACTION_DEFS: ActionDef[] = [
     name: "fix_rejected",
     line: ['{"type":"fix_rejected","product":"<their words>" or null,"reason":"<Jumia\'s reason as they pasted it>" or null} - fix products Jumia\'s quality check rejected: null product to see them and pick one.'],
     tool: {
-      does: "Fix products Jumia's quality check rejected. Leave product out when they mean all of them or none in particular (they see the list and pick one).",
+      does: "Fix products Jumia's quality check rejected, by Jumia's reason and what they ask for in their message (their words go with it). Leave product out when they mean all of them or none in particular (they see the list and pick one). When they already give the new value (a brand, a detail, their own text), content_change on that product sends it instead.",
       fields: { product: str("One rejected product in their words; never \"rejected\" or \"all\"."), reason: str("Jumia's reason as they pasted it.") },
     },
     sample: { message: "fix my rejected products", args: {} },
@@ -293,6 +293,13 @@ export const ACTION_DEFS: ActionDef[] = [
     lineIn: { live_products: ['{"type":"product_text","product":"<their words>"} - show a product\'s name, description and highlights as Jumia has them now, so they can read or edit them.'] },
     tool: { does: "A product's name, description and highlights as Jumia has them, to read or edit.", fields: { product: PRODUCT }, required: ["product"] },
     sample: { message: "show me the kettle's description", args: { product: "kettle" } },
+  },
+  {
+    // Owner's chat, 10 Oct: "show me the pictures for that product" got its text.
+    name: "product_photos",
+    line: ['{"type":"product_photos","product":"<their words>"} - show a product\'s photos, whatever its status (ON, OFF, rejected, waiting for quality check), or a draft\'s.'],
+    tool: { does: "Show a product's photos: every photo Jumia has, the main one first, whatever its status (ON, OFF, rejected, waiting for the quality check); a draft's photos when it names a draft (by its name, or \"draft 2\").", fields: { product: PRODUCT }, required: ["product"] },
+    sample: { message: "show me the pictures of the kettle", args: { product: "kettle" } },
   },
   {
     name: "stock",
@@ -455,19 +462,22 @@ export const ACTION_DEFS: ActionDef[] = [
   },
   {
     name: "not_yet",
-    line: ['{"type":"not_yet","what":"<what they asked for, in a few words>","outside":false} - they ask for something no action here does and that isn\'t on Not possible: PandaWorld says it can\'t do that yet and notes the request. "outside":true when it has nothing to do with Jumia, selling or PandaWorld (the weather, football, homework).'],
+    line: ['{"type":"not_yet","what":"<what they asked for, in a few words>","outside":false,"instead":"<a key from What the chat does>" or null} - they ask for something no action here does and that isn\'t on Not possible: PandaWorld says it can\'t do that yet and notes the request. "outside":true when it has nothing to do with Jumia, selling or PandaWorld (the weather, football, homework). "instead": the nearest thing the chat does that helps with what they want, when one does (other sellers\' prices → fees; a sales chart → sales).'],
     tool: {
-      does: "They ask for something no tool does and that isn't on Not possible: PandaWorld says it can't do that yet and notes the request. outside: true when it has nothing to do with Jumia, selling or PandaWorld.",
-      fields: { what: str("What they asked for, in a few words."), outside: bool("Nothing to do with Jumia, selling or PandaWorld (the weather, football, homework).") },
+      does: "They ask for something no tool does and that isn't on Not possible: PandaWorld says it can't do that yet and notes the request. outside: true when it has nothing to do with Jumia, selling or PandaWorld. instead: the nearest thing the chat does that helps with what they want, when one does.",
+      fields: {
+        what: str("What they asked for, in a few words."), outside: bool("Nothing to do with Jumia, selling or PandaWorld (the weather, football, homework)."),
+        instead: str("A key from What the chat does: the nearest thing it does that helps with what they want (other sellers' prices → fees; a sales chart → sales)."),
+      },
       required: ["what"],
     },
-    sample: { message: "can you post my products on instagram?", args: { what: "post products on Instagram" } },
+    sample: { message: "what do other sellers charge for the kettle?", args: { what: "other sellers' prices", instead: "fees" } },
   },
   {
     name: "reply",
     line: ['{"type":"reply","text":"<your message>","link":"<a link key, or null>"} - a question you answer in a line or two; a hello; anything this area\'s actions don\'t cover.'],
     tool: {
-      does: "A short answer in your words: a hello, thanks, a question about PandaWorld or their account, anything the other tools don't cover. Never says you did, paused, stopped, changed or will change anything, never gives a number about their shop or credits (tools read them), and never says PandaWorld can't do something or sends them to Vendor Center for it (what isn't possible is cannot; what PandaWorld doesn't do, not_yet; the rest has a tool).",
+      does: "A short answer in your words: a hello, thanks, a question about PandaWorld or their account, a question about one product answered from what product_details gave you, anything the other tools don't cover. Never says you did, paused, stopped, changed or will change anything, never gives a number about their shop or credits (tools read them) except what product_details gave you, and never says PandaWorld can't do something or sends them to Vendor Center for it (what isn't possible is cannot; what PandaWorld doesn't do, not_yet; the rest has a tool).",
       fields: { text: str("Your message."), link: str("A link key, if one fits.") }, required: ["text"],
     },
     sample: { message: "thanks", args: { text: "You're welcome! 🙌" } },
