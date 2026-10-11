@@ -454,6 +454,15 @@ describe("agent mode (the pilot, owner 2026-10-10)", () => {
     expect(sent[0]).toMatchObject({ kind: "buttons", body: "Which kettle?", rows: ["answer:Nasco 1.7L", "answer:Binatone 2L"] });
   });
 
+  it("the front door reads what it found nothing to do with", async () => {
+    db.tables.app_settings = [{ key: "assistant_agent", value: "all" }, { key: "assistant_front_door", value: "all" }];
+    toolReplies.push([{ name: "capability", args: { what: "teleport" } }]);
+    aiReplies.push('{"area":"orders"}', '{"type":"orders"}');
+    expect(await runAssistant("seller", "233", session(), "show me my orders", "idle")).toBe("handled");
+    expect(orderCalls).toEqual(["orders"]);
+    expect((db.tables.whatsapp_assistant_log as { raw: string }[])[0].raw).toMatch(/^\[agent found nothing to do: /);
+  });
+
   it("falls back to the front door when it fails", async () => {
     db.tables.app_settings = [{ key: "assistant_agent", value: "all" }, { key: "assistant_front_door", value: "all" }];
     aiReplies.push('{"area":"orders"}', '{"type":"orders"}');

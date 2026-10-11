@@ -2507,8 +2507,12 @@ checks and taps.
   through AI Studio. It records usage like every other call.
 - **Switch**: app_settings `assistant_agent`: `"admins"`, `"all"`, or a list
   of user ids; off without the row (`agentFor`). Set to `"admins"` on
-  10 Oct after round 5 (the pilot: the owner's account first); delete the
-  row to go back to the front door. Model: app_settings
+  10 Oct after round 5 (the pilot: the owner's account first). **`"all"` since
+  11 Oct** (owner: "make agent mode the main reader for everyone and keep the
+  front door as its automatic backup"); set `"admins"` or delete the row to
+  go back to the front door. The front door reads a message when the agent
+  fails or times out within 15 s, and when every call it made failed the
+  checks (`raw` starts `[agent found nothing to do: …]`). Model: app_settings
   `assistant_agent_model`, else `assistantModel()` (`agentModel`).
 - **In `runAssistant`**: when it's on, `interpretThroughAgent` reads the
   message first. If it fails within 15 s, the front door reads it

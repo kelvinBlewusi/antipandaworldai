@@ -2365,8 +2365,9 @@ export async function runAssistant(
   const position = borrowed
     ? `drafts made ${borrowed.channel === here ? "here earlier" : borrowed.channel === "web" ? "on the website chat" : "on WhatsApp"} that aren't sent yet (listed below: they can edit, polish or submit them here)`
     : opts.position;
-  // Step 2 of the reliability plan, for the accounts it's switched on for;
-  // agent mode, the pilot after it (2026-10-10), before it where that's on.
+  // Agent mode reads first where it's on (every seller since 11 Oct, owner:
+  // "make agent mode the main reader for everyone and keep the front door as
+  // its automatic backup"); the front door reads what it can't.
   const [viaFrontDoor, viaAgent] = await Promise.all([frontDoorFor(userId), agentFor(userId)]);
   let actions: AssistantAction[];
   let links: Record<string, AssistantLink>;
@@ -2393,8 +2394,14 @@ export async function runAssistant(
           await logTurn(userId, stage, text, agent.clarify as unknown as AssistantAction, `asked: ${agent.clarify.question}`.slice(0, 300), agent.raw);
           return "handled";
         }
-        read = agent;
-        unguarded = true;
+        // Nothing it could do (every call failed the checks): the front door
+        // reads it, rather than the message going unanswered.
+        if (agent.actions.every((a) => a.type === "unclear") && Date.now() - t0 < 15_000) {
+          agentNote = `[agent found nothing to do: ${agent.raw.slice(0, 160)}] `;
+        } else {
+          read = agent;
+          unguarded = true;
+        }
       } catch (e) {
         // Slow or refused: the front door reads it, while there's time left in the request.
         if (Date.now() - t0 > 15_000) throw e;
