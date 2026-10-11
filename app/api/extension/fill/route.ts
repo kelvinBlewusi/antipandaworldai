@@ -35,6 +35,8 @@ import {
   type FillResponse,
 } from "@/lib/extension/fill";
 import { aiFillRenderedFields, aiConfigured } from "@/lib/ai/extension-fill";
+import { sellerLanguages } from "@/lib/preferences/language";
+import { translateListingCopy } from "@/lib/ai/listing-language";
 import { withAiUsageContext } from "@/lib/ai/usage";
 import {
   authenticateExtensionKey,
@@ -341,6 +343,24 @@ export async function POST(req: Request) {
     applyWarrantyAddressDefault(values, body.fields);
     applyProductionCountryDefault(values, body.fields);
     noteExistingContentChanges(values, body.fields, warnings);
+    // The seller's listing language (lib/preferences/language.ts): the
+    // name, description and highlights written in English, then translated.
+    const lang = (await sellerLanguages(userId).catch(() => null))?.listing ?? "en";
+    if (lang !== "en") {
+      const filled = values;
+      const label = (test: (l: string) => boolean) => body.fields.find((f) => test(f.label.toLowerCase()) && filled[f.label])?.label;
+      const nameLabel = label((l) => /\b(name|title)\b/.test(l) && !/brand|model|seller|shop/.test(l));
+      const descLabel = label((l) => l.includes("description") && !l.includes("short"));
+      const hlLabel = label((l) => l.includes("highlight") || l.includes("short description"));
+      const t = await withAiUsageContext({ feature: "extension_fill", userId }, () => translateListingCopy({
+        title: nameLabel ? values[nameLabel] : null,
+        description: descLabel ? values[descLabel] : null,
+        highlights: hlLabel ? values[hlLabel] : null,
+      }, lang));
+      if (t?.title && nameLabel) values[nameLabel] = t.title;
+      if (t?.description && descLabel) values[descLabel] = t.description;
+      if (t?.highlights && hlLabel) values[hlLabel] = t.highlights;
+    }
   } catch (e) {
     console.error(`[ext/fill] AI call failed for user=${userId}:`, e);
     return NextResponse.json(

@@ -63,6 +63,7 @@ import { findRestrictedWords, stripRestrictedWords } from "@/lib/ai/restricted-w
 import { callGeminiBackend } from "@/lib/ai/gemini-client";
 import { buildContentStyleBlockFor, buildSearchGroundingInstruction } from "@/lib/ai/content-style-rules";
 import { buildContentPolicyInstructions } from "@/lib/ai/jumia-content-policy";
+import { sellerLanguages } from "@/lib/preferences/language";
 import { resolveOneImage } from "@/lib/extension/harvested-images";
 import { withAiUsageContext } from "@/lib/ai/usage";
 
@@ -683,7 +684,7 @@ export async function rewriteContent(
   userId: string, set: ProductSet, fields: ("name" | "description" | "highlights")[], instructions: string | undefined,
 ): Promise<Partial<Record<"name" | "description" | "highlights", string>>> {
   const highlights = set.attributes.find((a) => a.name === "short_description")?.value ?? "";
-  const images = await productImageParts(set);
+  const [images, languages] = await Promise.all([productImageParts(set), sellerLanguages(userId).catch(() => null)]);
   const prompt = [
     `You rewrite parts of one product listing on Jumia (Africa's online marketplace): ${fields.join(", ")}, and nothing else.`,
     images.length > 0
@@ -705,6 +706,10 @@ export async function rewriteContent(
     "Follow the content style below for everything you write afresh. The name: model + product type + key specs a buyer searches for, roughly 6–12 words, never the brand.",
     buildContentStyleBlockFor(fields).trim(),
     buildSearchGroundingInstruction().trim(),
+    // The seller's listing language (lib/preferences/language.ts).
+    ...(languages?.listing === "fr"
+      ? ["Write in French, as listings on Jumia Côte d'Ivoire, Sénégal and Maroc are (for a small edit, keep the language the text is in now). Brand names, model numbers and units stay as they are."]
+      : []),
     "",
     "Return ONLY JSON with these keys and nothing else:",
     ...(fields.includes("name") ? ['"name": the product name (or as long as it is now, for a small edit). No promotional words.'] : []),
