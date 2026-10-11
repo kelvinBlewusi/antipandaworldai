@@ -2831,6 +2831,19 @@ report and a weekly test run. All four are done (11 Oct).
     message with the cases now wrong and the run's link.
   - Tests: __tests__/assistant-weekly.test.ts. The test FakeDb now has
     `gte`, `lte` and `range`.
+- **Runs after steps 1–4** (11 Oct, 05:20 UTC):
+  - Agent mode (3.5 Flash-Lite) got 231/248 (run e14c46b9; 235 and 236
+    before, with byte-identical tools). Only 2 cases failed that had passed
+    in both earlier runs, and both were the model's own slips:
+    - `draft-variation-answer`: "Large" as the option, and an invisible
+      character after "Small";
+    - `live-stock-entire-shop-0`: every bulk field filled with zero, so the
+      chat read a 0% price change.
+
+    The second is fixed in the action definition: `liveChange` (live_change
+    and bulk `toJson`) leaves out a change of 0% or to a price or sale price
+    of 0, which is never a real change.
+  - Front door (3.1 Flash-Lite) got 227/248 (run cfb15ab4; 228 before).
 - **Test runs** (lib/evals/assistant-eval.ts): pipelines `"agent"` (the
   default for `queueRun`, with `agentModel()`) and `"front_door"`. Old runs
   of the one-call reader (`pipeline` "current" or null) stay in the table as

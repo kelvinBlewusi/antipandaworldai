@@ -18,7 +18,7 @@ import {
   ACTION_TOOLS, AGENT_TOOLS, LOOKUP_TOOLS, NO_MATCH, actionJson, agentContext, agentModelSpec, agentPrompt, agentRead, agentSystem, catalogLookups, lookupLine, type AgentCall,
 } from "@/lib/assistant-v2/agent";
 import type { FrontDoorInput } from "@/lib/assistant-v2/front-door";
-import { assistantLinks } from "@/lib/whatsapp/assistant";
+import { assistantLinks, parseAction } from "@/lib/whatsapp/assistant";
 import { fromRow } from "@/lib/jumia/shop";
 import type { GeminiTurn } from "@/lib/ai/gemini-client";
 
@@ -85,6 +85,18 @@ describe("the tools", () => {
     expect(actionJson("sales", { period: "week", status: ["delivered"] })).toEqual({ type: "sales", period: "week", status: "delivered" });
     expect(actionJson("sales", { period: "week", status: ["delivered", "returned"] })).toEqual({ type: "sales", period: "week", status: ["delivered", "returned"] });
     expect(actionJson("polish", {})).toEqual({ type: "polish", product: null });
+  });
+
+  // Test run e14c46b9 (11 Oct): 3.5 Flash-Lite filled every field of bulk with
+  // zero, and the chat read a 0% price change ("By what percentage?").
+  it("a change of 0% or to a price of 0 is no change: left out, so the one asked for is read", () => {
+    const args = { scope: "all", words: "", end_sale: false, sale_price: 0, stock: 0, price_pct: 0, price: 0, active: false, sale_pct: 0 };
+    expect(actionJson("bulk", args)).toEqual({ type: "bulk", scope: "all", words: "", stock: 0, active: false });
+    expect(parseAction(JSON.stringify(actionJson("bulk", args)), "reduce all the stock of the entire shop to 0 you may do it in badges", [], assistantLinks()))
+      .toEqual({ type: "bulk", scope: "all", words: null, change: { kind: "stock", stock: 0 } });
+    expect(actionJson("live_change", { product: "kettle", price: 0, sale_price: 0, stock: 5 })).toEqual({ type: "live_change", product: "kettle", stock: 5 });
+    // A real one stays.
+    expect(actionJson("bulk", { scope: "all", price_pct: -10 })).toEqual({ type: "bulk", scope: "all", price_pct: -10 });
   });
 
   it("tells the model where the seller is, what's possible and the rules", () => {
