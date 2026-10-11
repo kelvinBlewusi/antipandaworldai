@@ -50,30 +50,31 @@ describe("the chat's features: on every plan (owner, 2026-10-07)", () => {
   it("aren't any pack's own, and name no pack", () => {
     // Image polish on every plan too (owner, 2026-10-07: "even free packs").
     // Order alerts too, from 2026-10-11 (owner: "let's fire for free accounts too").
-    expect(everyoneFeatures().map((f) => f.id)).toEqual(["order_alerts", "shop_whatsapp", "fee_calc_whatsapp", "image_polish_extension"]);
+    // Labels too, from 2026-10-11 (owner: "let free users be able to print labels on whatsapp too").
+    expect(everyoneFeatures().map((f) => f.id)).toEqual(["order_alerts", "shipping_labels", "shop_whatsapp", "fee_calc_whatsapp", "image_polish_extension"]);
     expect(featureMinPackName("shop_whatsapp")).toBe("");
   });
 });
 
-describe("QC fixes and WhatsApp labels (Standard and up); order alerts on every plan", () => {
+describe("QC fixes and live changes (Standard and up); order alerts and labels on every plan", () => {
   it("aren't included without a pack, or with only Starter", async () => {
     expect(await hasFeature("seller", "qc_fix")).toBe(false);
-    expect(await hasFeature("seller", "shipping_labels")).toBe(false);
+    expect(await hasFeature("seller", "shop_changes")).toBe(false);
     expect(await hasFeature("seller", "order_alerts")).toBe(true);
     bought(100);
     expect(await hasFeature("seller", "qc_fix")).toBe(false);
-    expect(await hasFeature("seller", "shipping_labels")).toBe(false);
+    expect(await hasFeature("seller", "shop_changes")).toBe(false);
     expect(await hasFeature("seller", "order_alerts")).toBe(true);
   });
 
   it("QC fixes and labels come with Standard, Pro or Business; alerts with any", async () => {
     bought(210);
     expect(await hasFeature("seller", "qc_fix")).toBe(true);
-    expect(await hasFeature("seller", "shipping_labels")).toBe(true);
+    expect(await hasFeature("seller", "shop_changes")).toBe(true);
     expect(await hasFeature("seller", "order_alerts")).toBe(true);
     for (const credits of [440, 940]) {
       bought(credits);
-      expect(await hasFeature("seller", "shipping_labels")).toBe(true);
+      expect(await hasFeature("seller", "shop_changes")).toBe(true);
       expect(await hasFeature("seller", "order_alerts")).toBe(true);
     }
   });
@@ -81,7 +82,7 @@ describe("QC fixes and WhatsApp labels (Standard and up); order alerts on every 
   it("follow the pack bought last: a smaller pack after a bigger one means the smaller one's features", async () => {
     bought(440, 100);
     expect((await currentPack("seller"))?.id).toBe("starter");
-    expect(await hasFeature("seller", "shipping_labels")).toBe(false);
+    expect(await hasFeature("seller", "shop_changes")).toBe(false);
     expect(await hasFeature("seller", "fee_calc_extension")).toBe(false);
 
     bought(100, 440);
@@ -91,12 +92,12 @@ describe("QC fixes and WhatsApp labels (Standard and up); order alerts on every 
 
   it("count an earlier pack by its nearest pack today", async () => {
     bought(200); // the old GHS 50 pack
-    expect(await hasFeature("seller", "shipping_labels")).toBe(true);
+    expect(await hasFeature("seller", "shop_changes")).toBe(true);
   });
 
   it("ignore grants of credits and deductions", async () => {
     db.tables.extension_credit_transactions = [{ user_id: "seller", type: "grant", amount: 940 }];
-    expect(await hasFeature("seller", "shipping_labels")).toBe(false);
+    expect(await hasFeature("seller", "shop_changes")).toBe(false);
   });
 
   it("are everyone's while billing is off, and always an admin's, at any balance", async () => {
@@ -108,7 +109,8 @@ describe("QC fixes and WhatsApp labels (Standard and up); order alerts on every 
 
   it("name the pack they start at", () => {
     expect(featureMinPackName("qc_fix")).toBe("Standard");
-    expect(featureMinPackName("shipping_labels")).toBe("Standard");
+    expect(featureMinPackName("shop_changes")).toBe("Standard");
+    expect(featureMinPackName("shipping_labels")).toBe("");
     expect(featureMinPackName("order_alerts")).toBe("");
   });
 });
@@ -135,7 +137,7 @@ describe("at 0 credits", () => {
   it("a seller without the pack is told it's the pack, whatever the balance", async () => {
     bought(100);
     balance(0);
-    expect(await featureAccess("seller", "shipping_labels")).toEqual({ ok: false, blockedBy: "pack" });
+    expect(await featureAccess("seller", "shop_changes")).toEqual({ ok: false, blockedBy: "pack" });
   });
 
   it("the chat's features, on every plan, say it's the credits", async () => {
@@ -161,13 +163,13 @@ describe("at 0 credits", () => {
 
 describe("what each pack lists", () => {
   // The chat's features are on every plan (everyoneFeatures) and no pack lists them.
-  it("Standard adds QC fixes, live product changes and labels; Pro the extension's calculator", () => {
+  it("Standard adds QC fixes and live product changes; Pro the extension's calculator", () => {
     expect(packFeatures("starter")).toEqual([]);
     // Labels from Standard since 2026-10-07: each one is charged.
-    expect(packFeatures("standard").map((f) => f.id)).toEqual(["qc_fix", "shipping_labels", "shop_changes"]);
+    expect(packFeatures("standard").map((f) => f.id)).toEqual(["qc_fix", "shop_changes"]);
     // Every listed feature is available (2026-10-07: none is "not available yet").
     const pro = packFeatures("pro");
-    expect(pro.map((f) => f.id)).toEqual(["qc_fix", "shipping_labels", "shop_changes", "fee_calc_extension"]);
+    expect(pro.map((f) => f.id)).toEqual(["qc_fix", "shop_changes", "fee_calc_extension"]);
     expect(pro.some((f) => "comingSoon" in f)).toBe(false);
     expect(packFeatures("business")).toEqual(pro);
   });

@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient, serviceKeyRole } from "@/lib/supabase/server";
+import { notifyOwner } from "@/lib/ops/notify-owner";
+import { budgetWarnings, type BudgetWarning } from "@/lib/ops/budget-guard";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
@@ -30,7 +32,10 @@ export const maxDuration = 30;
 // Alerting rides on console.error, which sentry.server.config.ts now
 // captures as an event — so a breach becomes a Sentry alert with no extra
 // wiring, and the same line is queryable in Vercel logs and in
-// net._http_response.
+// net._http_response. Since 2026-10-11 the owner is also told directly
+// (lib/ops/notify-owner.ts: their WhatsApp, or email outside its 24 hours),
+// at most every 6 hours while it lasts, along with the AI budget warnings
+// (lib/ops/budget-guard.ts), once a day each.
 //
 // Security: same bearer-CRON_SECRET contract as every other /api/cron
 // route, fail-secure when the secret is missing. It reads across all
@@ -281,6 +286,31 @@ export async function GET(req: NextRequest) {
     console.info("[health] all clear");
   }
 
+  // ── Telling the owner ───────────────────────────────────────────────────
+  const problems = [
+    ...breached.map((c) => `${c.count} ${c.detail}`),
+    ...unreadable.map((c) => `couldn't read ${c.name} (${c.error})`),
+    ...drift,
+    ...(keyOk ? [] : [`the server's database key is ${keyRole ?? "unrecognised"}, not service_role: every count is untrustworthy`]),
+  ];
+  const told: Record<string, string> = {};
+  if (problems.length > 0) {
+    told.health = await notifyOwner("something is stuck", `The hourly health check found:\n\n${problems.map((p) => `• ${p}`).join("\n")}\n\n` +
+      "Details are in Sentry and the Vercel logs ([health] lines). This repeats every 6 hours while it lasts.",
+    { key: "health", everyMs: 6 * 60 * 60_000 });
+  }
+  let budget: BudgetWarning[] = [];
+  try {
+    budget = await budgetWarnings();
+  } catch (e) {
+    console.warn(`[health] couldn't read the AI budget: ${(e as Error).message}`);
+  }
+  for (const w of budget) {
+    console.warn(`[health] AI BUDGET (${w.key}): ${w.text}`);
+    told[w.key] = await notifyOwner(w.key === "turns" ? "chat near its daily limit" : "AI cost over budget", w.text,
+      { key: `budget:${w.key}`, perDay: true });
+  }
+
   return NextResponse.json({
     ok: breached.length === 0 && unreadable.length === 0 && drift.length === 0 && keyOk,
     serviceKeyRole: keyRole,
@@ -288,6 +318,8 @@ export async function GET(req: NextRequest) {
       checks.map((c) => [c.name, c.error ? { error: c.error } : c.count]),
     ),
     ...(drift.length ? { schemaDrift: drift } : {}),
+    ...(budget.length ? { budget: budget.map((w) => w.key) } : {}),
+    ...(Object.keys(told).length ? { told } : {}),
     thresholds: STUCK_AFTER,
   });
 }

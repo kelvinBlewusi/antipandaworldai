@@ -48,7 +48,7 @@ jest.mock("@/lib/whatsapp/client", () => ({
 }));
 
 import {
-  feedItemResults, findProducts, productsFromCatalog, sendLiveChange, sendLiveChanges, statementsFrom, summarizeOrders, syncCatalog, type ShopProduct,
+  feedItemResults, findProducts, typoOf, productsFromCatalog, sendLiveChange, sendLiveChanges, statementsFrom, summarizeOrders, syncCatalog, type ShopProduct,
 } from "@/lib/jumia/shop";
 import {
   answerFees, answerListings, answerOrderStatus, answerPayouts, answerProductInfo, answerProducts, answerSales, answerStock, groupTargets,
@@ -167,6 +167,30 @@ describe("finding the product the seller means", () => {
     expect(findProducts(all(), "tee-l").map((p) => p.sid)).toEqual([SHIRT_L]);
     expect(findProducts(all(), "t-shirt large").length).toBeGreaterThan(0);
     expect(findProducts(all(), "washing machine")).toEqual([]);
+  });
+
+  // A seller, 2026-10-11: "I have an earing in the shop" found nothing, and
+  // "bluetooth lens" listed the products with "Blue" in their names.
+  const shop = (...names: string[]): ShopProduct[] => names.map((name, i) => ({ ...all()[0], sid: `p${i}`, sellerSku: `SKU-${i}`, name, variation: null, brand: null }));
+  it("forgives a letter left out, added or swapped, and puts the same word before part of one", () => {
+    const products = shop("Gold Hoop Earrings for Women", "Amino Acids BCAA (Blue Pineapple)", "Clip File (Blue)", "Wireless Eyewear Audio Glasses - Bluetooth 5.0", "Black Cotton Shorts");
+    expect(findProducts(products, "earing").map((p) => p.name)).toEqual(["Gold Hoop Earrings for Women"]);
+    expect(findProducts(products, "bluetooth lens").map((p) => p.name)).toEqual(["Wireless Eyewear Audio Glasses - Bluetooth 5.0"]);
+    expect(findProducts(products, "eyewaer").map((p) => p.sid)).toEqual(["p3"]);
+    // One letter for another is another word.
+    expect(findProducts(products, "shirt").map((p) => p.sid)).toEqual([]);
+    // With no Bluetooth product, "bluetooth" still finds the closest.
+    expect(findProducts(products.filter((p) => p.sid !== "p3"), "bluetooth").map((p) => p.sid)).toEqual(["p1", "p2"]);
+  });
+
+  it("typoOf", () => {
+    expect(typoOf("earing", "earring")).toBe(true);
+    expect(typoOf("recieve", "receive")).toBe(true);
+    expect(typoOf("ballon", "balloon")).toBe(true);
+    expect(typoOf("shirt", "short")).toBe(false);
+    expect(typoOf("ring", "rings")).toBe(false);
+    expect(typoOf("cable", "cable")).toBe(false);
+    expect(typoOf("blender", "blenders2")).toBe(false);
   });
 });
 

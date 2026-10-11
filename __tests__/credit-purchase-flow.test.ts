@@ -122,7 +122,7 @@ describe("a seller buying a pack (Standard)", () => {
 
     expect((await getRecentTransactions(SELLER)).map((t) => t.description)).toContain(`Purchased ${pack.credits} credits (standard pack)`);
     expect((await getMostRecentCreditPack(SELLER))?.id).toBe("standard");
-    expect(await hasFeature(SELLER, "shipping_labels")).toBe(true); // Standard and up
+    expect(await hasFeature(SELLER, "shop_changes")).toBe(true); // Standard and up
     expect(await hasFeature(SELLER, "fee_calc_extension")).toBe(false); // Pro and up
   });
 
@@ -134,7 +134,7 @@ describe("a seller buying a pack (Standard)", () => {
     expect((await paystackWebhook(charge(SELLER, "pwcr_old_starter", starter))).status).toBe(200);
     expect(await getOrCreateCreditBalance(SELLER)).toBe(FREE_SIGNUP_CREDITS + starter.credits);
     expect((await getMostRecentCreditPack(SELLER))?.id).toBe("starter");
-    expect(await hasFeature(SELLER, "shipping_labels")).toBe(false);
+    expect(await hasFeature(SELLER, "shop_changes")).toBe(false);
   });
 
   it("is spent from like any other credits", async () => {

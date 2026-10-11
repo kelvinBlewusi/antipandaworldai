@@ -56,6 +56,15 @@ export const MODEL_PRICES_USD_PER_M: Record<string, { input: number; output: num
   "gemini-2.5-pro":        { input: 1.25, output: 10.00 },
 };
 
+/**
+ * Input tokens Google served from its cache (implicit caching: the same
+ * opening of a prompt sent again, as the agent's instructions are every
+ * turn) bill at a tenth of the input price, on every model above
+ * (ai.google.dev pricing, "context caching", checked 2026-10-11). Until
+ * 2026-10-11 the log charged them in full, so the agent's cost read high.
+ */
+export const CACHED_INPUT_SHARE = 0.1;
+
 /** Grounding with Google Search on Gemini 3: 5,000 free a month, then $14 per 1,000 queries. */
 export const SEARCH_QUERY_USD = 0.014;
 
@@ -66,20 +75,25 @@ export interface UsageNumbers {
   outputTokens:  number;
   thoughtTokens: number;
   searchQueries: number;
+  /** Of promptTokens, how many came from Google's cache. */
+  cachedTokens?: number;
 }
 
 /** Token cost in USD, or null for a model without a known price. Search is reported separately. */
-export function tokenCostUsd(u: Pick<UsageNumbers, "model" | "promptTokens" | "outputTokens" | "thoughtTokens">): number | null {
+export function tokenCostUsd(u: Pick<UsageNumbers, "model" | "promptTokens" | "outputTokens" | "thoughtTokens" | "cachedTokens">): number | null {
   const price = MODEL_PRICES_USD_PER_M[u.model];
   if (!price) return null;
-  return (u.promptTokens * price.input + (u.outputTokens + u.thoughtTokens) * price.output) / 1_000_000;
+  const cached = Math.min(Math.max(0, u.cachedTokens ?? 0), u.promptTokens);
+  const input = (u.promptTokens - cached + cached * CACHED_INPUT_SHARE) * price.input;
+  return (input + (u.outputTokens + u.thoughtTokens) * price.output) / 1_000_000;
 }
 
 /**
  * Pull token counts out of either SDK's response. Both put them on
  * `usageMetadata` (on the result for @google/genai, on `result.response`
  * for @google/generative-ai); thinking tokens are only broken out by the
- * newer SDK, so they're derived from the total where missing.
+ * newer SDK, so they're derived from the total where missing. Cached input
+ * (cachedContentTokenCount) is counted inside the prompt's tokens.
  */
 export function readUsage(raw: unknown): Omit<UsageNumbers, "model" | "backend"> {
   const r = (raw ?? {}) as Record<string, unknown>;
@@ -89,7 +103,9 @@ export function readUsage(raw: unknown): Omit<UsageNumbers, "model" | "backend">
   const thoughts = meta.thoughtsTokenCount ?? Math.max(0, (meta.totalTokenCount ?? 0) - prompt - output);
   const candidates = (r.candidates ?? []) as { groundingMetadata?: { webSearchQueries?: unknown[] } }[];
   const searchQueries = candidates[0]?.groundingMetadata?.webSearchQueries?.length ?? 0;
-  return { promptTokens: prompt, outputTokens: output, thoughtTokens: thoughts, searchQueries };
+  // Part of promptTokenCount, not on top of it.
+  const cachedTokens = meta.cachedContentTokenCount ?? 0;
+  return { promptTokens: prompt, outputTokens: output, thoughtTokens: thoughts, searchQueries, cachedTokens };
 }
 
 /** Record one call. Fire-and-forget from the caller's point of view. */

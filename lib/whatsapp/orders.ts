@@ -7,7 +7,7 @@
  * Gated by pack (lib/billing/features.ts): seeing waiting orders, packing,
  * ready to ship and cancelling are on every plan (`shop_whatsapp`, owner
  * 2026-10-07: "all the capabilities available to all plans in the chat");
- * the label PDF needs `shipping_labels` (Standard and up, each label
+ * the label PDF needs `shipping_labels` (every plan since 2026-10-11, each label
  * charged, LABEL_CREDIT_COST) and the new-order alerts `order_alerts` (every plan,
  * free). Nothing works at 0 credits. Works for every Jumia country: amounts in the
  * shop's own currency and the country's formatting, Jumia's own wording

@@ -310,7 +310,7 @@ export async function callGeminiWithTools(
   const backend = aiStudio ? "ai-studio" as const : "vertex" as const;
   const counted = readUsage(result);
   await recordAiUsage({ model: modelName, backend, ...counted });
-  const cached = (result as { usageMetadata?: { cachedContentTokenCount?: number } }).usageMetadata?.cachedContentTokenCount ?? 0;
+  const cached = counted.cachedTokens ?? 0;
   const parts = (result.candidates?.[0]?.content?.parts ?? []) as Record<string, unknown>[];
   const calls = parts
     .map((p) => p.functionCall as { id?: string; name?: string; args?: Record<string, unknown> } | undefined)
