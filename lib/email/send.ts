@@ -39,7 +39,8 @@ function getResend(): Resend | null {
 const DEFAULT_FROM = "PandaWorld <hello@pandaworld.gh>";
 
 export interface SendEmailOptions {
-  to:        string;
+  /** One address, or several (the owner's alerts go to both support inboxes). */
+  to:        string | string[];
   subject:   string;
   html:      string;
   /** Optional plain-text fallback for clients that don't render HTML. */
@@ -88,25 +89,29 @@ export async function sendEmail(opts: SendEmailOptions): Promise<SendEmailResult
       console.error(`[email/${tag}] resend rejected: ${result.error.message}`);
       Sentry.captureMessage(`Email send failed: ${tag}`, {
         level: "warning",
-        extra: { error: result.error.message, to: redact(opts.to) },
+        extra: { error: result.error.message, to: redactAll(opts.to) },
       });
       return { success: false, error: result.error.message };
     }
 
-    console.info(`[email/${tag}] sent ${result.data?.id} to ${redact(opts.to)}`);
+    console.info(`[email/${tag}] sent ${result.data?.id} to ${redactAll(opts.to)}`);
     return { success: true, id: result.data?.id };
   } catch (e) {
     const msg = (e as Error).message;
     console.error(`[email/${tag}] threw: ${msg}`);
     Sentry.captureException(e, {
       tags:  { category: "email-send" },
-      extra: { to: redact(opts.to), subject: opts.subject },
+      extra: { to: redactAll(opts.to), subject: opts.subject },
     });
     return { success: false, error: msg };
   }
 }
 
 /** Lightly redact email addresses in logs so they don't sit in plain text. */
+function redactAll(to: string | string[]): string {
+  return (Array.isArray(to) ? to : [to]).map(redact).join(", ");
+}
+
 function redact(email: string): string {
   const at = email.indexOf("@");
   if (at < 0) return "(invalid)";

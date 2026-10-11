@@ -7,13 +7,22 @@
  * (no codebase-wide grep + replace).
  */
 
-export const SUPPORT_EMAIL = "help.pandaworldai@gmail.com";
+export const SUPPORT_EMAIL = "help@pandaworldai.site";
+
+/**
+ * The first support address, kept as a second one (owner, 2026-10-11:
+ * "replace our email to help@pandaworldai.site and keep the
+ * help.pandaworldai@gmail.com too"): shown beside the new one where people
+ * look for a contact, and copied on the owner's alerts.
+ */
+export const SUPPORT_EMAIL_ALT = "help.pandaworldai@gmail.com";
 
 /** The PandaWorld WhatsApp bot's number, as sellers see it (the guides, the dashboard). */
 export const BOT_NUMBER_DISPLAY = "+233548534323";
 
 /** `mailto:` ready-to-use href. */
 export const SUPPORT_MAILTO = `mailto:${SUPPORT_EMAIL}`;
+export const SUPPORT_MAILTO_ALT = `mailto:${SUPPORT_EMAIL_ALT}`;
 
 /**
  * Community WhatsApp group invite. The `?mode=gi_t` suffix is what

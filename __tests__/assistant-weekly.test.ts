@@ -16,9 +16,9 @@ jest.mock("@/lib/whatsapp/client", () => ({
   sendCtaUrlIfConfigured: async () => undefined,
   sendListIfConfigured: async () => undefined,
 }));
-const emails: { to: string; subject: string; text?: string }[] = [];
+const emails: { to: string | string[]; subject: string; text?: string }[] = [];
 jest.mock("@/lib/email/send", () => ({
-  sendEmail: async (o: { to: string; subject: string; text?: string }) => { emails.push(o); return { success: true }; },
+  sendEmail: async (o: { to: string | string[]; subject: string; text?: string }) => { emails.push(o); return { success: true }; },
 }));
 let answer: (prompt: string) => string = () => '{"type":"reply","text":"Hi","link":null}';
 jest.mock("@/lib/ai/gemini-client", () => ({
@@ -26,7 +26,7 @@ jest.mock("@/lib/ai/gemini-client", () => ({
 }));
 
 import { aiChoice, sameRequest, signsText, warningSigns, type MessageRow, type TurnRow } from "@/lib/evals/warning-signs";
-import { WEEKLY, compareRuns, workOnRuns, type CaseResult } from "@/lib/evals/assistant-eval";
+import { WEEKLY, caseAreas, compareRuns, queueRun, workOnRuns, type CaseResult } from "@/lib/evals/assistant-eval";
 import { runWeekly } from "@/lib/evals/weekly";
 import { ASSISTANT_CASES } from "@/lib/evals/assistant-cases";
 
@@ -171,7 +171,7 @@ describe("the Monday job", () => {
     expect(r.sent).toBe(true);
     expect(sent).toHaveLength(0);
     expect(emails).toHaveLength(1);
-    expect(emails[0]).toMatchObject({ to: "help.pandaworldai@gmail.com", subject: "PandaWorld: weekly report" });
+    expect(emails[0]).toMatchObject({ to: ["help@pandaworldai.site", "help.pandaworldai@gmail.com"], subject: "PandaWorld: weekly report" });
     expect(emails[0].text).toContain("/admin/warning-signs");
   });
 });
@@ -190,6 +190,27 @@ describe("the test runs' daily budget", () => {
     db.tables.ai_usage = [{ created_at: new Date().toISOString(), feature: "assistant_eval", cost_usd: 10.5 }];
     db.tables.app_settings.push({ key: "ai_test_budget_usd", value: 20 });
     expect((await workOnRuns(1_000)).runId).toBe("r1");
+  });
+});
+
+describe("a run of one area only (owner, 2026-10-11: \"cheaper test runs\")", () => {
+  it("runs that area's cases alone, and the Monday report's scores leave it out", async () => {
+    answer = (p) => (p.startsWith("You sort one message") ? '{"area":"orders"}' : '{"type":"reply","text":"Hi","link":null}');
+    db.tables.assistant_eval_runs = [];
+    db.tables.ai_usage = [];
+    const orders = caseAreas().find((a) => a.area === "orders")!.cases;
+    const id = await queueRun({ pipeline: "front_door", model: "gemini-2.5-flash-lite", router: "gemini-2.5-flash-lite", areas: ["orders", "not-an-area"] });
+    const run = () => (db.tables.assistant_eval_runs as { id: string; areas?: string[]; total: number; status: string; results: CaseResult[] }[]).find((r) => r.id === id)!;
+    expect(run()).toMatchObject({ areas: ["orders"], total: orders });
+    await workOnRuns(10 * 60_000);
+    expect(run().status).toBe("done");
+    expect(run().results).toHaveLength(orders);
+    expect(run().results.every((r) => r.area === "orders")).toBe(true);
+    // Not the latest whole-set score in the Monday report.
+    db.tables.whatsapp_assistant_log = [];
+    db.tables.whatsapp_message_log = [{ created_at: ago(5), phone_number: "233200000000", direction: "inbound", message_type: "text", body_text: "hi" }];
+    await runWeekly();
+    expect(sent[0].body).toContain("• Front door (gemini-2.5-flash-lite): no run yet");
   });
 });
 

@@ -24,7 +24,7 @@ const $ = (id) => document.getElementById(id);
 const apiBase = "https://pandaworldai.site";
 // Matches lib/constants/support.ts SUPPORT_EMAIL — the extension bundle has
 // no build step to import that file, so it's duplicated here.
-const SUPPORT_EMAIL = "help.pandaworldai@gmail.com";
+const SUPPORT_EMAIL = "help@pandaworldai.site";
 // Matches manifest.json's content_scripts/host_permissions exactly: only
 // the two pages that actually render a product form. Vendor Center has
 // plenty of other pages (Orders, Manage Products, Promotions, …) where

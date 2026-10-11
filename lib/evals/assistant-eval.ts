@@ -217,6 +217,20 @@ export interface EvalRun {
   passed: number; passed_bare: number; errors: number; results: CaseResult[]; finished_at: string | null;
   /** "current" or none: the old one-call reader (runs before 11 Oct). */
   pipeline?: Pipeline | "current" | null; router_model?: string | null; asked?: number | null;
+  /** Only these areas' cases (lib/evals/assistant-cases.ts `area`); null or empty: the whole set. */
+  areas?: string[] | null;
+}
+
+/** The cases a run covers: some areas' (a cheaper run after a change to one part), or all of them. */
+export function casesFor(areas?: string[] | null): EvalCase[] {
+  return areas && areas.length > 0 ? ASSISTANT_CASES.filter((c) => areas.includes(c.area as string)) : ASSISTANT_CASES;
+}
+
+/** The areas of the test set, with how many cases each has, in the order they first appear. */
+export function caseAreas(): { area: string; cases: number }[] {
+  const counts = new Map<string, number>();
+  for (const c of ASSISTANT_CASES) counts.set(c.area, (counts.get(c.area) ?? 0) + 1);
+  return Array.from(counts, ([area, cases]) => ({ area, cases }));
 }
 
 /**
@@ -225,13 +239,16 @@ export interface EvalRun {
  * unless named), with the model that way uses unless one is named.
  * Returns its id.
  */
-export async function queueRun(opts: { model?: string; note?: string; pipeline?: Pipeline; router?: string } = {}): Promise<string> {
+export async function queueRun(opts: { model?: string; note?: string; pipeline?: Pipeline; router?: string; areas?: string[] } = {}): Promise<string> {
   const pipeline = opts.pipeline ?? "agent";
   const model = opts.model ?? (pipeline === "agent" ? await agentModel() : await assistantModel());
+  const known = new Set<string>(ASSISTANT_CASES.map((c) => c.area));
+  const areas = (opts.areas ?? []).filter((a) => known.has(a));
   const { data, error } = await createServerClient()
     .from("assistant_eval_runs")
     .insert({
-      model, note: opts.note ?? null, total: ASSISTANT_CASES.length, status: "queued", pipeline,
+      model, note: opts.note ?? null, total: casesFor(areas).length, status: "queued", pipeline,
+      ...(areas.length > 0 ? { areas } : {}),
       router_model: pipeline === "front_door" ? opts.router ?? model : null,
     })
     .select("id")
@@ -303,7 +320,8 @@ export async function workOnRuns(budgetMs = 100_000): Promise<{ runId: string | 
 
   const results: CaseResult[] = Array.isArray(run.results) ? [...run.results] : [];
   const done = new Set(results.map((r) => r.id));
-  const left = ASSISTANT_CASES.filter((c) => !done.has(c.id));
+  const set = casesFor(run.areas);
+  const left = set.filter((c) => !done.has(c.id));
   while (left.length > 0 && Date.now() + CASE_MS < deadline) {
     const group = left.splice(0, PARALLEL);
     results.push(...(await Promise.all(group.map((c) => capped(c, runCase(c, run.model, { pipeline: run.pipeline === "agent" ? "agent" : "front_door", router: run.router_model }))))));
@@ -313,11 +331,11 @@ export async function workOnRuns(budgetMs = 100_000): Promise<{ runId: string | 
   }
   const finished = left.length === 0;
   await db.from("assistant_eval_runs").update({
-    ...tally(results), results, total: ASSISTANT_CASES.length, locked_until: null,
+    ...tally(results), results, total: set.length, locked_until: null,
     ...(finished ? { status: "done", finished_at: new Date().toISOString() } : {}),
   }).eq("id", run.id);
   if (finished && run.note === WEEKLY) await alertOnDrop({ ...run, results });
-  return { runId: run.id, done: results.length, total: ASSISTANT_CASES.length };
+  return { runId: run.id, done: results.length, total: set.length };
 }
 
 // ─── The weekly run (step 4 of the plan, owner 2026-10-11) ───────────────────

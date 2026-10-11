@@ -1,7 +1,7 @@
 import { revalidatePath } from "next/cache";
 import { createServerClient } from "@/lib/supabase/server";
 import { ASSISTANT_CASES } from "@/lib/evals/assistant-cases";
-import { byArea, nudgeEvalWorker, queueRun, routing, type EvalRun } from "@/lib/evals/assistant-eval";
+import { byArea, caseAreas, nudgeEvalWorker, queueRun, routing, type EvalRun } from "@/lib/evals/assistant-eval";
 import { testBudgetToday } from "@/lib/ops/budget-guard";
 
 export const dynamic = "force-dynamic";
@@ -27,10 +27,12 @@ async function runTests(form: FormData) {
   "use server";
   const model = String(form.get("model") ?? "");
   const way = String(form.get("pipeline") ?? "");
+  const area = String(form.get("area") ?? "");
   const [pipeline, router] = way.startsWith("front_door") ? ["front_door" as const, way.split(":")[1] || undefined] : ["agent" as const, undefined];
   await queueRun({
     model: MODELS.includes(model) ? model : undefined, pipeline,
     router: router && MODELS.includes(router) ? router : undefined, note: "from the admin page",
+    ...(area ? { areas: [area] } : {}),
   });
   await nudgeEvalWorker();
   revalidatePath("/admin/assistant-tests");
@@ -53,7 +55,8 @@ export default async function AssistantTestsPage({ searchParams }: { searchParam
   // Both ask back; neither has word rules to go without (only the old reader had them).
   const frontDoor = (r: EvalRun) => r.pipeline === "front_door" || r.pipeline === "agent";
   const agent = (r: EvalRun) => r.pipeline === "agent";
-  const way = (r: EvalRun) => (agent(r) ? "Agent" : frontDoor(r) ? `Front door${r.router_model && r.router_model !== r.model ? ` (sorts with ${r.router_model})` : ""}` : "Old reader");
+  const wayOnly = (r: EvalRun) => (agent(r) ? "Agent" : frontDoor(r) ? `Front door${r.router_model && r.router_model !== r.model ? ` (sorts with ${r.router_model})` : ""}` : "Old reader");
+  const way = (r: EvalRun) => `${wayOnly(r)}${r.areas?.length ? `, only ${r.areas.join(", ").replace(/_/g, " ")}` : ""}`;
   const avgMs = (r: EvalRun) => {
     const timed = (r.results ?? []).filter((x) => !x.error);
     return timed.length ? `${(timed.reduce((n, x) => n + x.ms, 0) / timed.length / 1000).toFixed(1)} s` : "–";
@@ -78,8 +81,15 @@ export default async function AssistantTestsPage({ searchParams }: { searchParam
             <option value="front_door">Front door (its backup)</option>
             {MODELS.map((m) => <option key={m} value={`front_door:${m}`}>Front door, sorting with {m}</option>)}
           </select>
+          {/* One area only: after a change to one part, its cases at a fraction of the cost (owner, 2026-10-11: "cheaper test runs"). */}
+          <select name="area" defaultValue="" className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm">
+            <option value="">All {ASSISTANT_CASES.length} cases (about $1)</option>
+            {caseAreas().map(({ area, cases: n }) => (
+              <option key={area} value={area}>Only {area.replace(/_/g, " ")}: {n} cases (about ${(n / ASSISTANT_CASES.length).toFixed(2)})</option>
+            ))}
+          </select>
           <button type="submit" className="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-semibold text-white hover:bg-zinc-700">Run the test set</button>
-          <span className="text-xs text-zinc-500">About 3 minutes and about $1. Refresh to see it fill in.</span>
+          <span className="text-xs text-zinc-500">About 3 minutes for all of it. Refresh to see it fill in.</span>
         </form>
         {spend && (
           <p className={`mt-2 text-xs ${spend.spent >= spend.budget ? "font-semibold text-amber-700" : "text-zinc-500"}`}>

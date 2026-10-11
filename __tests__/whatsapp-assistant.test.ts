@@ -1131,7 +1131,7 @@ describe("what the owner's second test showed (2026-10-07, round 3)", () => {
   });
 });
 
-describe("no daily limit per seller (owner, 2026-10-07: \"remove daily limit\")", () => {
+describe("each seller's daily limit, by pack (owner, 2026-10-11: \"make the baseline 250\")", () => {
   const session = () => ({ phoneNumber: "233", userId: "seller", state: "awaiting_count", batchId: null, lastSubmittedBatchId: null }) as WhatsAppSession;
   const turns = (n: number, userId = "seller") => {
     db.tables.whatsapp_assistant_log = Array.from({ length: n }, (_, i) => ({
@@ -1139,9 +1139,47 @@ describe("no daily limit per seller (owner, 2026-10-07: \"remove daily limit\")"
     }));
   };
 
-  it("a seller with hundreds of turns today still has it", async () => {
-    turns(500);
+  const bought = (credits: number) => {
+    db.tables.extension_credit_transactions = [{ user_id: "seller", type: "purchase", amount: credits, created_at: "2026-10-01T00:00:00Z" }];
+  };
+
+  it("250 a day on free credits and Standard; only their own AI turns today count", async () => {
+    db.tables.extension_credit_transactions = [];
+    turns(249);
+    db.tables.whatsapp_assistant_log.push(
+      { id: 900, user_id: "someone-else", stage: "idle", message: "hi", raw: "{}", outcome: "replied", created_at: new Date().toISOString() },
+      { id: 901, user_id: "seller", stage: "idle", message: "tap", raw: null, outcome: "replied", created_at: new Date().toISOString() },
+      { id: 902, user_id: "seller", stage: "idle", message: "old", raw: "{}", outcome: "replied", created_at: new Date(Date.now() - 2 * 86_400_000).toISOString() },
+    );
     expect(await assistantGate("seller")).toEqual({ ok: true });
+    turns(250);
+    expect(await assistantGate("seller")).toEqual({ ok: false, reason: "seller", limit: 250, pack: null });
+    bought(210);
+    expect(await assistantGate("seller")).toEqual({ ok: false, reason: "seller", limit: 250, pack: "standard" });
+  });
+
+  it("500 on Pro, none on Business, none for admins", async () => {
+    bought(440);
+    turns(499);
+    expect(await assistantGate("seller")).toEqual({ ok: true });
+    turns(500);
+    expect(await assistantGate("seller")).toEqual({ ok: false, reason: "seller", limit: 500, pack: "pro" });
+    bought(940);
+    turns(3000);
+    expect(await assistantGate("seller")).toEqual({ ok: true });
+    turns(3000, "admin");
+    expect(await assistantGate("admin")).toEqual({ ok: true });
+  });
+
+  it("told once a day, with the bigger packs; after that the fixed flow answers, with no AI call", async () => {
+    db.tables.extension_credit_transactions = [];
+    turns(250);
+    expect(await runAssistant("seller", "233", session(), "what else", "idle")).toBe("handled");
+    expect(sent).toHaveLength(1);
+    expect(sent[0].body).toBe("You've reached today's 250 chat messages, so I'll answer questions again after midnight (GMT). Until then, type *menu* for the commands: listing products and the buttons work as usual. The Pro pack gets 500 a day, and Business has no limit.");
+    expect(await runAssistant("seller", "233", session(), "and now?", "idle")).toBe("limited");
+    expect(sent).toHaveLength(1);
+    expect(aiCalls).toBe(0);
   });
 
   it("the global ceiling rests it for everyone but admins, with no AI call", async () => {
