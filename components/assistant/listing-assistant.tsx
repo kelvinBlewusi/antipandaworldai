@@ -50,6 +50,18 @@ type Row = { id: string; title: string; description?: string };
 const MAX_PHOTOS = 8;
 const POLL_MS = 2500;
 const POLL_WAITING_MS = 1200;
+/**
+ * Polls slow down while nothing happens (2026-10-11: a chat left open polled
+ * every 2.5 s all day, most of the site's server time): every POLL_MS for a
+ * minute after the last message or tap, then every 6 s, then every 15 s
+ * after 5 minutes. A reply awaited, the tab shown again or focused: at once
+ * and fast again.
+ */
+function pollDelay(waiting: boolean, idleMs: number): number {
+  if (waiting) return POLL_WAITING_MS;
+  if (idleMs < 60_000) return POLL_MS;
+  return idleMs < 5 * 60_000 ? 6_000 : 15_000;
+}
 /** How long the waiting line shows after a message with no reply yet. */
 const WAIT_MS = 90_000;
 /** How long each waiting phrase stays before the next. */
@@ -127,6 +139,8 @@ export function ListingAssistant({ firstName, productForm }: {
   // with it, whichever button opens it (owner, 2026-10-11).
   const [keptForm, setKeptForm] = useState<FormDraft[] | null>(null);
   const mountedAt = useRef(new Date().toISOString());
+  // When the seller last did something here or a message came in (pollDelay).
+  const lastActivity = useRef(Date.now());
   const offered = useRef(new Set<string>());
   const shown = useRef<Message[]>([]);
   // Photos sent in the chat that the bot answered with the form go in it,
@@ -151,6 +165,7 @@ export function ListingAssistant({ firstName, productForm }: {
   const merge = useCallback((incoming: Message[]) => {
     if (incoming.length === 0) return;
     lastAt.current = incoming[incoming.length - 1].at;
+    lastActivity.current = Date.now();
     // The bot offering the form, after this page loaded: open it.
     const known = new Set(incoming.map((m) => m.id));
     const list = [...shown.current.filter((m) => !m.local && !known.has(m.id)), ...incoming];
@@ -197,12 +212,35 @@ export function ListingAssistant({ firstName, productForm }: {
   useEffect(() => {
     void poll();
   }, [poll]);
+  const waitingRef = useRef(false);
+  waitingRef.current = waitingSince != null;
   useEffect(() => {
-    const t = setInterval(() => {
-      if (document.visibilityState === "visible") void poll();
-    }, waitingSince ? POLL_WAITING_MS : POLL_MS);
-    return () => clearInterval(t);
-  }, [poll, waitingSince]);
+    let stopped = false;
+    let t: ReturnType<typeof setTimeout> | undefined;
+    const next = () => { if (!stopped) t = setTimeout(tick, pollDelay(waitingRef.current, Date.now() - lastActivity.current)); };
+    async function tick() {
+      if (stopped) return;
+      if (document.visibilityState === "visible") await poll();
+      next();
+    }
+    const wake = () => {
+      if (document.visibilityState !== "visible") return;
+      lastActivity.current = Date.now();
+      if (t) clearTimeout(t);
+      void tick();
+    };
+    next();
+    document.addEventListener("visibilitychange", wake);
+    window.addEventListener("focus", wake);
+    return () => {
+      stopped = true;
+      if (t) clearTimeout(t);
+      document.removeEventListener("visibilitychange", wake);
+      window.removeEventListener("focus", wake);
+    };
+  }, [poll]);
+  // Waiting for a reply: poll fast at once, not after a slow wait.
+  useEffect(() => { if (waitingSince) lastActivity.current = Date.now(); }, [waitingSince]);
   useEffect(() => {
     if (!waitingSince) return;
     const t = setTimeout(() => setWaitingSince(null), WAIT_MS);
