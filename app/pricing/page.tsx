@@ -188,6 +188,7 @@ export default async function PricingPage() {
                     <Coins className="h-5 w-5" />
                   </div>
                   <h3 className="mt-5 text-lg font-bold">{p.credits} credits</h3>
+                  {p.bonus ? <p className="text-sm font-semibold text-emerald-600">{p.credits - p.bonus} + {p.bonus} free</p> : null}
                   <p className="mt-1 text-3xl font-bold">GHS {p.amountGhs}</p>
                   <ul className="mt-5 flex-1 space-y-2.5 text-sm text-zinc-700">
                     <li className="flex items-start gap-2">

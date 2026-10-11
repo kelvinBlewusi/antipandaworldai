@@ -94,6 +94,7 @@ export default async function BillingSettingsPage() {
               <li key={p.id} className="flex items-center justify-between gap-4 py-2.5">
                 <span>
                   <span className="font-semibold text-zinc-900">{p.credits} credits</span>
+                  {p.bonus ? <span className="ml-1.5 text-xs font-semibold text-emerald-600">({p.credits - p.bonus} + {p.bonus} free)</span> : null}
                   <span className="block text-xs text-zinc-500">
                     About {listings}+ listings
                   </span>

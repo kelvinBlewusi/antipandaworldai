@@ -7,8 +7,11 @@
 
 export interface CreditPack {
   id: string;
+  /** Everything the pack gives, free credits included (what a purchase adds). */
   credits: number;
   amountGhs: number;
+  /** Of `credits`, how many are given free on top of the pack's own, shown as "+30 free". */
+  bonus?: number;
 }
 
 /**
@@ -32,7 +35,8 @@ export const CREDIT_PACKS: CreditPack[] = [
   // "let's remove the 35 GHS PACK"): see RETIRED_PACKS.
   { id: "standard", credits: 210, amountGhs: 70 },
   { id: "pro",      credits: 440, amountGhs: 140 },
-  { id: "business", credits: 940, amountGhs: 280 },
+  // 940 + 30 free since 2026-10-11 (owner: "let's add plus free 30 credits to the last pack").
+  { id: "business", credits: 970, amountGhs: 280, bonus: 30 },
 ];
 
 /**
@@ -148,6 +152,7 @@ export function getPaidCreditPack(id: string): CreditPack | undefined {
  */
 const LEGACY_CREDIT_AMOUNTS: Record<number, string> = {
   100: "starter",
+  940: "business",
   280: "standard", 600: "pro",
   150: "starter", 330: "standard", 650: "pro",
   120: "starter", 200: "standard", 400: "pro",

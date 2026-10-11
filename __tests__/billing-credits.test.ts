@@ -295,11 +295,15 @@ describe("costs", () => {
   // Starter (80 credits for GHS 35, GHS 0.88 a listing) stopped being sold
   // on 2026-10-08 (owner: "let's remove the 35 GHS PACK").
   it("sells Standard, Pro and Business, each listing cheaper than the last, Starter no longer", () => {
-    expect(CREDIT_PACKS.map((p) => [p.id, p.credits, p.amountGhs])).toEqual([["standard", 210, 70], ["pro", 440, 140], ["business", 940, 280]]);
+    expect(CREDIT_PACKS.map((p) => [p.id, p.credits, p.amountGhs])).toEqual([["standard", 210, 70], ["pro", 440, 140], ["business", 970, 280]]);
+    // Business: 940 + 30 free (owner, 2026-10-11); a Business purchase from before still reads as Business.
+    expect(CREDIT_PACKS.find((p) => p.id === "business")!.bonus).toBe(30);
+    expect(getCreditPackByCredits(940)?.id).toBe("business");
     const perListing = CREDIT_PACKS.map((p) => (p.amountGhs / p.credits) * LIVE_LISTING_CREDIT_COST);
     expect(perListing[0]).toBeCloseTo(0.667, 3);
     for (let i = 1; i < perListing.length; i++) expect(perListing[i]).toBeLessThan(perListing[i - 1]);
-    expect(Math.min(...perListing)).toBeGreaterThan(0.59);
+    // Business with its 30 free credits: GHS 0.577 a listing, still far above its AI cost (~GHS 0.12).
+    expect(Math.min(...perListing)).toBeGreaterThan(0.57);
     expect(getCreditPack("starter")).toBeUndefined();
   });
 
