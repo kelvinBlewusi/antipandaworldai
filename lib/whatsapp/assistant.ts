@@ -1564,7 +1564,12 @@ function parseActionRaw(
       const a = cannotAnswer(id);
       // Not built yet: its answer, and the request noted.
       if (a && capability(id)?.status === "not_built") return { type: "not_yet", what: capability(id)?.what ?? id, outside: false, text: a.text };
-      return a ? { type: "reply", text: a.text, link: a.link && a.link in links ? a.link : null } : { type: "unclear" };
+      if (a) return { type: "reply", text: a.text, link: a.link && a.link in links ? a.link : null };
+      // A key that isn't on the list ("invoice", "competitor_prices": the
+      // test run of 11 Oct): something PandaWorld doesn't do, so not_yet;
+      // one it does has its own key and never lands here.
+      if (capability(id)) return { type: "unclear" };
+      return { type: "not_yet", what: id ? id.replace(/_/g, " ").slice(0, 200) : message.trim().slice(0, 200), outside: false };
     }
     case "draft_text": {
       // Reading a draft changes nothing: any of theirs, said or not; the only one when none is named.

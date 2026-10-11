@@ -326,7 +326,10 @@ export type AgentCall = (turns: GeminiTurn[], onlyAct: boolean, noReply?: boolea
 export function geminiAgentCall(model: string, system: string, usage: FrontDoorUsage): AgentCall {
   return (turns, onlyAct, noReply) => withAiUsageContext(usage, () => callGeminiWithTools(model, turns, {
     system, tools: AGENT_TOOLS, mode: "ANY", ...(noReply ? { allowed: ACTION_NAMES_NO_REPLY } : onlyAct ? { allowed: ACTION_NAMES } : {}),
-    ...(model.startsWith("gemini-3") ? { preferBackend: "ai-studio" as const } : {}),
+    // AI Studio for every model: Vertex refuses these tools for 2.5 Flash
+    // ("too much branching for serving", the model comparison of 11 Oct),
+    // and Gemini 3 needs it for its thought signatures.
+    preferBackend: "ai-studio" as const,
   }));
 }
 
