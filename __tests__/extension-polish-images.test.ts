@@ -91,7 +91,7 @@ it("charges for the images that came back, and says what's left", async () => {
   const res = await call({ images: [{ dataUrl: PHOTO }] });
   expect(res.status).toBe(200);
   const body = await res.json();
-  expect(body.creditsRemaining).toBe(50 - 3 * 2); // 2 an image; lifestyle failed: free
+  expect(body.creditsRemaining).toBe(50 - 3 * 3); // 3 an image; lifestyle failed: free
   expect(db.tables.extension_credit_transactions).toContainEqual(expect.objectContaining({
     user_id: "user_pro", type: "deduction", amount: -3 * POLISH_CREDIT_COST, description: "Polished 3 product images in the extension",
   }));
@@ -191,9 +191,10 @@ describe("a free grant", () => {
       ...Array.from({ length: 8 }, () => ({ user_id: "user_gift", type: "deduction", amount: -1, created_at: "2026-10-07T10:00:00.000Z" })),
       { user_id: "user_gift", type: "purchase", amount: 100, created_at: "2026-10-07T11:00:00.000Z" },
     );
+    db.tables.extension_credits.find((r) => r.user_id === "user_gift")!.balance = 20;
     const res = await call({ images: [{ dataUrl: PHOTO }] });
     expect(res.status).toBe(200);
-    expect((await res.json()).creditsRemaining).toBe(8 - 3 * POLISH_CREDIT_COST);
+    expect((await res.json()).creditsRemaining).toBe(20 - 3 * POLISH_CREDIT_COST);
   });
 
   it("doesn't count what was spent before it began", async () => {

@@ -1,7 +1,7 @@
 /**
  * Jumia orders on WhatsApp (agreed with the owner 2026-10-06, AGENTS.md
  * "Agreed design for the WhatsApp order flow"): the alert, Pack all & get
- * labels as ONE PDF, Ready to ship all, Pick orders (one order's Pack / Get
+ * labels as ONE PDF, Ready to ship all, OR Choose one (one order's Pack / Get
  * label / Ready to ship / Cancel), and "orders" typed any time.
  *
  * Gated by pack (lib/billing/features.ts): seeing waiting orders, packing,
@@ -271,7 +271,8 @@ async function loadOne(ctx: Ctx, orderId: string): Promise<WaitingOrder | null> 
   return o;
 }
 
-const PICK = { id: "orders:pick", title: "Pick orders" };
+// "OR Choose one" (owner, 2026-10-11; was "Pick orders"): beside Pack all, one order at a time.
+const PICK = { id: "orders:pick", title: "OR Choose one" };
 
 /** The buttons for a set of waiting orders; without labels here, packing on its own. */
 function waitingButtons(orders: WaitingOrder[], labels = true): { id: string; title: string }[] {

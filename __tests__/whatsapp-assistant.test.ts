@@ -1270,7 +1270,7 @@ describe("the chat's billed commands, understood (owner, 2026-10-07)", () => {
     aiReplies.push('{"area":"shop_info"}', '{"type":"reply","text":"Hi!","link":null}');
     await runAssistant("seller", "233", { phoneNumber: "233", userId: "seller", state: "awaiting_count", batchId: null, lastSubmittedBatchId: null } as never, "hi", "idle");
     const prompt = aiPrompts.at(-1)!;
-    expect(prompt).toContain("2 credits each");
+    expect(prompt).toContain("3 credits each");
     expect(prompt).toContain('{"type":"health_report"}');
     expect(prompt).toContain("Only polish, the report and changes to live products cost credits");
   });

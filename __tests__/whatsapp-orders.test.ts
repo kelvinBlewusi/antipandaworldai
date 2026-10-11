@@ -2,7 +2,7 @@
  * Jumia orders on WhatsApp (lib/whatsapp/orders.ts, lib/jumia/order-flow.ts,
  * lib/whatsapp/order-alerts.ts), built 2026-10-06 from the flow agreed with
  * the owner: grouped alerts, Pack all & get labels as ONE PDF, Ready to ship
- * all, Pick orders, Cancel with a confirmation, gated by pack, every Jumia
+ * all, OR Choose one, Cancel with a confirmation, gated by pack, every Jumia
  * country.
  */
 
@@ -245,7 +245,7 @@ describe("gated", () => {
 });
 
 describe("the flow", () => {
-  it("'orders' shows what's waiting, with Pack all and Pick orders", async () => {
+  it("'orders' shows what's waiting, with Pack all and OR Choose one", async () => {
     await say("orders");
     const msg = last("buttons");
     expect(msg.body).toContain("To pack (2)");
@@ -472,7 +472,7 @@ describe("on every plan, labels from Standard (owner, 2026-10-07)", () => {
     await say("orders");
     const msg = last("buttons");
     expect(msg.body).toContain("To pack (2)");
-    expect(msg.buttons!.map((b) => [b.id, b.title])).toEqual([["orders:packall", "Pack all"], ["orders:pick", "Pick orders"]]);
+    expect(msg.buttons!.map((b) => [b.id, b.title])).toEqual([["orders:packall", "Pack all"], ["orders:pick", "OR Choose one"]]);
   });
 
   it("packs every order on WhatsApp without a label or a charge, and names the pack that has labels", async () => {
@@ -524,12 +524,12 @@ describe("in the Jumia Listing Assistant on the website", () => {
   const web = (text: string) => handleOrderMessage("user_seller", WEB, text);
   const labelCalls = () => calls.filter((c) => c.path === "/orders/print-labels");
 
-  it("shows the waiting orders with Pack all (no labels) and Pick orders", async () => {
+  it("shows the waiting orders with Pack all (no labels) and OR Choose one", async () => {
     await web("orders");
     const msg = last("buttons");
     expect(msg.to).toBe(WEB);
     expect(msg.body).toContain("To pack (2)");
-    expect(msg.buttons!.map((b) => [b.id, b.title])).toEqual([["orders:packall", "Pack all"], ["orders:pick", "Pick orders"]]);
+    expect(msg.buttons!.map((b) => [b.id, b.title])).toEqual([["orders:packall", "Pack all"], ["orders:pick", "OR Choose one"]]);
   });
 
   it("packs every order without printing or charging a label, and says where labels are printed", async () => {

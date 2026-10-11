@@ -224,10 +224,12 @@ export const NOTICE_CREDIT_COST = 0.2;
  * One image of an image polish (four product photos from the seller's own:
  * main on white, angle, lifestyle, detail), in the chat or the extension.
  * Owner, 2026-10-07: 2 an image, 8 for the four ("cheaper polish"). The
- * image model costs about $0.04 an image: near cost on the biggest pack.
- * Charged per image that came back.
+ * image model costs about $0.04 an image, which at 2 left ~30% (the one
+ * action that barely earned): 3 an image, 12 for the four, since
+ * 2026-10-11 (owner: "yes let's raise polish to 3"). Charged per image that
+ * came back.
  */
-export const POLISH_CREDIT_COST = 2;
+export const POLISH_CREDIT_COST = 3;
 /** The shop health report in chat (owner, 2026-10-07). */
 export const REPORT_CREDIT_COST = 2;
 
