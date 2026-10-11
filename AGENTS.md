@@ -2681,6 +2681,42 @@ these three were approved, plus some live changes made immediate.
       `outside-football` and `chat-questions-remembered`.
   - Tests: "honest can't" in whatsapp-assistant.test.ts and the capability
     answers in jumia-capabilities.test.ts.
+- **The agent's model** (step 1, the comparison). Test set 248 cases, agent
+  mode, one run at a time, cost from ai_usage over each run.
+  - Gemini 3.1 Flash-Lite (before): 234/248, median 1.17 s, slowest tenth
+    1.46 s, $0.82 a run (about $3.30 per 1,000 messages). Run 933dc0c2.
+  - **Gemini 3.5 Flash-Lite** (default thinking, "minimal"): 235 and
+    236/248, median 0.92–0.95 s, slowest tenth 1.28–1.33 s, $0.98–1.00 a
+    run (about $4 per 1,000). Runs 7405543e, 8c12e0f8. **Switched to it**:
+    app_settings `assistant_agent_model` = "gemini-3.5-flash-lite" (11 Oct).
+  - Gemini 3.8 Flash, thinking "low": 235/248 but median 2.24 s, slowest
+    tenth 7.4 s, one timeout, $2.64 a run. Run e7468a20.
+  - Gemini 3 Flash Preview (default thinking): 8.7 s a message on average,
+    9 of 40 over 10 s; stopped. Run 48f7adf6.
+  - Gemini 2.5 Flash: refuses the agent's tools on Vertex and on AI Studio
+    ("too much branching for serving"). Runs 1c89c0c8, 3b538c11.
+  - Front door (every other seller, Gemini 3.1 Flash-Lite) after the honest
+    "can't" changes: 228/248 (4 asked back), median 1.53 s; on the 240 cases
+    it had before, 223 (225 on 10 Oct). Run 1356b757.
+  - Changes the comparison needed:
+    - Every agent model goes through AI Studio (`geminiAgentCall`):
+      Vertex refuses the tools for 2.5 Flash.
+    - `assistant_agent_model` and test runs can name a thinking level
+      after the model id: "gemini-3.8-flash:low" (`agentModelSpec`).
+      Gemini 3 and later get it as `thinkingLevel`; 2.5 gets a token budget
+      (`thinkingConfig` in gemini-client.ts).
+    - The agent's `edit` tool takes one change a call. With a list of
+      them, draft edits ran to 10 s writing empty
+      `{"products":[1],"changes":{}}` entries again and again; six draft
+      cases timed out in every run. `actionJson` puts it back as the chat's
+      `edits` list. `maxItems` on the tools' lists was tried first: every
+      call got a 400, so don't add it.
+    - A `cannot` with a key that isn't on the list is `not_yet`.
+    - Prices for 3.5 Flash-Lite, 3.6/3.8 Flash and 3 Flash Preview are in
+      `MODEL_PRICES_USD_PER_M`. 3.6 and 3.8 Flash double on 1 Jan 2027.
+    - The test runner sends cases fast. When every call fails at once
+      (400s), AI Studio answers 429 (per-minute quota) for the rest of the
+      run.
 
 ### What sellers can and can't ask of Jumia (owner, 2026-10-09)
 
