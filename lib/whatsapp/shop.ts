@@ -61,7 +61,9 @@ import { updateSession, type ListedProducts } from "@/lib/whatsapp/session";
 import { checkRestrictedBrand } from "@/lib/jumia/prohibited-catalog";
 import { findRestrictedWords, stripRestrictedWords } from "@/lib/ai/restricted-words";
 import { callGeminiBackend } from "@/lib/ai/gemini-client";
-import { buildContentStyleBlockFor } from "@/lib/ai/content-style-rules";
+import { buildContentStyleBlockFor, buildSearchGroundingInstruction } from "@/lib/ai/content-style-rules";
+import { buildContentPolicyInstructions } from "@/lib/ai/jumia-content-policy";
+import { resolveOneImage } from "@/lib/extension/harvested-images";
 import { withAiUsageContext } from "@/lib/ai/usage";
 
 const ID = "[0-9a-f-]{36}";
@@ -563,6 +565,8 @@ export interface ContentRequest {
   highlights?:  string;
   /** Other details in the seller's words ("colour": "black"), checked against the category (lib/whatsapp/live-details.ts). */
   details?:     Record<string, string>;
+  /** Of those, the ones added to what the product has ("add rubber to the material"), not put in its place. */
+  adding?:      string[];
   barcode?:     string;
   /** Renaming one of its sizes ("M" → "Medium"). */
   size?:        { from: string | null; to: string };
@@ -572,34 +576,78 @@ export interface ContentRequest {
 }
 
 const REWRITE_MODEL = "gemini-2.5-flash";
+/** How long the photos may take to fetch, and the writing itself, inside the chat's 60 s. */
+const REWRITE_IMAGE_MS = 8_000;
+const REWRITE_MS = 30_000;
 
-/** New text for a product, written by AI from what it has now. Restricted words are taken out. */
+/** `work`, or what `late` gives after `ms`; the timer is cleared either way. */
+function within<T>(work: Promise<T>, ms: number, late: () => T | Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<T>((resolve, reject) => {
+    timer = setTimeout(() => { try { resolve(late()); } catch (e) { reject(e); } }, ms);
+  });
+  return Promise.race([work, timeout]).finally(() => clearTimeout(timer));
+}
+
+/** Up to four of the product's photos, the main one first, as the model reads them. Never throws. */
+async function productImageParts(set: ProductSet): Promise<{ inlineData: { data: string; mimeType: string } }[]> {
+  const urls = [...set.images].sort((a, b) => Number(b.primary) - Number(a.primary)).map((i) => i.url).filter((u) => /^https?:\/\//.test(u)).slice(0, 4);
+  const got = await Promise.all(urls.map((url) => within(resolveOneImage({ imageUrl: url }), REWRITE_IMAGE_MS, () => null).catch(() => null)));
+  return got.filter((g): g is { base64: string; mimeType: string } => g != null).map((g) => ({ inlineData: { data: g.base64, mimeType: g.mimeType } }));
+}
+
+/**
+ * New text for a product, written by AI the way a new listing is drafted
+ * (owner, 2026-10-11: "the description rewrite … does not follow the
+ * standard we have when drafting from scratch" and "have a look at the
+ * pictures of it"): from its photos, its details and what it says now, with
+ * web search for real specs, under Jumia's content policy and the drafting
+ * style. Restricted words are taken out.
+ */
 export async function rewriteContent(
   userId: string, set: ProductSet, fields: ("name" | "description" | "highlights")[], instructions: string | undefined,
 ): Promise<Partial<Record<"name" | "description" | "highlights", string>>> {
   const highlights = set.attributes.find((a) => a.name === "short_description")?.value ?? "";
+  const images = await productImageParts(set);
   const prompt = [
-    "You improve one product listing on Jumia (Africa's online marketplace). Rewrite only what's asked, from the facts below; never invent specifications, materials, sizes, warranties or claims that aren't there.",
+    `You rewrite parts of one product listing on Jumia (Africa's online marketplace): ${fields.join(", ")}, and nothing else.`,
+    images.length > 0
+      ? `Its ${images.length} photo${images.length === 1 ? " is" : "s are"} attached (the main one first). Write from what the product really is: what the photos show, its details below, and what its listing says now.`
+      : "Write from what the product really is: its details below, and what its listing says now.",
+    "Never invent specifications, materials, sizes, warranties or claims you can't see, read or confirm.",
+    buildContentPolicyInstructions({ categoryPath: set.category?.name ?? null, includeImageRules: false }).trim(),
     `Product name now: ${set.name}`,
     `Brand: ${set.brand?.name ?? "unknown"} · Category: ${set.category?.name ?? "unknown"}`,
     `Description now: ${htmlToText(set.description).slice(0, 3000)}`,
     `Highlights now: ${htmlToText(highlights).slice(0, 800)}`,
     `Details: ${[...set.attributes.filter((a) => a.name !== "short_description" && a.value.length < 120), ...set.variations.flatMap((v) => v.attributes)].slice(0, 30).map((a) => `${a.name}=${a.value}`).join("; ")}`,
     ...(instructions ? [
-      `The seller's instructions: ${instructions.slice(0, 400)}`,
-      "When the instructions ask for a small edit (remove, replace or add a word), make only that edit and keep the rest exactly as it is.",
+      `What the seller asked for: ${instructions.slice(0, 400)}`,
+      "When they ask for a small edit (remove, replace or add a word), make only that edit and keep the rest exactly as it is. Otherwise write it afresh, to the standard below: a short or thin text now is no limit on the new one.",
     ] : []),
     // The same writing rules as a new listing's draft (lib/ai/content-style-rules.ts),
     // so a rewrite reads as well as what PandaWorld lists (owner, 2026-10-10).
-    "For anything you write afresh, follow the content style below, using only the facts above.",
+    "Follow the content style below for everything you write afresh. The name: model + product type + key specs a buyer searches for, roughly 6–12 words, never the brand.",
     buildContentStyleBlockFor(fields).trim(),
+    buildSearchGroundingInstruction().trim(),
     "",
     "Return ONLY JSON with these keys and nothing else:",
     ...(fields.includes("name") ? ['"name": the product name (or as long as it is now, for a small edit). No promotional words.'] : []),
     ...(fields.includes("description") ? ['"description": the description as HTML, following the content style. No prices, no contact details, no links.'] : []),
     ...(fields.includes("highlights") ? ['"highlights": the highlights as HTML, following the content style.'] : []),
   ].join("\n");
-  const { text } = await withAiUsageContext({ feature: "assistant", userId }, () => callGeminiBackend(REWRITE_MODEL, [{ text: prompt }]));
+  const write = (withSearch: boolean) => withAiUsageContext({ feature: "assistant", userId }, () => within(
+    callGeminiBackend(REWRITE_MODEL, [{ text: prompt }, ...images], withSearch ? { groundWithSearch: true } : {}),
+    REWRITE_MS, () => { throw new Error(`rewrite took over ${REWRITE_MS / 1000} s`); },
+  ));
+  // Search first, as a draft is written; without it if that fails fast (a
+  // timeout leaves no time for a second try inside the chat's 60 s).
+  const { text } = await write(true).catch((e) => {
+    const why = (e as Error).message;
+    console.warn(`[rewrite] with search failed: ${why.slice(0, 160)}`);
+    if (why.startsWith("rewrite took over")) throw e;
+    return write(false);
+  });
   const match = text.match(/\{[\s\S]*\}/);
   if (!match) return {};
   let parsed: Record<string, unknown>;
@@ -607,7 +655,7 @@ export async function rewriteContent(
   const out: Partial<Record<"name" | "description" | "highlights", string>> = {};
   for (const f of fields) {
     const v = typeof parsed[f] === "string" ? stripRestrictedWords(parsed[f] as string).trim() : "";
-    if (v && findRestrictedWords(v).length === 0) out[f] = f === "name" ? v.replace(/\s+/g, " ").slice(0, 120) : v.slice(0, 5000);
+    if (v && findRestrictedWords(v).length === 0) out[f] = f === "name" ? v.replace(/\s+/g, " ").slice(0, 120) : v.slice(0, 8000);
   }
   return out;
 }
@@ -672,7 +720,7 @@ export async function proposeContentChange(userId: string, phone: string, query:
       return "set unreadable";
     }
     const attrs = req.details || req.size ? (set.data.category ? await categoryDetails(ctx.token, set.data.category.code) : []) : [];
-    const r = resolveDetails({ details: req.details, barcode: req.barcode, size: req.size ?? undefined }, set.data, attrs, found.length === 1 ? found[0].sellerSku : null);
+    const r = resolveDetails({ details: req.details, adding: req.adding, barcode: req.barcode, size: req.size ?? undefined }, set.data, attrs, found.length === 1 ? found[0].sellerSku : null);
     if (!r.ok) {
       await sendTextIfConfigured(phone, r.why);
       return "details refused";
@@ -740,7 +788,11 @@ export async function makeChange(userId: string, phone: string, id: string, prod
 }
 
 /** A new size (or colour) for a live product: its name, and the stock and price the seller gave. */
-export interface AddSizeRequest { size: string; stock: number | null; price: number | null }
+/** `said`: the seller's own words for the size ("15inc"), when the AI read them as another spelling ("15-Inch"). */
+export interface AddSizeRequest { size: string; stock: number | null; price: number | null; said?: string }
+
+/** A product's only variation with no name on Jumia ("..." is Jumia's "no variation"). */
+const UNNAMED_VARIATION = /^\s*(?:\.{2,}|…|-|n\/?a)?\s*$/i;
 
 /** The category's size (or colour) detail its variations use: the one their names fit, else the first with options. */
 export function variantAxis(attrs: JumiaCategoryAttribute[], set: ProductSet): JumiaCategoryAttribute | null {
@@ -799,9 +851,22 @@ export async function proposeAddSize(userId: string, phone: string, query: strin
     await sendTextIfConfigured(phone, `I couldn't read ${shorten(product.name, 60)} from Jumia just now${set.ok ? "" : `: ${set.message}`}. Try again in a minute.`);
     return "set unreadable";
   }
+  // Its one size has no name ("..."): a second can't sit beside it until it
+  // has one (owner, 2026-10-11: "add a 15inc variation" to the 17-inch
+  // dartboard). Naming it is an update Jumia takes; say how.
+  if (set.data.variations.length === 1 && UNNAMED_VARIATION.test(set.data.variations[0].variation ?? "")) {
+    await sendTextIfConfigured(phone, [
+      `${shorten(product.name, 60)} has one size, with no name on Jumia ("${set.data.variations[0].variation ?? "..."}"), so ${shorten(req.size, 30)} can't be added beside it yet.`,
+      `First name the one it has: say e.g. "the ${short}'s current size is …" and I'll change it for one tap. Then ask me again to add ${shorten(req.size, 30)}.`,
+    ].join("\n\n"));
+    return "add size: name the current one first";
+  }
   const attrs = set.data.category ? await categoryDetails(ctx.token, set.data.category.code) : [];
   const axis = variantAxis(attrs, set.data);
-  const value = axis && axis.allowed_values.length > 0 ? allowedValueFor(req.size, axis) : req.size.trim().slice(0, 40);
+  // Their size as the category spells it: the AI's reading, or their own words.
+  const value = axis && axis.allowed_values.length > 0
+    ? allowedValueFor(req.size, axis) ?? (req.said ? allowedValueFor(req.said, axis) : null)
+    : req.size.trim().slice(0, 40);
   if (!value) {
     await sendTextIfConfigured(phone, `Jumia doesn't take "${shorten(req.size, 30)}" as a ${(axis!.label || axis!.name).toLowerCase()} for this product. It takes: ${axis!.allowed_values.slice(0, 20).join(", ")}${axis!.allowed_values.length > 20 ? ", …" : ""}.`);
     return "add size: not an option";

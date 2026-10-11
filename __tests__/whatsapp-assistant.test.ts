@@ -100,7 +100,7 @@ jest.mock("@/lib/jumia/categories", () => ({
 }));
 
 import {
-  NOT_YET_TEXT, OUTSIDE_TEXT, agentFor, agentModel, answerLiveValue, answerProductPick, claimsInability, assistantEnabled, assistantFor, assistantLinks, cleanReply, countBacked, fitsDraft, isStateQuestion, looksLikeQuestion, messageNumbers,
+  NOT_YET_TEXT, OUTSIDE_TEXT, agentFor, agentModel, aiSaleWindow, answerLiveValue, answerProductPick, claimsInability, assistantEnabled, assistantFor, assistantLinks, cleanReply, countBacked, fitsDraft, isStateQuestion, looksLikeQuestion, messageNumbers,
    draftNumberIn, draftTextLines,  sameName, namesAProduct, newestWithin, recentConversation, saidIsValues, saleWindow, splitProducts, parseAction, plainQuickEdit, runAssistant, verifyChanges, type ProductFacts,
 } from "@/lib/whatsapp/assistant";
 import { assistantGate } from "@/lib/whatsapp/assistant-limits";
@@ -512,6 +512,37 @@ describe("agent mode (the pilot, owner 2026-10-10)", () => {
     expect(aiCalls).toBe(calls + 1);
   });
 
+  // Owner's WhatsApp, 2026-10-11: six numbered changes to the dartboard; the sale was never called.
+  it("a message of several parts: asked once whether any part is left, before anything is done", async () => {
+    db.tables.app_settings = [{ key: "assistant_agent", value: "all" }];
+    const msg = "1. change the brand of the 17 inc dart to generic\n2. add sale price 200 start and end is 20th october to 27th october";
+    toolReplies.push(
+      [{ name: "content_change", args: { product: "17 inc dart", brand: "generic" } }],
+      [{ name: "live_change", args: { product: "17 inc dart", sale_price: 200, sale_start: "2026-10-20", sale_end: "2026-10-27", dates_said: "20th october to 27th october" } }],
+    );
+    expect(await runAssistant("seller", "233", session(), msg, "idle")).toBe("handled");
+    expect(toolAllowed[0]).not.toContain("done");
+    expect(toolAllowed[1]).toContain("done");
+    expect(toolTurns[1]).toContain("go through their message part by part");
+    expect(shopCalls.map((c) => c[0])).toEqual(["proposeContentChange", "proposeLiveChange"]);
+
+    // Done: only what it did. The same tool for the same product again is the same part.
+    shopCalls.length = 0;
+    toolReplies.push([{ name: "content_change", args: { product: "17 inc dart", brand: "generic" } }], [{ name: "done", args: {} }]);
+    await runAssistant("seller", "233", session(), msg, "idle");
+    expect(shopCalls.map((c) => c[0])).toEqual(["proposeContentChange"]);
+    shopCalls.length = 0;
+    toolReplies.push([{ name: "content_change", args: { product: "17 inc dart", brand: "generic" } }], [{ name: "content_change", args: { product: "17 inc dart", brand: "Generic" } }]);
+    await runAssistant("seller", "233", session(), msg, "idle");
+    expect(shopCalls.map((c) => c[0])).toEqual(["proposeContentChange"]);
+
+    // One line, one request: no extra call.
+    const calls = aiCalls;
+    toolReplies.push([{ name: "content_change", args: { product: "17 inc dart", brand: "generic" } }]);
+    await runAssistant("seller", "233", session(), "change the brand of the 17 inc dart to generic", "idle");
+    expect(aiCalls).toBe(calls + 1);
+  });
+
   it("falls back to the front door when it fails", async () => {
     db.tables.app_settings = [{ key: "assistant_agent", value: "all" }];
     aiReplies.push('{"area":"orders"}', '{"type":"orders"}');
@@ -581,6 +612,52 @@ describe("a draft's own text (owner's WhatsApp, 2026-10-10)", () => {
     expect(sent[0].body).toContain("Tummy control");
     expect(sent[0].body).toContain("Soft and stretchy.");
     expect(sent[1]).toMatchObject({ kind: "cta", button: "Review listings" });
+  });
+});
+
+describe("the owner's dartboard, all in one message (2026-10-11)", () => {
+  const MSG = "1. change the brand of the 17 inc dart to generic\n2. the weight to 0.9\n3. warranty address to north legon\n4. edit the tittle to be abit longer\n5. add sale price 200 start and end is 20th october to 27th october\n6. add rubber to the material family";
+  const read = (json: Record<string, unknown>, message = MSG) => parseAction(JSON.stringify({ type: "content_change", ...json }), message, [], assistantLinks());
+
+  it("a rewrite asked for in any words, with their words as what to do", () => {
+    // "tittle" and "longer" weren't on the word list: the name was dropped.
+    expect(read({ product: "17 inc dart", brand: "generic", rewrite: ["name"], asked: { name: "edit the tittle to be abit longer" } }))
+      .toEqual({ type: "content_change", product: "17 inc dart", request: { brand: "generic", rewrite: ["name"], instructions: 'Name: "edit the tittle to be abit longer"' } });
+    // Words that aren't theirs ask for nothing.
+    expect(read({ product: "17 inc dart", brand: "generic", rewrite: ["name"], asked: { name: "make the title more catchy" } }))
+      .toEqual({ type: "content_change", product: "17 inc dart", request: { brand: "generic" } });
+  });
+
+  it("only the fields they asked about are rewritten", () => {
+    const msg = "okay the description for it is too short and not SEO friendly kindly have a look at the pictures of it and rewrite the description yourself";
+    // 10:01: a new name came with it, unasked.
+    expect(read({ product: "dartboard", rewrite: ["description", "name"], asked: { description: "rewrite the description yourself" } }, "the dartboard: " + msg))
+      .toMatchObject({ request: { rewrite: ["description"], instructions: 'Description: "rewrite the description yourself"' } });
+  });
+
+  it("a sale's dates in their words: \"start and end is 20th october to 27th october\"", () => {
+    const now = new Date("2026-10-11T10:00:00Z");
+    const args = { sale_price: 200, sale_start: "2026-10-20", sale_end: "2026-10-27", dates_said: "20th october to 27th october" };
+    expect(aiSaleWindow(args, MSG, now)).toEqual({ start: "2026-10-20", end: "2026-10-27" });
+    // The year is the next time that day comes, whatever year the AI wrote.
+    expect(aiSaleWindow({ ...args, sale_start: "2024-10-20", sale_end: "2024-10-27" }, MSG, now)).toEqual({ start: "2026-10-20", end: "2026-10-27" });
+    expect(aiSaleWindow({ ...args, sale_start: "2026-12-28", sale_end: "2026-01-04", dates_said: "28th december to 4th january" }, "sale from 28th december to 4th january", now))
+      .toEqual({ start: "2026-12-28", end: "2027-01-04" });
+    // Not their words, or days that aren't in them: no dates.
+    expect(aiSaleWindow({ ...args, dates_said: "next week" }, MSG, now)).toBeNull();
+    expect(aiSaleWindow({ ...args, sale_end: "2026-10-29" }, MSG, now)).toBeNull();
+    // As the chat reads it: a sale of 200 from the 20th to the 27th.
+    expect(read({ product: "17 inc dart", brand: "generic" })).toMatchObject({ type: "content_change" });
+    expect(parseAction(JSON.stringify({ type: "live_change", product: "17 inc dart", ...args }), MSG, [], assistantLinks()))
+      .toMatchObject({ type: "live_change", change: { kind: "sale", sale: { price: 200, end: expect.stringMatching(/-10-27$/) } } });
+  });
+
+  it("a detail added to keeps what it has", () => {
+    expect(read({ product: "17 inc dart", details: { "material family": "rubber", weight: "0.9" }, adding: ["material family"] }))
+      .toEqual({ type: "content_change", product: "17 inc dart", request: { details: { "material family": "rubber", weight: "0.9" }, adding: ["material family"] } });
+    // A detail not in the change isn't "added".
+    expect(read({ product: "17 inc dart", details: { weight: "0.9" }, adding: ["colour"] }))
+      .toEqual({ type: "content_change", product: "17 inc dart", request: { details: { weight: "0.9" } } });
   });
 });
 

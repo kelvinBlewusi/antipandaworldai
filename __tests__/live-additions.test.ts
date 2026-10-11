@@ -158,6 +158,16 @@ describe("a new size for a live product", () => {
     const links = assistantLinks();
     expect(parseAction('{"type":"add_size","product":"gown","size":"XL","stock":4,"price":150}', "add size XL to the gown, 4 pieces at 150", [], links))
       .toEqual({ type: "add_size", product: "gown", request: { size: "XL", stock: 4, price: 150 } });
+    // Owner, 2026-10-11: "let's add a 15inc variation", read as 15-Inch, was turned down for the spelling;
+    // then the price and stock came in the next message, with the size in the one before.
+    expect(parseAction('{"type":"add_size","product":"dartboard","size":"15-Inch","said":"15inc"}', "let's add a 15inc variation to the dartboard", [], links))
+      .toEqual({ type: "add_size", product: "dartboard", request: { size: "15-Inch", stock: null, price: null, said: "15inc" } });
+    expect(parseAction('{"type":"add_size","product":"dartboard","size":"15-Inch","said":"15inc","stock":10,"price":200}', 'add variation "..." price is 200 and the qty is 10', [], links, "GHS",
+      { context: "Seller: let's add a 15inc variation to the dartboard" }))
+      .toEqual({ type: "add_size", product: "dartboard", request: { size: "15-Inch", stock: 10, price: 200, said: "15inc" } });
+    // Words they didn't write back nothing.
+    expect(parseAction('{"type":"add_size","product":"dartboard","size":"15-Inch","said":"fifteen inch"}', "let's add a 15inc variation to the dartboard", [], links))
+      .toMatchObject({ type: "reply", text: expect.stringContaining("Which size should I add?") });
     expect(parseAction('{"type":"add_size","product":"gown","size":"XL","stock":5,"price":200}', "add XL to the gown", [], links))
       .toEqual({ type: "add_size", product: "gown", request: { size: "XL", stock: null, price: null } });
     expect(parseAction('{"type":"add_size","product":"gown","size":"XXL","stock":null,"price":null}', "add a bigger size to the gown", [], links))

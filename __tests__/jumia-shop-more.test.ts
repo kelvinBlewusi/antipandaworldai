@@ -24,8 +24,14 @@ jest.mock("@/lib/billing/features", () => ({
 }));
 let rewritten = "{}";
 const aiPrompts: string[] = [];
+// Each AI call's photos and whether it searched the web.
+const aiCalls: { images: number; search: boolean }[] = [];
 jest.mock("@/lib/ai/gemini-client", () => ({
-  callGeminiBackend: async (_model: string, parts: { text?: string }[]) => { aiPrompts.push(parts.map((p) => p.text ?? "").join("\n")); return { text: rewritten }; },
+  callGeminiBackend: async (_model: string, parts: { text?: string; inlineData?: unknown }[], opts?: { groundWithSearch?: boolean }) => {
+    aiPrompts.push(parts.map((p) => p.text ?? "").join("\n"));
+    aiCalls.push({ images: parts.filter((p) => p.inlineData).length, search: opts?.groundWithSearch === true });
+    return { text: rewritten };
+  },
 }));
 
 type Sent = { kind: string; body: string; ids?: string[] };
@@ -46,7 +52,7 @@ jest.mock("@/lib/whatsapp/client", () => ({
 
 import { changedPrice, contentItems, findProducts, pctPrice, productsFromCatalog, saveProducts, type ShopProduct } from "@/lib/jumia/shop";
 import { answerProductPhotos, productDetailsLookup, productFactsText, whereLine } from "@/lib/whatsapp/shop";
-import { answerProductText, answerProducts, answerStock, bulkTargets, handleShopTap, htmlToText, proposeBulkChange, proposeContentChange } from "@/lib/whatsapp/shop";
+import { answerProductText, answerProducts, answerStock, bulkTargets, handleShopTap, htmlToText, proposeAddSize, proposeBulkChange, proposeContentChange } from "@/lib/whatsapp/shop";
 import { runApiChecks } from "@/lib/jumia/api-checks";
 import { fixRejected } from "@/lib/whatsapp/fix-rejected";
 import {
@@ -91,6 +97,7 @@ beforeEach(() => {
   calls.length = 0;
   rewritten = "{}";
   aiPrompts.length = 0;
+  aiCalls.length = 0;
   _resetPriceMinimumCache();
   _resetBillingModeCache();
   catalog = [
@@ -105,6 +112,8 @@ beforeEach(() => {
   global.fetch = jest.fn(async (input: URL | string, init?: RequestInit) => {
     const url = new URL(String(input));
     const method = init?.method ?? "GET";
+    // A product's photo (https://img/…): a PNG's first bytes.
+    if (url.hostname === "img") return new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0]), { status: 200 });
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
     calls.push({ method, path: url.pathname, query: url.searchParams, body });
     let out: unknown = {};
@@ -212,6 +221,14 @@ describe("rules for many products", () => {
     expect(last().body).toContain("Nothing to change");
   });
 
+  // Owner, 2026-10-11: "let's add a 15inc variation" to the 17-inch dartboard, whose one size has no name ("...").
+  it("a new size beside one with no name: the one it has is named first", async () => {
+    expect(await proposeAddSize(USER, PHONE, "kettle", { size: "2.2L", stock: 5, price: 120 })).toBe("add size: name the current one first");
+    expect(last().body).toContain('has one size, with no name on Jumia ("..."), so 2.2L can\'t be added beside it yet.');
+    expect(last().body).toContain("current size is");
+    expect(writes()).toHaveLength(0);
+  });
+
   it("only some of the products just listed: the approved ones, or the ones ON or OFF", async () => {
     expect(await proposeBulkChange(USER, PHONE, "listed", null, { kind: "stock", stock: 12 }, [PERFUME_50, KETTLE, BOOT], "off")).toBe("offered bulk stock for 1 (listed)");
     expect(last().body).toContain("Wellington Rain Boot");
@@ -251,6 +268,19 @@ describe("a live product's content", () => {
     rewritten = '{"description":"<p>A sturdy rain boot.</p><ul><li>Waterproof</li></ul>"}';
     expect(await proposeContentChange(USER, PHONE, "wellington boot", { rewrite: ["description"], instructions: "rewrite it" })).toBe("offered content (description) for WEL-B");
     expect(last().body).toContain("*New description:*\nA sturdy rain boot.\n• Waterproof");
+  });
+
+  // Owner, 2026-10-11: "have a look at the pictures of it and rewrite the description yourself"; "does not follow the standard we have when drafting from scratch".
+  it("a rewrite is written as a new listing is drafted: from its photos, with web search, to the same standard", async () => {
+    rewritten = '{"description":"<p>A sturdy rain boot.</p>"}';
+    await proposeContentChange(USER, PHONE, "wellington boot", { rewrite: ["description"], instructions: 'Description: "rewrite the description yourself"' });
+    expect(aiCalls).toEqual([{ images: 2, search: true }]);
+    const prompt = aiPrompts[0];
+    expect(prompt).toContain("Its 2 photos are attached (the main one first).");
+    expect(prompt).toContain("MINIMUM LENGTH: at least 1500 characters");
+    expect(prompt).toContain("WEB SEARCH:");
+    expect(prompt).toContain('What the seller asked for: Description: "rewrite the description yourself"');
+    expect(prompt).toContain("a short or thin text now is no limit on the new one");
   });
 
   it("a rejected product is fixed the way the seller says, when Jumia sent no reason (owner, 2026-10-11)", async () => {

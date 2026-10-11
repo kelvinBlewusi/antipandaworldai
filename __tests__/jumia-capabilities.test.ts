@@ -125,6 +125,25 @@ describe("a live product's other details", () => {
     expect(resolveDetails({ size: { from: "M", to: "Medium" } }, SET, ATTRS, null)).toEqual({ ok: false, why: expect.stringContaining("It takes: S, M, L, XL") });
   });
 
+  // Owner, 2026-10-11: "add rubber to the material family" put Rubber in Wood's place.
+  it("a value added to a detail keeps what it has", () => {
+    const multi = attr("material_family", "Material Family", { type: "multi", allowed_values: ["Wood", "Rubber", "Plastic"] });
+    const withWood: ProductSet = { ...SET, attributes: [...SET.attributes, { name: "material_family", value: "Wood" }, { name: "main_material", value: "Satin" }] };
+    const attrs = [...ATTRS, multi];
+    expect(resolveDetails({ details: { "material family": "rubber" }, adding: ["material family"] }, withWood, attrs, null))
+      .toEqual({ ok: true, fields: { attributes: [{ name: "material_family", label: "Material Family", value: "Wood,Rubber" }] } });
+    // Without "adding" it replaces, as before; already there, it isn't added twice.
+    expect(resolveDetails({ details: { "material family": "rubber" } }, withWood, attrs, null))
+      .toEqual({ ok: true, fields: { attributes: [{ name: "material_family", label: "Material Family", value: "Rubber" }] } });
+    expect(resolveDetails({ details: { "material family": "wood" }, adding: ["material family"] }, withWood, attrs, null))
+      .toMatchObject({ ok: true, fields: { attributes: [{ value: "Wood" }] } });
+    // Free text: after a comma. A choice of one: said, nothing sent.
+    expect(resolveDetails({ details: { material: "silk" }, adding: ["material"] }, withWood, attrs, null))
+      .toMatchObject({ ok: true, fields: { attributes: [{ name: "main_material", value: "Satin, silk" }] } });
+    expect(resolveDetails({ details: { colour: "white" }, adding: ["colour"] }, withWood, attrs, null))
+      .toEqual({ ok: false, why: 'Jumia takes one color here (it\'s Black now). Say "change its color to White" to put it in its place.' });
+  });
+
   it("the AI's details are kept only when the value is in the message", () => {
     expect(contentAction({ type: "content_change", product: "neck fan", details: { colour: "white", material: "plastic" } }, "the neck fan's colour is white and it's plastic", ""))
       .toEqual({ type: "content_change", product: "neck fan", request: { details: { colour: "white", material: "plastic" } } });
