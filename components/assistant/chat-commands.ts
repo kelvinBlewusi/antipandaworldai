@@ -9,6 +9,8 @@
  * change to live products on its confirm tap.
  */
 
+import type { CommandText } from "@/lib/i18n/chat";
+
 export interface PaletteCommand {
   /** What's typed after "/". */
   slash: string;
@@ -45,20 +47,36 @@ export const PALETTE: PaletteCommand[] = [
   { slash: "disconnect", title: "Disconnect Jumia",   hint: "Asks you to confirm first",                 send: "disconnect" },
 ];
 
+/**
+ * The menu in the seller's language (lib/i18n/chat.ts): titles and hints
+ * translated, and a fill finished in the box ("Modifier ") in their words.
+ * The slash names and the words sent to the bot stay as they are.
+ */
+export function localPalette(text?: Partial<Record<string, CommandText>>): PaletteCommand[] {
+  if (!text || Object.keys(text).length === 0) return PALETTE;
+  return PALETTE.map((c) => {
+    const t = text[c.slash];
+    if (!t) return c;
+    return { ...c, title: t.title, hint: t.hint, ...(c.fill && t.fill ? { fill: t.fill } : {}), ...(c.example && t.example ? { example: t.example } : {}) };
+  });
+}
+
 const named = (c: PaletteCommand, name: string) => c.slash === name || (c.aliases ?? []).includes(name);
+/** Lower case without accents or Arabic vowel marks: "/cred" finds "Mes crédits". */
+const fold = (s: string) => s.normalize("NFD").replace(/[\u0300-\u036f\u064b-\u0652]/g, "").toLowerCase();
 
 /** The commands a "/..." being typed could mean, in menu order. */
-export function matchingCommands(typed: string): PaletteCommand[] {
-  const q = typed.replace(/^\//, "").trim().toLowerCase().split(/\s+/)[0] ?? "";
-  if (!q) return PALETTE;
-  return PALETTE.filter((c) =>
-    [c.slash, ...(c.aliases ?? [])].some((s) => s.startsWith(q)) || c.title.toLowerCase().split(/\s+/).some((w) => w.startsWith(q)));
+export function matchingCommands(typed: string, palette: PaletteCommand[] = PALETTE): PaletteCommand[] {
+  const q = fold(typed.replace(/^\//, "").trim().split(/\s+/)[0] ?? "");
+  if (!q) return palette;
+  return palette.filter((c) =>
+    [c.slash, ...(c.aliases ?? [])].some((s) => s.startsWith(q)) || fold(c.title).split(/\s+/).some((w) => w.startsWith(q)));
 }
 
 /** The command a typed "/name ..." names, if any. */
-export function slashCommand(typed: string): PaletteCommand | null {
+export function slashCommand(typed: string, palette: PaletteCommand[] = PALETTE): PaletteCommand | null {
   const m = typed.trim().match(/^\/(\S+)/);
-  return m ? PALETTE.find((c) => named(c, m[1].toLowerCase())) ?? null : null;
+  return m ? palette.find((c) => named(c, m[1].toLowerCase())) ?? null : null;
 }
 
 /**
@@ -66,11 +84,11 @@ export function slashCommand(typed: string): PaletteCommand | null {
  * typed after it ("/polish 2" → "polish 2"), or the text without its "/"
  * when it names no command.
  */
-export function slashToText(typed: string): string {
+export function slashToText(typed: string, palette: PaletteCommand[] = PALETTE): string {
   const m = typed.trim().match(/^\/(\S+)\s*(.*)$/);
   if (!m) return typed.trim();
   const [, name, rest] = m;
-  const cmd = PALETTE.find((c) => named(c, name.toLowerCase()));
+  const cmd = palette.find((c) => named(c, name.toLowerCase()));
   if (!cmd) return `${name} ${rest}`.trim();
   if (cmd.fill) return `${cmd.fill}${rest}`.trim();
   if (cmd.action) return "";
@@ -82,7 +100,7 @@ export function slashToText(typed: string): string {
  * tell what's meant (owner's test, 2026-10-07: a bare "Change"
  * was read as restarting). The page says what to add instead of sending.
  */
-export function unfinishedFill(text: string): PaletteCommand | null {
+export function unfinishedFill(text: string, palette: PaletteCommand[] = PALETTE): PaletteCommand | null {
   const t = text.trim().toLowerCase();
-  return PALETTE.find((c) => c.fill && c.example && c.fill.trim().toLowerCase() === t) ?? null;
+  return palette.find((c) => c.fill && c.example && c.fill.trim().toLowerCase() === t) ?? null;
 }

@@ -18,13 +18,16 @@ export function isPhoneOrTablet(): boolean {
 }
 
 /** The camera button beside Upload (or a "Camera" tile on a product card); nothing on a laptop or desktop. */
-export function CameraButton({ disabled, room, onPhotos, tile = false }: {
+export function CameraButton({ disabled, room, onPhotos, tile = false, label = "Take a photo", tileLabel = "Camera" }: {
   disabled?: boolean;
   /** How many more photos the message (or the product card) can take. */
   room: number;
   onPhotos: (files: File[]) => void;
   /** The product form's look: a small dashed tile saying "Camera", beside its "Photos" tile. */
   tile?: boolean;
+  /** Its words in the chat's language (lib/i18n/chat.ts). */
+  label?: string;
+  tileLabel?: string;
 }) {
   const input = useRef<HTMLInputElement>(null);
   // Known only in the browser: drawn after the first render, so the server's page matches.
@@ -49,11 +52,11 @@ export function CameraButton({ disabled, room, onPhotos, tile = false }: {
         className={tile
           ? "flex h-16 w-16 flex-col items-center justify-center gap-0.5 rounded-lg border border-dashed border-zinc-300 text-[11px] font-medium text-zinc-500 hover:border-orange-300 hover:bg-orange-50 disabled:opacity-50"
           : "flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-zinc-200 bg-white text-zinc-700 transition-colors hover:border-orange-300 hover:bg-orange-50 disabled:opacity-50"}
-        aria-label="Take a photo"
-        title="Take a photo"
+        aria-label={label}
+        title={label}
       >
         <Camera className="h-5 w-5 text-orange-500" />
-        {tile && "Camera"}
+        {tile && tileLabel}
       </button>
     </>
   );

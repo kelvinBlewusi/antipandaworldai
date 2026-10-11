@@ -15,15 +15,11 @@
 import { createServerClient } from "@/lib/supabase/server";
 import { sellerCountry } from "@/lib/jumia/unlistable-categories";
 import { listingLanguageFor, type ListingLanguage } from "@/lib/ai/listing-language";
+import { isUiLanguage, type UiLanguage } from "@/lib/i18n/languages";
 
-export type UiLanguage = "en" | "fr" | "ar";
-export const UI_LANGUAGES: UiLanguage[] = ["en", "fr", "ar"];
+export { LANGUAGE_NAMES, UI_LANGUAGES, isUiLanguage, type UiLanguage } from "@/lib/i18n/languages";
 export const LISTING_LANGUAGES: ListingLanguage[] = ["en", "fr"];
 
-/** Each language's own name, for the switch. */
-export const LANGUAGE_NAMES: Record<UiLanguage, string> = { en: "English", fr: "Français", ar: "العربية" };
-
-export const isUiLanguage = (v: unknown): v is UiLanguage => typeof v === "string" && (UI_LANGUAGES as string[]).includes(v);
 export const isListingLanguage = (v: unknown): v is ListingLanguage => typeof v === "string" && (LISTING_LANGUAGES as string[]).includes(v);
 
 export interface SellerLanguages {

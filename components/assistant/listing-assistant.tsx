@@ -17,12 +17,15 @@ import { ArrowUp, ChevronDown, ChevronLeft, ClipboardList, ExternalLink, ImagePl
 import { cn } from "@/lib/utils";
 import { CameraButton } from "@/components/assistant/camera-capture";
 import { BuyCreditsButton } from "@/components/billing/buy-credits-button";
-import { matchingCommands, slashCommand, slashToText, unfinishedFill, type PaletteCommand } from "@/components/assistant/chat-commands";
+import { localPalette, matchingCommands, slashCommand, slashToText, unfinishedFill, type PaletteCommand } from "@/components/assistant/chat-commands";
+import { LanguageMenu, type ChatLanguages } from "@/components/assistant/language-menu";
 import { ProductForm, type FormDraft } from "@/components/assistant/product-form";
 import { chatPhotos, formButton, type ChatPhoto } from "@/components/assistant/chat-photos";
 import { RichMessage } from "@/components/assistant/rich-message";
 import { richBlocks } from "@/lib/whatsapp/rich-blocks";
 import { CategoryDeck } from "@/components/ui/category-deck";
+import { CHAT_TEXT, type ChatText } from "@/lib/i18n/chat";
+import { directionOf } from "@/lib/i18n/languages";
 
 interface Message {
   id:        string;
@@ -65,16 +68,6 @@ function pollDelay(waiting: boolean, idleMs: number): number {
 }
 /** How long the waiting line shows after a message with no reply yet. */
 const WAIT_MS = 90_000;
-/** How long each waiting phrase stays before the next. */
-
-const SUGGESTIONS = [
-  "I want to list 3 products",
-  "What can you do?",
-  "What's out of stock?",
-  "How many orders did I get this week?",
-  "My credits",
-];
-
 const newId = () => `web-${crypto.randomUUID()}`;
 const time = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
@@ -88,7 +81,7 @@ function Formatted({ text }: { text: string }) {
   return (
     <>
       {lines.map((line, i) => (
-        <span key={i} className={listed[i] ? cn("block", /^\s*\d/.test(line) ? "pl-[1.4em] -indent-[1.4em]" : "pl-[0.9em] -indent-[0.9em]") : undefined}>
+        <span key={i} className={listed[i] ? cn("block", /^\s*\d/.test(line) ? "ps-[1.4em] -indent-[1.4em]" : "ps-[0.9em] -indent-[0.9em]") : undefined}>
           {line.split(/(https?:\/\/[^\s]+|\*[^*\n]+\*|_[^_\n]+_|~[^~\n]+~)/g).map((part, j) => {
             if (/^https?:\/\//.test(part)) {
               const url = part.replace(/[.,!?)]+$/, "");
@@ -110,11 +103,17 @@ function Formatted({ text }: { text: string }) {
   );
 }
 
-export function ListingAssistant({ firstName, productForm }: {
+export function ListingAssistant({ firstName, productForm, languages }: {
   firstName?: string | null;
   /** The product form (components/assistant/product-form.tsx), admins only for now (owner, 2026-10-08). */
   productForm?: { currency: string; maxProducts: number; polishCost?: number | null } | null;
+  /** The seller's languages (lib/preferences/language.ts): the chat is in `ui`, Arabic right to left. */
+  languages?: ChatLanguages | null;
 }) {
+  // The switch in the header changes them at once (owner, 2026-10-11).
+  const [langs, setLangs] = useState<ChatLanguages>(languages ?? { ui: "en", listing: "en" });
+  const t = CHAT_TEXT[langs.ui];
+  const palette = useMemo(() => localPalette(t.commandText), [t]);
   const [messages, setMessages] = useState<Message[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [text, setText] = useState("");
@@ -300,15 +299,15 @@ export function ListingAssistant({ firstName, productForm }: {
     if (!files) return;
     const images = Array.from(files).filter((f) => f.type.startsWith("image/"));
     if (images.length === 0) {
-      setError("Only photos can be sent here (JPEG, PNG or WebP).");
+      setError(t.onlyPhotos);
       return;
     }
     const room = MAX_PHOTOS - attachments.length;
     if (room <= 0) {
-      setError(`Up to ${MAX_PHOTOS} photos at a time. Send these first.`);
+      setError(t.photoLimit(MAX_PHOTOS));
       return;
     }
-    setError(images.length > room ? `Up to ${MAX_PHOTOS} photos at a time, so only the first ${room} were added.` : null);
+    setError(images.length > room ? t.firstOnly(MAX_PHOTOS, room) : null);
     setAttachments((prev) => [
       ...prev,
       ...images.slice(0, MAX_PHOTOS - prev.length).map((file) => ({ key: newId(), file, preview: URL.createObjectURL(file) })),
@@ -329,7 +328,7 @@ export function ListingAssistant({ firstName, productForm }: {
     if (!res || !res.ok) {
       const msg = res ? ((await res.json().catch(() => ({}))) as { error?: string }).error : null;
       setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, failed: true } : m)));
-      setError(msg ?? "That didn't send. Check your connection, then tap Resend under it.");
+      setError(msg ?? t.didntSend);
       setWaitingSince(null);
       return false;
     }
@@ -343,20 +342,20 @@ export function ListingAssistant({ firstName, productForm }: {
   async function send(override?: { text: string; label?: string }) {
     if (sending || locked) return;
     const raw = (override?.text ?? text).trim();
-    if (!override && slashCommand(raw)?.action === "clear") {
+    if (!override && slashCommand(raw, palette)?.action === "clear") {
       setText("");
       setCommandsOpen(false);
       setConfirmClear(true);
       return;
     }
     // "/polish 2" goes as the words the bot knows: "polish 2".
-    const typed = raw.startsWith("/") ? slashToText(raw) : raw;
+    const typed = raw.startsWith("/") ? slashToText(raw, palette) : raw;
     setCommandsOpen(false);
     const photos = override ? [] : attachments;
-    const bare = !override && photos.length === 0 ? unfinishedFill(typed) : null;
+    const bare = !override && photos.length === 0 ? unfinishedFill(typed, palette) : null;
     if (bare) {
       setText(bare.fill ?? "");
-      setError(`Say which product and what to change, e.g. "${bare.example}".`);
+      setError(t.sayWhich(bare.example ?? ""));
       textArea.current?.focus();
       return;
     }
@@ -390,7 +389,7 @@ export function ListingAssistant({ firstName, productForm }: {
       unsent.forEach((photo, i) => unsentPhoto(photo, { file: photo.file, last: true, ...(good.length === 0 && i === 0 && typed ? { text: typed } : {}) }));
       if (unsent.length > 0) {
         const failed = ups.find((u): u is { error: string | null } => "error" in u);
-        setError(failed?.error ?? `${unsent.length === 1 ? "A photo" : `${unsent.length} photos`} didn't upload. Check your connection, then tap Resend under ${unsent.length === 1 ? "it" : "them"}.`);
+        setError(failed?.error ?? t.didntUpload(unsent.length));
       }
       // The page already has these files; the previews go once they're sent.
       setTimeout(() => release(good.map((g) => g.photo)), 60_000);
@@ -431,7 +430,7 @@ export function ListingAssistant({ firstName, productForm }: {
     setClearing(false);
     setConfirmClear(false);
     if (!res?.ok) {
-      setError("The chat didn't clear. Check your connection and try again.");
+      setError(t.clearFailed);
       return;
     }
     const { clearedAt: cleared } = (await res.json().catch(() => ({}))) as { clearedAt?: string };
@@ -474,7 +473,7 @@ export function ListingAssistant({ firstName, productForm }: {
         const up = await upload(r.file);
         if ("error" in up) {
           setMessages((prev) => [...prev, { ...m, at: new Date().toISOString() }]);
-          setError(up.error ?? "The photo still didn't upload. Check your connection, then tap Resend again.");
+          setError(up.error ?? t.stillDidntUpload);
           return;
         }
         const { file: _file, ...rest } = r;
@@ -494,7 +493,6 @@ export function ListingAssistant({ firstName, productForm }: {
   };
   const waiting = waitingSince != null;
   const empty = loaded && messages.length === 0;
-  const greeting = useMemo(() => (firstName ? `Hi ${firstName}! ` : "Hi! "), [firstName]);
 
   return (
     // On a phone the chat is the whole screen (owner): it covers the app's top
@@ -502,6 +500,8 @@ export function ListingAssistant({ firstName, productForm }: {
     // beside the sidebar, with no title bar or card around it (owner,
     // 2026-10-08: "cover the entire page with the side panel still in place").
     <div
+      lang={langs.ui}
+      dir={directionOf(langs.ui)}
       className={cn(
         // Claude's chat colours (owner, 2026-10-10: "a grey background like the Claude
         // interface ... with the side panel having a different grade").
@@ -516,19 +516,20 @@ export function ListingAssistant({ firstName, productForm }: {
       <div className="flex items-center gap-1 border-b border-[#ebe9e1] px-2 pb-2 pt-[max(0.5rem,env(safe-area-inset-top))] sm:gap-3 sm:px-6 sm:py-2.5">
         <Link
           href="/extension/dashboard"
-          aria-label="Back to the dashboard"
+          aria-label={t.back}
           className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-zinc-600 hover:bg-zinc-100 sm:hidden"
         >
-          <ChevronLeft className="h-5 w-5" />
+          <ChevronLeft className="h-5 w-5 rtl:rotate-180" />
         </Link>
         {/* Our logo, not a generic sparkle (owner, 2026-10-07). */}
         <span className="hidden h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-orange-50 sm:flex">
           <Image src="/brand/panda-p-logo-trimmed.png" alt="PandaWorld" width={634} height={562} className="h-6 w-auto" />
         </span>
         <div className="min-w-0 flex-1">
-          <p className="font-semibold text-zinc-900">Jumia Listing Assistant</p>
-          <p className="hidden truncate text-xs text-zinc-500 sm:block">List from photos, edit and submit drafts, update live products, ask about your shop.</p>
+          <p className="truncate font-semibold text-zinc-900">{t.title}</p>
+          <p className="hidden truncate text-xs text-zinc-500 sm:block">{t.subtitle}</p>
         </div>
+        <LanguageMenu t={t} value={langs} onChange={setLangs} />
         {productForm && !locked && !connectJumia && (
           <button
             type="button"
@@ -536,8 +537,8 @@ export function ListingAssistant({ firstName, productForm }: {
             className="flex h-10 shrink-0 items-center gap-2 whitespace-nowrap rounded-xl bg-orange-500 px-3 text-sm font-semibold text-white transition-colors hover:bg-orange-600"
           >
             <ClipboardList className="h-4 w-4" />
-            <span className="sm:hidden">New</span>
-            <span className="hidden sm:inline">New products</span>
+            <span className="sm:hidden">{t.newShort}</span>
+            <span className="hidden sm:inline">{t.newProducts}</span>
           </button>
         )}
       </div>
@@ -548,19 +549,18 @@ export function ListingAssistant({ firstName, productForm }: {
       <div className="mx-auto w-full max-w-3xl space-y-6">
         {!loaded && (
           <div className="flex h-full items-center justify-center text-sm text-zinc-400">
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading your conversation…
+            <Loader2 className="me-2 h-4 w-4 animate-spin" /> {t.loading}
           </div>
         )}
         {empty && (
           <div className="mx-auto max-w-md pt-6 text-center">
             <Image src="/brand/panda-p-logo-trimmed.png" alt="PandaWorld" width={634} height={562} className="mx-auto h-14 w-auto" priority />
-            <p className="mt-4 text-lg font-semibold text-zinc-900">{greeting}I&apos;m your Jumia Listing Assistant.</p>
+            <p className="mt-4 text-lg font-semibold text-zinc-900">{t.greeting(firstName ?? null)}</p>
             <p className="mt-2 text-sm leading-relaxed text-zinc-600">
-              Tap <strong>New products</strong> and add each product&apos;s photos, price and details.
-              I write the listings and send them to Jumia when you say so. Ask me about your stock, sales, payouts or credits too.
+              {t.welcome[0]}<strong>{t.newProducts}</strong>{t.welcome[1]}
             </p>
             <div className="mt-5 flex flex-wrap justify-center gap-2">
-              {SUGGESTIONS.map((s) => (
+              {t.suggestions.map((s) => (
                 <button
                   key={s}
                   type="button"
@@ -574,38 +574,38 @@ export function ListingAssistant({ firstName, productForm }: {
           </div>
         )}
 
-        {messages.map((m) => <Bubble key={m.id} m={m} onTap={(b) => tap(b, m)} onResend={resend} disabled={sending || locked} onMedia={onMedia} />)}
+        {messages.map((m) => <Bubble key={m.id} m={m} t={t} onTap={(b) => tap(b, m)} onResend={resend} disabled={sending || locked} onMedia={onMedia} />)}
 
-        {waiting && <WaitingLine key={waitingSince} />}
+        {waiting && <WaitingLine key={waitingSince} text={t.thinking} />}
       </div>
       </div>
       {!atBottom && (
         <button
           type="button"
           onClick={() => toBottom()}
-          aria-label="Go to the newest message"
+          aria-label={t.newest}
           className="absolute bottom-3 left-1/2 flex h-10 w-10 -translate-x-1/2 items-center justify-center rounded-full border border-zinc-200 bg-white text-zinc-600 shadow-md transition-colors hover:bg-zinc-50"
         >
           <ChevronDown className="h-5 w-5" />
-          {unseen && <span className="absolute -right-0.5 -top-0.5 h-3 w-3 rounded-full bg-orange-500 ring-2 ring-white" />}
+          {unseen && <span className="absolute -end-0.5 -top-0.5 h-3 w-3 rounded-full bg-orange-500 ring-2 ring-white" />}
         </button>
       )}
       </div>
 
       {connectJumia && !locked && (
         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-orange-100 bg-orange-50 px-4 py-2 text-sm text-orange-900">
-          <span>Connect Jumia to start: paste your Client ID and token below.</span>
+          <span>{t.connectJumia}</span>
           <span className="flex gap-3 text-sm font-semibold">
-            <Link href="/how-to/connect-jumia-vendor-center" className="text-orange-700 hover:text-orange-800">How to get them</Link>
-            <Link href="/extension/settings" className="text-orange-700 hover:text-orange-800">Settings</Link>
+            <Link href="/how-to/connect-jumia-vendor-center" className="text-orange-700 hover:text-orange-800">{t.howToGetThem}</Link>
+            <Link href="/extension/settings" className="text-orange-700 hover:text-orange-800">{t.settings}</Link>
           </span>
         </div>
       )}
 
       {error && (
         <div className="flex items-start justify-between gap-3 border-t border-red-100 bg-red-50 px-4 py-2 text-sm text-red-700">
-          <span>{error}</span>
-          <button type="button" onClick={() => setError(null)} aria-label="Dismiss" className="shrink-0 text-red-400 hover:text-red-600">
+          <span dir="auto">{error}</span>
+          <button type="button" onClick={() => setError(null)} aria-label={t.dismiss} className="shrink-0 text-red-400 hover:text-red-600">
             <X className="h-4 w-4" />
           </button>
         </div>
@@ -616,7 +616,7 @@ export function ListingAssistant({ firstName, productForm }: {
           <div className="mx-auto flex w-full max-w-3xl flex-col gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
             <p className="flex items-start gap-2 text-sm text-amber-900">
               <Lock className="mt-0.5 h-4 w-4 shrink-0" />
-              <span>You&apos;re out of credits, so the chat is locked. It unlocks as soon as you top up, or when a refund from Jumia&apos;s quality check comes in.</span>
+              <span>{t.locked}</span>
             </p>
             <BuyCreditsButton className="shrink-0 self-start sm:self-auto" />
           </div>
@@ -626,7 +626,8 @@ export function ListingAssistant({ firstName, productForm }: {
       <div ref={composer} className="relative mx-auto w-full max-w-3xl">
         {(commandsOpen || (text.startsWith("/") && !/\s/.test(text))) && (
           <CommandMenu
-            commands={matchingCommands(commandsOpen && !text.startsWith("/") ? "" : text)}
+            commands={matchingCommands(commandsOpen && !text.startsWith("/") ? "" : text, palette)}
+            t={t}
             onChoose={choose}
             onClose={() => { setCommandsOpen(false); if (text.startsWith("/")) setText(""); }}
             // The + button toggles it itself. While a "/command" is typed, the message
@@ -643,8 +644,8 @@ export function ListingAssistant({ firstName, productForm }: {
                 <button
                   type="button"
                   onClick={() => { release([a]); setAttachments((prev) => prev.filter((x) => x.key !== a.key)); }}
-                  className="absolute right-0.5 top-0.5 flex h-5 w-5 items-center justify-center rounded-full bg-black/60 text-white"
-                  aria-label="Remove photo"
+                  className="absolute end-0.5 top-0.5 flex h-5 w-5 items-center justify-center rounded-full bg-black/60 text-white"
+                  aria-label={t.removePhoto}
                 >
                   <X className="h-3 w-3" />
                 </button>
@@ -666,12 +667,12 @@ export function ListingAssistant({ firstName, productForm }: {
             onClick={() => fileInput.current?.click()}
             disabled={sending || attachments.length >= MAX_PHOTOS}
             className="flex h-11 shrink-0 items-center gap-2 rounded-xl border border-zinc-200 bg-white px-3 text-sm font-medium text-zinc-700 transition-colors hover:border-orange-300 hover:bg-orange-50 disabled:opacity-50"
-            aria-label="Upload photos"
+            aria-label={t.uploadPhotos}
           >
             <ImagePlus className="h-5 w-5 text-orange-500" />
-            <span className="hidden sm:inline">Upload</span>
+            <span className="hidden sm:inline">{t.upload}</span>
           </button>
-          <CameraButton disabled={sending} room={MAX_PHOTOS - attachments.length} onPhotos={addFiles} />
+          <CameraButton disabled={sending} room={MAX_PHOTOS - attachments.length} onPhotos={addFiles} label={t.takePhoto} />
           <button
             type="button"
             onClick={() => setCommandsOpen((o) => !o)}
@@ -681,7 +682,7 @@ export function ListingAssistant({ firstName, productForm }: {
               "flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-zinc-200 bg-white text-zinc-600 transition-colors hover:border-orange-300 hover:bg-orange-50 disabled:opacity-50",
               commandsOpen && "border-orange-300 bg-orange-50 text-orange-600",
             )}
-            aria-label="Commands"
+            aria-label={t.commands}
             aria-expanded={commandsOpen}
           >
             <Plus className="h-5 w-5" />
@@ -702,7 +703,10 @@ export function ListingAssistant({ firstName, productForm }: {
               if (files.length > 0) { e.preventDefault(); addFiles(files); }
             }}
             rows={1}
-            placeholder={attachments.length > 0 ? "Price and notes for these photos…" : "Type / for commands"}
+            // Empty, it follows the chat (an Arabic placeholder on the right); typed,
+            // the words run their own way (English in an Arabic chat, or the reverse).
+            dir={text ? "auto" : undefined}
+            placeholder={attachments.length > 0 ? t.photosPlaceholder : t.typePlaceholder}
             // 16px on a phone: iOS zooms the page into a smaller field on focus.
             className="max-h-40 min-h-11 flex-1 resize-none rounded-xl border border-zinc-200 bg-white px-3.5 py-2.5 text-base leading-relaxed text-zinc-900 outline-none placeholder:text-zinc-400 focus:border-orange-300 focus:ring-2 focus:ring-orange-100"
           />
@@ -711,7 +715,7 @@ export function ListingAssistant({ firstName, productForm }: {
             onClick={() => void send()}
             disabled={sending || (!text.trim() && attachments.length === 0)}
             className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-orange-500 text-white transition-colors hover:bg-orange-600 disabled:bg-zinc-200 disabled:text-zinc-400"
-            aria-label="Send"
+            aria-label={t.send}
           >
             {sending ? <Loader2 className="h-5 w-5 animate-spin" /> : <ArrowUp className="h-5 w-5" />}
           </button>
@@ -721,7 +725,7 @@ export function ListingAssistant({ firstName, productForm }: {
       )}
 
       {confirmClear && (
-        <ClearDialog busy={clearing} onCancel={() => setConfirmClear(false)} onConfirm={() => void clearChat()} />
+        <ClearDialog t={t} busy={clearing} onCancel={() => setConfirmClear(false)} onConfirm={() => void clearChat()} />
       )}
 
       {form && productForm && (
@@ -732,6 +736,7 @@ export function ListingAssistant({ firstName, productForm }: {
           initialCount={form.count}
           initialPhotos={form.photos}
           kept={keptForm}
+          t={t}
           onClose={(keep, removed) => { setKeptForm(keep); removed.forEach((id) => removedPhotos.current.add(id)); setForm(null); }}
           onSent={() => { setWaitingSince(Date.now()); void poll(); }}
         />
@@ -739,7 +744,7 @@ export function ListingAssistant({ firstName, productForm }: {
 
       {dragging && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-orange-50/80 text-sm font-semibold text-orange-700">
-          Drop photos to add them
+          {t.dropPhotos}
         </div>
       )}
     </div>
@@ -752,9 +757,9 @@ export function ListingAssistant({ firstName, productForm }: {
  * 2026-10-10: just "Thinking...", not the changing words). Gone the moment
  * the reply is there.
  */
-function WaitingLine() {
+function WaitingLine({ text }: { text: string }) {
   return (
-    <div className="flex items-center gap-2 pl-1 text-xs" role="status" aria-live="polite">
+    <div className="flex items-center gap-2 ps-1 text-xs" role="status" aria-live="polite">
       <span className="flex gap-0.5" aria-hidden>
         <span className="h-1 w-1 animate-bounce rounded-full bg-orange-400 [animation-delay:-0.3s] motion-reduce:animate-none" />
         <span className="h-1 w-1 animate-bounce rounded-full bg-orange-400 [animation-delay:-0.15s] motion-reduce:animate-none" />
@@ -763,7 +768,7 @@ function WaitingLine() {
       <span
         className="animate-waiting-phrase bg-[linear-gradient(90deg,#a1a1aa_0%,#a1a1aa_35%,#27272a_50%,#a1a1aa_65%,#a1a1aa_100%)] bg-[length:200%_100%] bg-clip-text font-medium text-transparent motion-reduce:animate-none"
       >
-        Thinking…
+        {text}
       </span>
     </div>
   );
@@ -772,8 +777,8 @@ function WaitingLine() {
 /** The product count of the bot's "Open the form" button in this message (1 without one), or null. */
 
 /** The command menu, above the message box. A tap anywhere outside it closes it (owner, 2026-10-10), as its X does. */
-function CommandMenu({ commands, onChoose, onClose, keep }: {
-  commands: PaletteCommand[]; onChoose: (c: PaletteCommand) => void; onClose: () => void;
+function CommandMenu({ commands, t, onChoose, onClose, keep }: {
+  commands: PaletteCommand[]; t: ChatText; onChoose: (c: PaletteCommand) => void; onClose: () => void;
   /** Taps outside it that don't close it. */
   keep?: (target: Element) => boolean;
 }) {
@@ -790,22 +795,23 @@ function CommandMenu({ commands, onChoose, onClose, keep }: {
   return (
     <div ref={box} className="absolute inset-x-0 bottom-full z-10 mb-2 overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-lg" role="menu">
       <div className="flex items-center justify-between border-b border-zinc-100 px-3 py-2">
-        <span className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Commands</span>
-        <button type="button" onClick={onClose} aria-label="Close commands" className="text-zinc-400 hover:text-zinc-600">
+        <span className="text-xs font-semibold uppercase tracking-wide text-zinc-500">{t.commands}</span>
+        <button type="button" onClick={onClose} aria-label={t.closeCommands} className="text-zinc-400 hover:text-zinc-600">
           <X className="h-4 w-4" />
         </button>
       </div>
       <div className="max-h-72 overflow-y-auto py-1">
-        {commands.length === 0 && <p className="px-3 py-2 text-sm text-zinc-500">No command by that name. Type your message instead.</p>}
+        {commands.length === 0 && <p className="px-3 py-2 text-sm text-zinc-500">{t.noCommand}</p>}
         {commands.map((c) => (
           <button
             key={c.slash}
             type="button"
             role="menuitem"
             onClick={() => onChoose(c)}
-            className="flex w-full items-start gap-3 px-3 py-2 text-left hover:bg-orange-50"
+            className="flex w-full items-start gap-3 px-3 py-2 text-start hover:bg-orange-50"
           >
-            <span className="w-24 shrink-0 font-mono text-sm text-orange-600">/{c.slash}</span>
+            {/* "/orders" reads left to right in an Arabic menu too. */}
+            <span dir="ltr" className="w-24 shrink-0 text-start font-mono text-sm text-orange-600">/{c.slash}</span>
             <span className="min-w-0 flex-1">
               <span className="block text-sm font-medium text-zinc-900">{c.title}</span>
               <span className="block text-xs text-zinc-500">{c.hint}</span>
@@ -818,17 +824,15 @@ function CommandMenu({ commands, onChoose, onClose, keep }: {
 }
 
 /** "Clear chat?", over the chat: what goes and what stays. */
-function ClearDialog({ busy, onCancel, onConfirm }: { busy: boolean; onCancel: () => void; onConfirm: () => void }) {
+function ClearDialog({ t, busy, onCancel, onConfirm }: { t: ChatText; busy: boolean; onCancel: () => void; onConfirm: () => void }) {
   return (
     <div className="absolute inset-0 z-20 flex items-end justify-center bg-black/30 p-3 sm:items-center" role="dialog" aria-modal="true" aria-labelledby="clear-chat-title">
       <div className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-xl">
         <span className="flex h-10 w-10 items-center justify-center rounded-full bg-orange-50">
           <Trash2 className="h-5 w-5 text-orange-600" />
         </span>
-        <p id="clear-chat-title" className="mt-3 font-semibold text-zinc-900">Clear this chat?</p>
-        <p className="mt-1.5 text-sm leading-relaxed text-zinc-600">
-          The conversation goes and the assistant starts fresh, like your first visit. Your drafts and listings stay on Drafts &amp; Listings, and your credits don&apos;t change.
-        </p>
+        <p id="clear-chat-title" className="mt-3 font-semibold text-zinc-900">{t.clearTitle}</p>
+        <p className="mt-1.5 text-sm leading-relaxed text-zinc-600">{t.clearBody}</p>
         <div className="mt-5 flex gap-2">
           <button
             type="button"
@@ -836,7 +840,7 @@ function ClearDialog({ busy, onCancel, onConfirm }: { busy: boolean; onCancel: (
             disabled={busy}
             className="h-11 flex-1 rounded-xl border border-zinc-200 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-50 disabled:opacity-50"
           >
-            Keep it
+            {t.keepIt}
           </button>
           <button
             type="button"
@@ -844,7 +848,7 @@ function ClearDialog({ busy, onCancel, onConfirm }: { busy: boolean; onCancel: (
             disabled={busy}
             className="flex h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-orange-500 text-sm font-semibold text-white transition-colors hover:bg-orange-600 disabled:opacity-60"
           >
-            {busy && <Loader2 className="h-4 w-4 animate-spin" />} Clear chat
+            {busy && <Loader2 className="h-4 w-4 animate-spin" />} {t.clearChat}
           </button>
         </div>
       </div>
@@ -852,8 +856,8 @@ function ClearDialog({ busy, onCancel, onConfirm }: { busy: boolean; onCancel: (
   );
 }
 
-function Bubble({ m, onTap, onResend, disabled, onMedia }: {
-  m: Message; onTap: (b: Button) => void; onResend: (m: Message) => void; disabled: boolean; onMedia: () => void;
+function Bubble({ m, t, onTap, onResend, disabled, onMedia }: {
+  m: Message; t: ChatText; onTap: (b: Button) => void; onResend: (m: Message) => void; disabled: boolean; onMedia: () => void;
 }) {
   const mine = m.direction === "inbound";
   const p = m.payload ?? {};
@@ -861,7 +865,7 @@ function Bubble({ m, onTap, onResend, disabled, onMedia }: {
   const album = Array.isArray(p.links) ? (p.links as unknown[]).filter((u): u is string => typeof u === "string") : [];
   const buttons = m.type === "button" && Array.isArray(p.buttons) ? (p.buttons as (Button | null)[]).filter((b): b is Button => !!b?.id) : [];
   const rows = m.type === "list" && Array.isArray(p.rows) ? (p.rows as Row[]).filter((r) => r?.id) : [];
-  const cta = m.type === "cta_url" && typeof p.url === "string" ? { url: p.url, label: typeof p.buttonText === "string" ? p.buttonText : "Open" } : null;
+  const cta = m.type === "cta_url" && typeof p.url === "string" ? { url: p.url, label: typeof p.buttonText === "string" ? p.buttonText : t.open } : null;
   // A tap shows the button's words; an id from an older WhatsApp-style message reads as a tap.
   const label = typeof p.label === "string" ? p.label : null;
   const shown = mine && label ? label : m.text;
@@ -879,6 +883,8 @@ function Bubble({ m, onTap, onResend, disabled, onMedia }: {
   return (
     <div className={cn("flex flex-col", mine ? "items-end" : "items-start")}>
       <div
+        // Each message runs its own way: an English reply in an Arabic chat reads left to right.
+        dir="auto"
         className={cn(
           // Read like Claude's chat (owner, 2026-10-08): 16px with room
           // between lines; the seller's own messages in a soft grey bubble
@@ -894,7 +900,7 @@ function Bubble({ m, onTap, onResend, disabled, onMedia }: {
             {album.map((url, i) => (
               <a key={`${url}-${i}`} href={url} target="_blank" rel="noopener noreferrer" className={cn(album.length % 2 === 1 && i === 0 && "col-span-2")}>
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={url} alt={`Photo ${i + 1}`} className={cn("w-full object-cover", album.length % 2 === 1 && i === 0 ? "aspect-[2/1]" : "aspect-square")} onLoad={onMedia} />
+                <img src={url} alt={t.photoN(i + 1)} className={cn("w-full object-cover", album.length % 2 === 1 && i === 0 ? "aspect-[2/1]" : "aspect-square")} onLoad={onMedia} />
               </a>
             ))}
           </div>
@@ -924,7 +930,7 @@ function Bubble({ m, onTap, onResend, disabled, onMedia }: {
                 type="button"
                 disabled={disabled}
                 onClick={() => onTap({ id: r.id, title: r.title })}
-                className="block w-full border-b border-zinc-100 px-3.5 py-2.5 text-left last:border-b-0 hover:bg-orange-50 disabled:opacity-50"
+                className="block w-full border-b border-zinc-100 px-3.5 py-2.5 text-start last:border-b-0 hover:bg-orange-50 disabled:opacity-50"
               >
                 <span className="block font-medium text-zinc-900">{r.title}</span>
                 {r.description && <span className="block text-xs text-zinc-500">{r.description}</span>}
@@ -935,10 +941,10 @@ function Bubble({ m, onTap, onResend, disabled, onMedia }: {
                 type="button"
                 disabled={disabled}
                 onClick={() => setBrowsing((b) => !b)}
-                className="flex w-full items-center justify-between gap-3 border-t border-zinc-100 px-3.5 py-2.5 text-left text-orange-700 hover:bg-orange-50 disabled:opacity-50"
+                className="flex w-full items-center justify-between gap-3 border-t border-zinc-100 px-3.5 py-2.5 text-start text-orange-700 hover:bg-orange-50 disabled:opacity-50"
               >
-                <span className="font-medium">{browsing ? "Close the categories" : "Not here? Browse all categories"}</span>
-                <ChevronDown className={cn("h-4 w-4 shrink-0 transition-transform", browsing ? "rotate-180" : "-rotate-90")} />
+                <span className="font-medium">{browsing ? t.closeCategories : t.browseCategories}</span>
+                <ChevronDown className={cn("h-4 w-4 shrink-0 transition-transform", browsing ? "rotate-180" : "-rotate-90 rtl:rotate-90")} />
               </button>
             )}
           </div>
@@ -984,7 +990,7 @@ function Bubble({ m, onTap, onResend, disabled, onMedia }: {
       )}
       {m.failed ? (
         <span className="mt-1 flex items-center gap-2 px-1 text-[11px]">
-          <span className="text-red-500">Not sent</span>
+          <span className="text-red-500">{t.notSent}</span>
           {m.retry && (
             <button
               type="button"
@@ -992,12 +998,12 @@ function Bubble({ m, onTap, onResend, disabled, onMedia }: {
               disabled={disabled}
               className="inline-flex items-center gap-1 rounded-full border border-red-200 bg-white px-2 py-0.5 font-medium text-red-600 transition-colors hover:bg-red-50 disabled:opacity-50"
             >
-              <RotateCw className="h-3 w-3" /> Resend
+              <RotateCw className="h-3 w-3" /> {t.resend}
             </button>
           )}
         </span>
       ) : (
-        <span className={cn("mt-1.5 text-xs text-zinc-400", mine && "px-1")}>{m.local ? "Sending…" : time(m.at)}</span>
+        <span dir="auto" className={cn("mt-1.5 text-xs text-zinc-400", mine && "px-1")}>{m.local ? t.sending : time(m.at)}</span>
       )}
     </div>
   );

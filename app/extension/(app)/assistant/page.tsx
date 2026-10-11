@@ -9,6 +9,7 @@ import { shopCurrencyForUser } from "@/lib/whatsapp/listing-edits";
 import { ADMIN_MAX_BATCH_SIZE, MAX_BATCH_SIZE } from "@/lib/whatsapp/batch";
 import { POLISH_COST } from "@/lib/whatsapp/chat-polish";
 import { isGeminiImageEnabled } from "@/lib/gemini-image";
+import { sellerLanguages } from "@/lib/preferences/language";
 
 // ─── /extension/assistant — the Listing Assistant ───────────────────────────
 //
@@ -51,7 +52,11 @@ export default async function ListingAssistantPage() {
     );
   }
 
-  const user = await currentUser().catch(() => null);
+  const [user, langs] = await Promise.all([
+    currentUser().catch(() => null),
+    // The chat in the seller's language, Arabic right to left (owner, 2026-10-11); English if unreadable.
+    sellerLanguages(userId).catch(() => null),
+  ]);
   // The product form: how products are listed on the web (owner, 2026-10-08).
   const productForm = {
     currency:    await shopCurrencyForUser(userId).catch(() => "GHS"),
@@ -59,5 +64,11 @@ export default async function ListingAssistantPage() {
     // "Polish photos" on each card when the image service is on (lib/whatsapp/chat-polish.ts).
     polishCost:  isGeminiImageEnabled() ? POLISH_COST : null,
   };
-  return <ListingAssistant firstName={user?.firstName ?? null} productForm={productForm} />;
+  return (
+    <ListingAssistant
+      firstName={user?.firstName ?? null}
+      productForm={productForm}
+      languages={langs ? { ui: langs.ui, listing: langs.listing } : null}
+    />
+  );
 }

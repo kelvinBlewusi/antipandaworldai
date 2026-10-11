@@ -20,6 +20,7 @@ import { ImagePlus, Loader2, Plus, Sparkles, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { CameraButton } from "@/components/assistant/camera-capture";
 import { blankCard as blank, newKey, openingCards, type FormDraft, type FormPhoto } from "@/components/assistant/chat-photos";
+import { CHAT_TEXT, type ChatText } from "@/lib/i18n/chat";
 
 /** Jumia takes at most 8 photos a product. */
 const MAX_PHOTOS = 8;
@@ -28,13 +29,15 @@ type Photo = FormPhoto;
 type Draft = FormDraft;
 export type { FormDraft };
 
+type FormText = ChatText["form"];
+
 /** What a card still needs before the batch can go, or null. */
-function missing(d: Draft): string | null {
-  if (d.photos.some((p) => p.uploading)) return "Photos are still uploading";
-  if (!d.photos.some((p) => p.mediaId)) return "Add at least one photo";
+function missing(d: Draft, f: FormText): string | null {
+  if (d.photos.some((p) => p.uploading)) return f.uploading;
+  if (!d.photos.some((p) => p.mediaId)) return f.needPhoto;
   const price = Number(d.price);
-  if (!d.price.trim() || !Number.isFinite(price) || price <= 0) return "Add its price";
-  if (d.quantity.trim() && !(Number.isInteger(Number(d.quantity)) && Number(d.quantity) >= 1)) return "Quantity is a whole number";
+  if (!d.price.trim() || !Number.isFinite(price) || price <= 0) return f.needPrice;
+  if (d.quantity.trim() && !(Number.isInteger(Number(d.quantity)) && Number(d.quantity) >= 1)) return f.wholeQuantity;
   return null;
 }
 
@@ -46,7 +49,7 @@ async function upload(file: File): Promise<{ mediaId: string; url?: string } | {
   return res?.ok && data.mediaId ? { mediaId: data.mediaId, url: data.url } : { error: data.error ?? "Didn't upload" };
 }
 
-export function ProductForm({ currency, maxProducts, polishCost, initialCount = 1, initialPhotos = [], kept, onClose, onSent }: {
+export function ProductForm({ currency, maxProducts, polishCost, initialCount = 1, initialPhotos = [], kept, t = CHAT_TEXT.en, onClose, onSent }: {
   currency: string;
   maxProducts: number;
   /** Credits a product's polish takes (POLISH_COST); none hides the option. Not shown on the card (owner, 2026-10-08). */
@@ -57,6 +60,8 @@ export function ProductForm({ currency, maxProducts, polishCost, initialCount = 
   initialPhotos?: { mediaId: string; preview: string }[];
   /** What was in the form when it was last closed without drafting. */
   kept?: FormDraft[] | null;
+  /** The chat's words, in the seller's language (lib/i18n/chat.ts). */
+  t?: ChatText;
   /** Closed: with the cards to keep (null once they went), and the chat's photos taken off a card. */
   onClose: (keep: FormDraft[] | null, removed: string[]) => void;
   /** After the batch went: the chat polls for its message and the bot's. */
@@ -117,7 +122,8 @@ export function ProductForm({ currency, maxProducts, polishCost, initialCount = 
     });
   }
 
-  const problems = drafts.map(missing);
+  const f = t.form;
+  const problems = drafts.map((d) => missing(d, f));
   const ready = drafts.length > 0 && problems.every((p) => p == null);
   const polished = polishCost ? drafts.filter((d) => d.polish).length : 0;
 
@@ -143,7 +149,7 @@ export function ProductForm({ currency, maxProducts, polishCost, initialCount = 
     setSending(false);
     if (!res?.ok) {
       const msg = res ? ((await res.json().catch(() => ({}))) as { error?: string }).error : null;
-      setError(msg ?? "That didn't go. Check your connection and try again.");
+      setError(msg ?? f.didntGo);
       return;
     }
     onSent();
@@ -151,14 +157,14 @@ export function ProductForm({ currency, maxProducts, polishCost, initialCount = 
   }
 
   return (
-    <div className="fixed inset-0 z-40 flex items-end justify-center bg-black/40 sm:items-center sm:p-6" role="dialog" aria-modal="true" aria-label="New products">
+    <div className="fixed inset-0 z-40 flex items-end justify-center bg-black/40 sm:items-center sm:p-6" role="dialog" aria-modal="true" aria-label={f.title}>
       <div className="flex max-h-[100dvh] w-full flex-col overflow-hidden bg-white sm:max-h-[90dvh] sm:max-w-2xl sm:rounded-2xl sm:shadow-xl">
         <div className="flex items-center justify-between border-b border-zinc-100 px-4 pb-3 pt-[max(0.75rem,env(safe-area-inset-top))] sm:px-5">
           <div>
-            <p className="font-semibold text-zinc-900">New products</p>
-            <p className="text-xs text-zinc-500">Each product&apos;s photos, price and details, then Draft.</p>
+            <p className="font-semibold text-zinc-900">{f.title}</p>
+            <p className="text-xs text-zinc-500">{f.subtitle}</p>
           </div>
-          <button type="button" onClick={() => onClose(all.current, removed.current)} aria-label="Close" className="flex h-10 w-10 items-center justify-center rounded-lg text-zinc-500 hover:bg-zinc-100">
+          <button type="button" onClick={() => onClose(all.current, removed.current)} aria-label={f.close} className="flex h-10 w-10 items-center justify-center rounded-lg text-zinc-500 hover:bg-zinc-100">
             <X className="h-5 w-5" />
           </button>
         </div>
@@ -170,6 +176,7 @@ export function ProductForm({ currency, maxProducts, polishCost, initialCount = 
               n={i + 1}
               draft={d}
               currency={currency}
+              t={t}
               polishCost={polishCost ?? null}
               problem={tried ? problems[i] : null}
               canRemove={drafts.length > 1}
@@ -185,7 +192,7 @@ export function ProductForm({ currency, maxProducts, polishCost, initialCount = 
               onClick={() => setDrafts((prev) => [...prev, blank()])}
               className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-zinc-300 bg-white py-3 text-sm font-medium text-zinc-700 hover:border-orange-300 hover:bg-orange-50"
             >
-              <Plus className="h-4 w-4 text-orange-500" /> Add product
+              <Plus className="h-4 w-4 text-orange-500" /> {f.addProduct}
             </button>
           )}
         </div>
@@ -193,9 +200,9 @@ export function ProductForm({ currency, maxProducts, polishCost, initialCount = 
         {error && <p className="border-t border-red-100 bg-red-50 px-4 py-2 text-sm text-red-700">{error}</p>}
         <div className="flex items-center justify-between gap-3 border-t border-zinc-100 bg-white px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-5">
           <p className="min-w-0 text-xs text-zinc-500">
-            {drafts.length} product{drafts.length === 1 ? "" : "s"}
-            {polished > 0 ? ` · ${polished} polished` : ""}
-            {tried && !ready ? " · fill in what's marked" : ""}
+            {f.products(drafts.length)}
+            {polished > 0 ? ` · ${f.polished(polished)}` : ""}
+            {tried && !ready ? ` · ${f.fillMarked}` : ""}
           </p>
           <button
             type="button"
@@ -204,7 +211,7 @@ export function ProductForm({ currency, maxProducts, polishCost, initialCount = 
             className="inline-flex h-11 shrink-0 items-center gap-2 whitespace-nowrap rounded-xl bg-orange-500 px-5 text-sm font-semibold text-white hover:bg-orange-600 disabled:opacity-60"
           >
             {sending && <Loader2 className="h-4 w-4 animate-spin" />}
-            Draft {drafts.length} product{drafts.length === 1 ? "" : "s"}
+            {f.draft(drafts.length)}
           </button>
         </div>
       </div>
@@ -212,10 +219,11 @@ export function ProductForm({ currency, maxProducts, polishCost, initialCount = 
   );
 }
 
-function Card({ n, draft, currency, polishCost, problem, canRemove, onChange, onPhotos, onRemovePhoto, onRemove }: {
+function Card({ n, draft, currency, t, polishCost, problem, canRemove, onChange, onPhotos, onRemovePhoto, onRemove }: {
   n: number;
   draft: Draft;
   currency: string;
+  t: ChatText;
   polishCost: number | null;
   problem: string | null;
   canRemove: boolean;
@@ -226,13 +234,14 @@ function Card({ n, draft, currency, polishCost, problem, canRemove, onChange, on
 }) {
   const input = useRef<HTMLInputElement>(null);
   const [over, setOver] = useState(false);
+  const f = t.form;
   const field = "w-full rounded-lg border border-zinc-200 px-3 py-2 text-base text-zinc-900 outline-none placeholder:text-zinc-400 focus:border-orange-300 focus:ring-2 focus:ring-orange-100 sm:text-sm";
   return (
     <div className={cn("rounded-xl border bg-white p-4 shadow-sm", problem ? "border-red-300" : "border-zinc-200")}>
       <div className="mb-3 flex items-center justify-between">
-        <p className="text-sm font-semibold text-zinc-900">Product {n}</p>
+        <p className="text-sm font-semibold text-zinc-900">{f.product(n)}</p>
         {canRemove && (
-          <button type="button" onClick={onRemove} aria-label={`Remove product ${n}`} className="flex h-8 w-8 items-center justify-center rounded-lg text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600">
+          <button type="button" onClick={onRemove} aria-label={f.removeProduct(n)} className="flex h-8 w-8 items-center justify-center rounded-lg text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600">
             <Trash2 className="h-4 w-4" />
           </button>
         )}
@@ -252,8 +261,8 @@ function Card({ n, draft, currency, polishCost, problem, canRemove, onChange, on
             <button
               type="button"
               onClick={() => onRemovePhoto(p.key)}
-              aria-label="Remove photo"
-              className="absolute right-0.5 top-0.5 flex h-5 w-5 items-center justify-center rounded-full bg-black/60 text-white"
+              aria-label={t.removePhoto}
+              className="absolute end-0.5 top-0.5 flex h-5 w-5 items-center justify-center rounded-full bg-black/60 text-white"
             >
               <X className="h-3 w-3" />
             </button>
@@ -266,10 +275,10 @@ function Card({ n, draft, currency, polishCost, problem, canRemove, onChange, on
             className="flex h-16 w-16 flex-col items-center justify-center gap-0.5 rounded-lg border border-dashed border-zinc-300 text-[11px] font-medium text-zinc-500 hover:border-orange-300 hover:bg-orange-50"
           >
             <ImagePlus className="h-5 w-5 text-orange-500" />
-            Photos
+            {f.photos}
           </button>
         )}
-        {draft.photos.length < MAX_PHOTOS && <CameraButton tile room={MAX_PHOTOS - draft.photos.length} onPhotos={onPhotos} />}
+        {draft.photos.length < MAX_PHOTOS && <CameraButton tile room={MAX_PHOTOS - draft.photos.length} onPhotos={onPhotos} label={t.takePhoto} tileLabel={t.camera} />}
         <input
           ref={input}
           type="file"
@@ -279,7 +288,7 @@ function Card({ n, draft, currency, polishCost, problem, canRemove, onChange, on
           onChange={(e) => { onPhotos(e.target.files); e.target.value = ""; }}
         />
       </div>
-      {draft.photos.some((p) => p.error) && <p className="mt-1 text-xs text-red-600">A photo didn&apos;t upload: remove it and add it again.</p>}
+      {draft.photos.some((p) => p.error) && <p className="mt-1 text-xs text-red-600">{f.photoFailed}</p>}
 
       {polishCost ? (
         <button
@@ -288,42 +297,43 @@ function Card({ n, draft, currency, polishCost, problem, canRemove, onChange, on
           aria-checked={draft.polish}
           onClick={() => onChange({ polish: !draft.polish })}
           className={cn(
-            "mt-3 flex w-full items-center gap-3 rounded-lg border px-3 py-2 text-left transition-colors",
+            "mt-3 flex w-full items-center gap-3 rounded-lg border px-3 py-2 text-start transition-colors",
             draft.polish ? "border-orange-300 bg-orange-50" : "border-zinc-200 hover:border-orange-200 hover:bg-orange-50/40",
           )}
         >
           <Sparkles className={cn("h-4 w-4 shrink-0", draft.polish ? "text-orange-500" : "text-zinc-400")} />
-          <span className="min-w-0 flex-1 text-sm font-medium text-zinc-900">Polish photos</span>
+          <span className="min-w-0 flex-1 text-sm font-medium text-zinc-900">{f.polish}</span>
           <span className={cn("relative h-5 w-9 shrink-0 rounded-full transition-colors", draft.polish ? "bg-orange-500" : "bg-zinc-300")}>
-            <span className={cn("absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-all", draft.polish ? "left-[18px]" : "left-0.5")} />
+            <span className={cn("absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-all", draft.polish ? "start-[18px]" : "start-0.5")} />
           </span>
         </button>
       ) : null}
 
       <div className="mt-3 grid grid-cols-2 gap-3">
         <label className="block">
-          <span className="mb-1 block text-xs font-medium text-zinc-600">Price ({currency})*</span>
-          <input inputMode="decimal" value={draft.price} onChange={(e) => onChange({ price: e.target.value.replace(/[^\d.]/g, "") })} placeholder="e.g. 150" className={field} />
+          <span className="mb-1 block text-xs font-medium text-zinc-600">{f.price(currency)}</span>
+          <input inputMode="decimal" value={draft.price} onChange={(e) => onChange({ price: e.target.value.replace(/[^\d.]/g, "") })} placeholder={f.pricePlaceholder} className={field} />
         </label>
         <label className="block">
-          <span className="mb-1 block text-xs font-medium text-zinc-600">Quantity <span className="font-normal text-zinc-400">(optional)</span></span>
+          <span className="mb-1 block text-xs font-medium text-zinc-600">{f.quantity} <span className="font-normal text-zinc-400">{f.optional}</span></span>
           <input inputMode="numeric" value={draft.quantity} onChange={(e) => onChange({ quantity: e.target.value.replace(/\D/g, "") })} placeholder="1" className={field} />
         </label>
         <label className="block">
-          <span className="mb-1 block text-xs font-medium text-zinc-600">Sizes / variations</span>
-          <input value={draft.sizes} onChange={(e) => onChange({ sizes: e.target.value })} placeholder="e.g. S, M, L or 100ml" className={field} />
+          <span className="mb-1 block text-xs font-medium text-zinc-600">{f.sizes}</span>
+          <input dir={draft.sizes ? "auto" : undefined} value={draft.sizes} onChange={(e) => onChange({ sizes: e.target.value })} placeholder={f.sizesPlaceholder} className={field} />
         </label>
         <label className="block">
-          <span className="mb-1 block text-xs font-medium text-zinc-600">Colour <span className="font-normal text-zinc-400">(optional)</span></span>
-          <input value={draft.colour} onChange={(e) => onChange({ colour: e.target.value })} placeholder="e.g. cream, black" className={field} />
+          <span className="mb-1 block text-xs font-medium text-zinc-600">{f.colour} <span className="font-normal text-zinc-400">{f.optional}</span></span>
+          <input dir={draft.colour ? "auto" : undefined} value={draft.colour} onChange={(e) => onChange({ colour: e.target.value })} placeholder={f.colourPlaceholder} className={field} />
         </label>
         <label className="col-span-2 block">
-          <span className="mb-1 block text-xs font-medium text-zinc-600">Notes <span className="font-normal text-zinc-400">(optional)</span></span>
+          <span className="mb-1 block text-xs font-medium text-zinc-600">{f.notes} <span className="font-normal text-zinc-400">{f.optional}</span></span>
           <textarea
             value={draft.notes}
             onChange={(e) => onChange({ notes: e.target.value })}
             rows={2}
-            placeholder="Brand, material, sale price and dates, anything else"
+            dir={draft.notes ? "auto" : undefined}
+            placeholder={f.notesPlaceholder}
             className={cn(field, "resize-none")}
           />
         </label>
