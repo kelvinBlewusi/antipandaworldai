@@ -91,7 +91,7 @@ import type { ListingRow } from "@/lib/supabase/types";
 import {
   CAPABILITY_ACTION, FRONT_DOOR_LIMITS, FRONT_DOOR_ROUTER, NOT_YET_ACTION, NOT_YET_EXAMPLES, frontDoor, namesInMessage, type Clarify, type FrontDoorInput,
 } from "@/lib/assistant-v2/front-door";
-import { agentRead, agentSystem, catalogLookups, geminiAgentCall } from "@/lib/assistant-v2/agent";
+import { agentModelSpec, agentRead, agentSystem, catalogLookups, geminiAgentCall } from "@/lib/assistant-v2/agent";
 
 /** Small and quick, like the review step's older fallback (lib/whatsapp/intent.ts). */
 export const ASSISTANT_MODEL = "gemini-2.5-flash-lite";
@@ -1836,7 +1836,9 @@ export async function productFacts(listings: ListingRow[]): Promise<ProductFacts
 // ─── Asking the AI ────────────────────────────────────────────────────────
 
 /** Models app_settings `assistant_model` may switch to; anything else is ignored. */
-const MODELS = new Set(["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-3.1-flash-lite"]);
+const MODELS = new Set(["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-3.1-flash-lite", "gemini-3.5-flash-lite"]);
+/** And agent mode's (`assistant_agent_model`), with a thinking level after a colon if wanted ("gemini-3.8-flash:low"). */
+const AGENT_MODELS = new Set([...Array.from(MODELS), "gemini-3-flash-preview", "gemini-3.6-flash", "gemini-3.8-flash"]);
 
 /**
  * The front door's sorting model: app_settings `assistant_router_model`, else
@@ -1857,7 +1859,8 @@ export async function routerModel(): Promise<string> {
 export async function agentModel(): Promise<string> {
   try {
     const { data } = await createServerClient().from("app_settings").select("value").eq("key", "assistant_agent_model").maybeSingle();
-    return typeof data?.value === "string" && MODELS.has(data.value) ? data.value : await assistantModel();
+    const spec = typeof data?.value === "string" ? agentModelSpec(data.value) : null;
+    return spec && AGENT_MODELS.has(spec.model) ? (data!.value as string).trim() : await assistantModel();
   } catch {
     return assistantModel();
   }

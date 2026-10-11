@@ -262,17 +262,32 @@ function getAIStudioGenAI(): GoogleGenAI {
   return _aiStudioGenAI;
 }
 
+export type ThinkingLevelName = "minimal" | "low" | "medium" | "high";
+/** Gemini 2.5 thinks within a token budget instead of at a level. */
+const THINKING_BUDGETS: Record<ThinkingLevelName, number> = { minimal: 0, low: 512, medium: 2048, high: 8192 };
+
+/** A thinking level as the model takes it. Pure. */
+export function thinkingConfig(modelName: string, level: ThinkingLevelName): import("@google/genai").ThinkingConfig {
+  if (modelName.startsWith("gemini-2.5")) return { thinkingBudget: THINKING_BUDGETS[level] };
+  return { thinkingLevel: level.toUpperCase() as import("@google/genai").ThinkingLevel };
+}
+
 /**
  * One call with tools the model may call (Gemini function calling), for the
  * assistant's agent mode (lib/assistant-v2/agent.ts). Through @google/genai on
  * both backends: the older AI Studio SDK drops the thought signatures Gemini 3
  * needs back with the tools' answers. `mode` "ANY" makes it call a tool
  * rather than write text; `allowed`, which of the tools it may call this time.
+ * `thinking`: how much it thinks first (the model's own default without it):
+ * Gemini 3 and later take it as a level; 2.5 as a token budget.
  */
 export async function callGeminiWithTools(
   modelName: string,
   turns: GeminiTurn[],
-  opts: { system: string; tools: GeminiTool[]; mode?: "AUTO" | "ANY"; allowed?: string[]; preferBackend?: "vertex" | "ai-studio" },
+  opts: {
+    system: string; tools: GeminiTool[]; mode?: "AUTO" | "ANY"; allowed?: string[]; preferBackend?: "vertex" | "ai-studio";
+    thinking?: ThinkingLevelName;
+  },
 ): Promise<GeminiToolResult> {
   const aiStudio = (opts.preferBackend === "ai-studio" && Boolean(process.env.GOOGLE_API_KEY)) || !isVertexEnabled();
   const client = aiStudio ? getAIStudioGenAI() : getVertexClient();
@@ -289,6 +304,7 @@ export async function callGeminiWithTools(
           ...(opts.mode === "ANY" && opts.allowed?.length ? { allowedFunctionNames: opts.allowed } : {}),
         },
       },
+      ...(opts.thinking ? { thinkingConfig: thinkingConfig(modelName, opts.thinking) } : {}),
     },
   });
   const backend = aiStudio ? "ai-studio" as const : "vertex" as const;

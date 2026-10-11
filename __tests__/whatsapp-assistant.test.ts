@@ -78,7 +78,7 @@ jest.mock("@/lib/jumia/categories", () => ({
 }));
 
 import {
-  NOT_YET_TEXT, OUTSIDE_TEXT, agentFor, answerLiveValue, claimsInability, assistantEnabled, assistantFor, assistantLinks, cleanReply, countBacked, fitsDraft, isStateQuestion, looksLikeQuestion, messageNumbers,
+  NOT_YET_TEXT, OUTSIDE_TEXT, agentFor, agentModel, answerLiveValue, claimsInability, assistantEnabled, assistantFor, assistantLinks, cleanReply, countBacked, fitsDraft, isStateQuestion, looksLikeQuestion, messageNumbers,
   changeToAsked, draftNumberIn, draftTextLines, frontDoorFor, isProductName, sameName, namesAProduct, newestWithin, recentConversation, saidIsValues, saleWindow, splitProducts, parseAction, plainQuickEdit, runAssistant, verifyChanges, type ProductFacts,
 } from "@/lib/whatsapp/assistant";
 import { assistantGate } from "@/lib/whatsapp/assistant-limits";
@@ -405,6 +405,15 @@ describe("the front door (step 2, owner 2026-10-08)", () => {
 
 describe("agent mode (the pilot, owner 2026-10-10)", () => {
   const session = () => ({ phoneNumber: "233", userId: "seller", state: "awaiting_count", batchId: null, lastSubmittedBatchId: null }) as WhatsAppSession;
+
+  it("its model comes from the setting, with a thinking level if one is named", async () => {
+    db.tables.app_settings = [{ key: "assistant_agent_model", value: "gemini-3.8-flash:low" }];
+    expect(await agentModel()).toBe("gemini-3.8-flash:low");
+    db.tables.app_settings = [{ key: "assistant_agent_model", value: "gemini-3.5-flash-lite" }];
+    expect(await agentModel()).toBe("gemini-3.5-flash-lite");
+    db.tables.app_settings = [{ key: "assistant_agent_model", value: "gemini-3.8-flash:lots" }];
+    expect(await agentModel()).toBe("gemini-2.5-flash-lite");
+  });
 
   it("is on for the accounts the switch names", async () => {
     expect(await agentFor("admin")).toBe(false);

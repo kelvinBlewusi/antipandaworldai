@@ -28,7 +28,7 @@
  * can't is not sent: it's asked once more without reply.
  */
 
-import { callGeminiWithTools, type GeminiTool, type GeminiTurn } from "@/lib/ai/gemini-client";
+import { callGeminiWithTools, type GeminiTool, type GeminiTurn, type ThinkingLevelName } from "@/lib/ai/gemini-client";
 import { withAiUsageContext } from "@/lib/ai/usage";
 import { siteGuide } from "@/lib/whatsapp/site-guide";
 import { canList, cannotList } from "@/lib/jumia/capabilities";
@@ -322,14 +322,29 @@ export type AgentCall = (turns: GeminiTurn[], onlyAct: boolean, noReply?: boolea
   calls: ToolCall[]; text: string; turn: GeminiTurn; usage?: { prompt: number; cached: number };
 }>;
 
-/** `system` is agentSystem(): the same for every seller, so it's cached. */
-export function geminiAgentCall(model: string, system: string, usage: FrontDoorUsage): AgentCall {
+/**
+ * A model as the agent's settings name it: its id, and after a colon how much
+ * it thinks ("gemini-3.8-flash:low"; the model's own default without one).
+ * Null for anything else. Pure.
+ */
+const THINKING_LEVELS: ThinkingLevelName[] = ["minimal", "low", "medium", "high"];
+export function agentModelSpec(spec: string): { model: string; thinking?: ThinkingLevelName } | null {
+  const [model, level, ...rest] = spec.trim().split(":");
+  if (!/^gemini-[a-z0-9.-]+$/.test(model) || rest.length > 0) return null;
+  if (level === undefined) return { model };
+  return THINKING_LEVELS.includes(level as ThinkingLevelName) ? { model, thinking: level as ThinkingLevelName } : null;
+}
+
+/** `system` is agentSystem(): the same for every seller, so it's cached. `spec` as agentModelSpec reads it. */
+export function geminiAgentCall(spec: string, system: string, usage: FrontDoorUsage): AgentCall {
+  const { model, thinking } = agentModelSpec(spec) ?? { model: spec };
   return (turns, onlyAct, noReply) => withAiUsageContext(usage, () => callGeminiWithTools(model, turns, {
     system, tools: AGENT_TOOLS, mode: "ANY", ...(noReply ? { allowed: ACTION_NAMES_NO_REPLY } : onlyAct ? { allowed: ACTION_NAMES } : {}),
     // AI Studio for every model: Vertex refuses these tools for 2.5 Flash
     // ("too much branching for serving", the model comparison of 11 Oct),
     // and Gemini 3 needs it for its thought signatures.
     preferBackend: "ai-studio" as const,
+    ...(thinking ? { thinking } : {}),
   }));
 }
 

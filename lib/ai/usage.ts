@@ -44,6 +44,12 @@ export function withAiUsageContext<T>(
  * model missing here is still logged, with a null cost.
  */
 export const MODEL_PRICES_USD_PER_M: Record<string, { input: number; output: number }> = {
+  // Checked 2026-10-11: 3.8 and 3.6 Flash at their introductory price to
+  // 31 Dec 2026 ($1.50 / $7.50 from 1 Jan 2027).
+  "gemini-3.8-flash":      { input: 0.75, output: 3.75 },
+  "gemini-3.6-flash":      { input: 0.75, output: 3.75 },
+  "gemini-3.5-flash-lite": { input: 0.30, output: 2.50 },
+  "gemini-3-flash-preview": { input: 0.50, output: 3.00 },
   "gemini-3.1-flash-lite": { input: 0.25, output: 1.50 },
   "gemini-2.5-flash-lite": { input: 0.10, output: 0.40 },
   "gemini-2.5-flash":      { input: 0.30, output: 2.50 },
