@@ -103,7 +103,7 @@ describe("the week's warning signs", () => {
 });
 
 describe("the Monday job", () => {
-  it("sends the week to the owner and queues agent mode's run, then the front door's", async () => {
+  it("sends the week to the owner and queues agent mode's run (the front door is by hand)", async () => {
     db.tables.whatsapp_assistant_log = [
       { created_at: ago(60), user_id: "s1", stage: "idle", message: "do the thing", action: { type: "unclear" }, outcome: "default", raw: null },
       { created_at: ago(60 * 24 * 9), user_id: "s1", stage: "idle", message: "old", action: null, outcome: "default", raw: null },
@@ -120,7 +120,7 @@ describe("the Monday job", () => {
     expect(sent[0].body).toContain("1 message read from 1 seller (last week 1)");
     expect(sent[0].body).toContain("• Agent mode (gemini-2.5-flash-lite): no run yet");
     const runs = db.tables.assistant_eval_runs as { pipeline: string; note: string; status: string }[];
-    expect(runs.map((x) => [x.pipeline, x.note, x.status])).toEqual([["agent", WEEKLY, "queued"], ["front_door", WEEKLY, "queued"]]);
+    expect(runs.map((x) => [x.pipeline, x.note, x.status])).toEqual([["agent", WEEKLY, "queued"]]);
   });
 
   describe("skipping a week nothing in the AI changed", () => {
@@ -137,29 +137,29 @@ describe("the Monday job", () => {
     it("runs, then skips the next week while the code and models are the same, and runs again when either changes", async () => {
       process.env.AI_FINGERPRINT = "abc";
       db.tables.assistant_eval_runs = [];
-      expect((await once(monday)).queued).toHaveLength(2);
-      expect(runs()).toBe(2);
+      expect((await once(monday)).queued).toHaveLength(1);
+      expect(runs()).toBe(1);
 
       const next = new Date(monday.getTime() + 7 * 86_400_000);
       expect((await once(next)).queued).toEqual([]);
-      expect(runs()).toBe(2);
-      expect(sent[0].body).toContain("Nothing in the chat's AI changed since the runs on 12 Oct, so none this week (they run by 9 Nov at the latest).");
+      expect(runs()).toBe(1);
+      expect(sent[0].body).toContain("Nothing in the chat's AI changed since the run on 12 Oct, so none this week (it runs by 9 Nov at the latest).");
 
       process.env.AI_FINGERPRINT = "def";
-      expect((await once(next)).queued).toHaveLength(2);
-      expect(sent[0].body).toContain("This week's runs start now");
+      expect((await once(next)).queued).toHaveLength(1);
+      expect(sent[0].body).toContain("This week's run of agent mode starts now");
 
       db.tables.app_settings.push({ key: "assistant_agent_model", value: "gemini-3.5-flash-lite" });
-      expect((await once(new Date(next.getTime() + 7 * 86_400_000))).queued).toHaveLength(2);
+      expect((await once(new Date(next.getTime() + 7 * 86_400_000))).queued).toHaveLength(1);
     });
 
     it("runs anyway after 4 weeks, and always when the build has no fingerprint", async () => {
       process.env.AI_FINGERPRINT = "abc";
       db.tables.assistant_eval_runs = [];
       await once(monday);
-      expect((await once(new Date(monday.getTime() + 28 * 86_400_000))).queued).toHaveLength(2);
+      expect((await once(new Date(monday.getTime() + 28 * 86_400_000))).queued).toHaveLength(1);
       delete process.env.AI_FINGERPRINT;
-      expect((await once(new Date(monday.getTime() + 35 * 86_400_000))).queued).toHaveLength(2);
+      expect((await once(new Date(monday.getTime() + 35 * 86_400_000))).queued).toHaveLength(1);
     });
   });
 
@@ -173,6 +173,23 @@ describe("the Monday job", () => {
     expect(emails).toHaveLength(1);
     expect(emails[0]).toMatchObject({ to: "help.pandaworldai@gmail.com", subject: "PandaWorld: weekly report" });
     expect(emails[0].text).toContain("/admin/warning-signs");
+  });
+});
+
+describe("the test runs' daily budget", () => {
+  const queued = { id: "r1", created_at: new Date().toISOString(), status: "queued", model: "m", pipeline: "agent", note: null, total: 1, done: 0, results: [], locked_until: null };
+  it("a run not started waits for tomorrow once today's test runs cost the budget", async () => {
+    db.tables.assistant_eval_runs = [{ ...queued }];
+    db.tables.ai_usage = [{ created_at: new Date().toISOString(), feature: "assistant_eval", cost_usd: 10.5 }, { created_at: new Date().toISOString(), feature: "assistant", cost_usd: 3 }];
+    expect(await workOnRuns(1_000)).toEqual({ runId: null, done: 0, total: 0, waiting: "budget" });
+    expect(db.tables.assistant_eval_runs[0]).toMatchObject({ status: "queued", locked_until: null });
+  });
+
+  it("under it, or with ai_test_budget_usd raised, it runs", async () => {
+    db.tables.assistant_eval_runs = [{ ...queued }];
+    db.tables.ai_usage = [{ created_at: new Date().toISOString(), feature: "assistant_eval", cost_usd: 10.5 }];
+    db.tables.app_settings.push({ key: "ai_test_budget_usd", value: 20 });
+    expect((await workOnRuns(1_000)).runId).toBe("r1");
   });
 });
 

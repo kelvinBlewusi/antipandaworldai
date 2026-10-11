@@ -2,6 +2,7 @@ import { revalidatePath } from "next/cache";
 import { createServerClient } from "@/lib/supabase/server";
 import { ASSISTANT_CASES } from "@/lib/evals/assistant-cases";
 import { byArea, nudgeEvalWorker, queueRun, routing, type EvalRun } from "@/lib/evals/assistant-eval";
+import { testBudgetToday } from "@/lib/ops/budget-guard";
 
 export const dynamic = "force-dynamic";
 
@@ -40,7 +41,10 @@ const when = (iso: string) => new Date(iso).toLocaleString("en-GB", { day: "nume
 
 export default async function AssistantTestsPage({ searchParams }: { searchParams: Promise<{ run?: string }> }) {
   const { run: picked } = await searchParams;
-  const { data } = await createServerClient().from("assistant_eval_runs").select("*").order("created_at", { ascending: false }).limit(12);
+  const [{ data }, spend] = await Promise.all([
+    createServerClient().from("assistant_eval_runs").select("*").order("created_at", { ascending: false }).limit(12),
+    testBudgetToday().catch(() => null),
+  ]);
   const runs = (data ?? []) as EvalRun[];
   const latest = runs.find((r) => r.id === picked) ?? runs.find((r) => r.status === "done") ?? runs[0];
   const cases = new Map(ASSISTANT_CASES.map((c) => [c.id, c]));
@@ -75,8 +79,14 @@ export default async function AssistantTestsPage({ searchParams }: { searchParam
             {MODELS.map((m) => <option key={m} value={`front_door:${m}`}>Front door, sorting with {m}</option>)}
           </select>
           <button type="submit" className="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-semibold text-white hover:bg-zinc-700">Run the test set</button>
-          <span className="text-xs text-zinc-500">About 3 minutes. Refresh to see it fill in.</span>
+          <span className="text-xs text-zinc-500">About 3 minutes and about $1. Refresh to see it fill in.</span>
         </form>
+        {spend && (
+          <p className={`mt-2 text-xs ${spend.spent >= spend.budget ? "font-semibold text-amber-700" : "text-zinc-500"}`}>
+            Test runs today: ${spend.spent.toFixed(2)} of the ${spend.budget.toFixed(2)} daily budget (app_settings ai_test_budget_usd).
+            {spend.spent >= spend.budget ? " Spent: a new run waits until midnight UTC." : " Past it, a new run waits until midnight UTC."}
+          </p>
+        )}
       </div>
 
       <div className="overflow-x-auto rounded-xl border border-zinc-200 bg-white">

@@ -30,9 +30,10 @@
 import { createServerClient } from "@/lib/supabase/server";
 import { appUrl } from "@/lib/whatsapp/app-url";
 import {
-  agentModel, assistantLinks, assistantModel, routerModel, type ProductFacts,
+  agentModel, assistantLinks, assistantModel, type ProductFacts,
 } from "@/lib/whatsapp/assistant";
 import { notifyOwner } from "@/lib/ops/notify-owner";
+import { testBudgetToday } from "@/lib/ops/budget-guard";
 import { ASSISTANT_CASES, type EvalCase, type Shape } from "@/lib/evals/assistant-cases";
 import { frontDoor, type FrontDoorInput } from "@/lib/assistant-v2/front-door";
 import { agentRead, agentSystem, catalogLookups, geminiAgentCall, type AgentLookups } from "@/lib/assistant-v2/agent";
@@ -272,16 +273,26 @@ const capped = (c: EvalCase, work: Promise<CaseResult>): Promise<CaseResult> => 
   return Promise.race([work, late]).finally(() => clearTimeout(timer));
 };
 
-export async function workOnRuns(budgetMs = 100_000): Promise<{ runId: string | null; done: number; total: number }> {
+export async function workOnRuns(budgetMs = 100_000): Promise<{ runId: string | null; done: number; total: number; waiting?: "budget" }> {
   const db = createServerClient();
   const deadline = Date.now() + budgetMs;
   const now = new Date().toISOString();
   // One run at a time, oldest first: two at once (the weekly agent and front
   // door runs) would hit Gemini's per-minute quota together.
-  const { data: open } = await db.from("assistant_eval_runs").select("id, locked_until")
+  const { data: open } = await db.from("assistant_eval_runs").select("id, locked_until, status")
     .in("status", ["queued", "running"]).order("created_at", { ascending: true }).limit(1);
-  const free = ((open ?? []) as { id: string; locked_until: string | null }[]).find((r) => !r.locked_until || r.locked_until < now);
+  const free = ((open ?? []) as { id: string; locked_until: string | null; status: string }[]).find((r) => !r.locked_until || r.locked_until < now);
   if (!free) return { runId: null, done: 0, total: 0 };
+  // A run not started yet waits for tomorrow once today's test spend is past
+  // its budget (owner, 2026-10-11: the test runs were ~90% of the bill). One
+  // already going finishes.
+  if (free.status === "queued") {
+    const { spent, budget } = await testBudgetToday();
+    if (spent >= budget) {
+      console.warn(`[assistant-eval] run ${free.id} waits: today's test runs cost $${spent.toFixed(2)} of the $${budget.toFixed(2)} budget`);
+      return { runId: null, done: 0, total: 0, waiting: "budget" };
+    }
+  }
   // Claimed only if no other worker took it since it was read.
   const claim = db.from("assistant_eval_runs")
     .update({ status: "running", locked_until: new Date(Date.now() + LOCK_MS).toISOString() })
@@ -316,12 +327,13 @@ export const WEEKLY = "weekly";
 /** A weekly run this many cases below the last run of the same way and model, on the cases both scored, is sent to the owner. */
 export const DROP_ALERT_CASES = 3;
 
-/** The week's runs: agent mode and the front door, each with the model the chat uses. One at a time (workOnRuns). */
+/**
+ * The week's run: agent mode, with the model the chat uses. The front door is
+ * only its backup, so it's run by hand when it changes (owner, 2026-10-11:
+ * the test runs were ~90% of the bill).
+ */
 export async function queueWeeklyRuns(): Promise<string[]> {
-  return [
-    await queueRun({ pipeline: "agent", note: WEEKLY }),
-    await queueRun({ pipeline: "front_door", router: await routerModel(), note: WEEKLY }),
-  ];
+  return [await queueRun({ pipeline: "agent", note: WEEKLY })];
 }
 
 /** One run against an earlier one, on the cases both scored. Pure. */

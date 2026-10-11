@@ -1,21 +1,21 @@
 /**
  * Every Monday (step 4 of the reliability plan, owner 2026-10-11): the
  * week's warning signs to the owner on WhatsApp, with the test set's latest
- * scores, then this week's test runs queued (agent mode and the front door,
- * one after the other). A weekly run that falls behind the last one is sent
+ * scores, then this week's test run queued (agent mode; the front door, its
+ * backup, only by hand since 2026-10-11). A weekly run that falls behind the last one is sent
  * to the owner when it finishes (lib/evals/assistant-eval.ts alertOnDrop).
  * Called by app/api/worker/assistant-weekly (pg_cron).
  *
  * The runs are skipped on a week nothing in the chat's AI changed (owner,
  * 2026-10-11, the test runs were the biggest AI cost): the same code
- * (AI_FINGERPRINT, hashed at build by next.config.mjs) and the same models
- * as the last weekly runs, kept in app_settings `assistant_weekly_fingerprint`.
+ * (AI_FINGERPRINT, hashed at build by next.config.mjs) and the same agent
+ * model as the last weekly run, kept in app_settings `assistant_weekly_fingerprint`.
  * Every 4 weeks they run anyway, as Google's models change under one name.
  */
 
 import { createServerClient } from "@/lib/supabase/server";
 import { appUrl } from "@/lib/whatsapp/app-url";
-import { agentModel, assistantModel, routerModel } from "@/lib/whatsapp/assistant";
+import { agentModel, assistantModel } from "@/lib/whatsapp/assistant";
 import { nudgeEvalWorker, queueWeeklyRuns, type EvalRun } from "@/lib/evals/assistant-eval";
 import { signsText, weekOfSigns } from "@/lib/evals/warning-signs";
 import { notifyOwner } from "@/lib/ops/notify-owner";
@@ -50,10 +50,10 @@ export async function unchangedSince(fingerprint: string | null, now = new Date(
 
 export async function runWeekly(now = new Date()): Promise<{ sent: boolean; queued: string[]; signs: Record<string, number> }> {
   const { week, before } = await weekOfSigns();
-  const [agent, door, router] = await Promise.all([agentModel(), assistantModel(), routerModel()]);
+  const [agent, door] = await Promise.all([agentModel(), assistantModel()]);
   const [agentScore, doorScore] = await Promise.all([lastScore("agent", agent), lastScore("front_door", door)]);
   const code = process.env.AI_FINGERPRINT;
-  const fingerprint = code ? [code, agent, door, router].join("|") : null;
+  const fingerprint = code ? [code, agent].join("|") : null;
   const since = await unchangedSince(fingerprint, now);
   const day = (d: Date) => d.toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "Africa/Accra" });
   const text = [
@@ -63,8 +63,8 @@ export async function runWeekly(now = new Date()): Promise<{ sent: boolean; queu
     `• Agent mode (${agent}): ${agentScore ?? "no run yet"}`,
     `• Front door (${door}): ${doorScore ?? "no run yet"}`,
     since
-      ? `Nothing in the chat's AI changed since the runs on ${day(since)}, so none this week (they run by ${day(new Date(since.getTime() + RUN_AT_LEAST_EVERY_MS))} at the latest).`
-      : "This week's runs start now; I'll tell you if either does worse than its last.",
+      ? `Nothing in the chat's AI changed since the run on ${day(since)}, so none this week (it runs by ${day(new Date(since.getTime() + RUN_AT_LEAST_EVERY_MS))} at the latest).`
+      : "This week's run of agent mode starts now; I'll tell you if it does worse than its last.",
   ].join("\n");
   // WhatsApp, or email on a week they haven't written to the bot (lib/ops/notify-owner.ts).
   const channel = await notifyOwner("weekly report", text);
