@@ -3098,7 +3098,9 @@ cause, and its fix:
   - Not tried on a real product yet. Jumia's update feed takes the whole images list, so a photo left out should go; confirm on the first real one.
 - **Order alerts on every plan** (owner: "let's fire for free accounts too"): `order_alerts` minPack is now EVERYONE. New-order alerts are free; order updates still cost NOTICE_CREDIT_COST each.
   - Fired so far: 2 (the owner on 6 Oct, user_3KHCy… on 11 Oct 13:25, whose Pack tap came after the order had moved on).
-  - `order_alert_template` isn't set: outside WhatsApp's 24 hours, alerts wait until the seller writes. A launch blocker for alerts (see the launch audit).
+  - `order_alert_template` is set (`jumia_new_order`), so alerts outside WhatsApp's 24 hours go as that template.
+- **The web chat polls less while idle** (components/assistant/listing-assistant.tsx `pollDelay`): every 2.5 s for a minute after the last message or tap, then 6 s, then 15 s after 5 minutes; at once and fast again when a reply is awaited or the tab comes back. A chat left open used to poll every 2.5 s all day.
+- **Costs found 11 Oct** (for the launch audit): test runs were ~93% of the month's Gemini spend (~$40 of ~$43); a seller's chat message costs ~$0.003–0.006 (ai_usage ignores the cached-token discount, so the upper end). Functions run in iad1 (Washington) while Supabase is in eu-north-1 (Stockholm): every query crosses the Atlantic.
 - Test set: 6 new cases (photo-list-this, photo-use-uploaded, drafts-any, photos-replace, photos-replace-last, draft-variation-price). Tests: chat-photos.test.ts, jumia-shop.test.ts (sale vs price, applied notices, reply_to), jumia-shop-more.test.ts (size price), whatsapp-intake-flow.test.ts (draft size price), live-additions.test.ts (swaps), billing-features.test.ts.
 
 ### A batch Jumia turned down (owner's WhatsApp, 2026-10-11)
