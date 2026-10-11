@@ -370,7 +370,7 @@ export const ASSISTANT_CASES: EvalCase[] = [
   { id: "chat-hi-name", src: "log 10-08 20:02", area: "chat", stage: "review", drafts: [BEANIE_DRAFT], msg: "Hi, PandaworldAI", ok: [reply, help] },
 
   // ── What Jumia's API allows, and doesn't (lib/jumia/capabilities.ts; owner, 2026-10-09) ──
-  { id: "cannot-delete", src: "variant", area: "live_changes", stage: "idle", catalog: [NECK_FAN], msg: "delete the neck fan from my shop completely", ok: [{ type: "reply", text: "~can't delete products" }], note: "Not in the API: the fixed answer, with turning it off as what can be done." },
+  { id: "cannot-delete", src: "variant", area: "live_changes", stage: "idle", catalog: [NECK_FAN], msg: "delete the neck fan from my shop completely", ok: [{ type: "reply", text: "~deleted in Vendor Center" }], note: "Jumia only allows it in Vendor Center: the fixed answer, with turning it off as what can be done." },
   { id: "cannot-buyer-phone", src: "variant", area: "orders", stage: "idle", msg: "send me the phone number of the customer for order 394666919", ok: [{ type: "reply", text: "~doesn't share buyers" }] },
   { id: "cannot-holiday", src: "variant", area: "account_help", stage: "idle", msg: "can you put my shop on holiday mode for 2 weeks", ok: [{ type: "reply", text: "~holiday mode" }] },
   { id: "cannot-main-photo", src: "variant", area: "live_changes", stage: "idle", catalog: [NECK_FAN], msg: "change the main picture of the neck fan", ok: [{ type: "reply", text: "~main photo" }] },
