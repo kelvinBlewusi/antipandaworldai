@@ -171,6 +171,19 @@ export async function fetchCatalogPage(
   return r.ok ? { ok: true, data: productsFromCatalog(r.data, country) } : r;
 }
 
+/**
+ * Whether Jumia can change a product's stock, price or ON/OFF: it is on
+ * Jumia in the seller's country (ON or OFF there). One that isn't (rejected
+ * or waiting for its quality check, or never created there) has no status,
+ * and Jumia turns down the whole feed it's in: "The product with the sid
+ * [...] was not found" (owner's "restock everything to 10", 11 Oct: 19 such
+ * products in 267 sank both feeds). Pure.
+ */
+export const changeable = (p: Pick<ShopProduct, "status">): boolean => p.status === "ACTIVE" || p.status === "INACTIVE";
+
+/** Jumia's refusal of a product that isn't on Jumia in the seller's country. */
+export const NOT_FOUND_RE = /product with the sid \[[^\]]*\] was not found/i;
+
 /** Stock per product sid: every product's (no sids), or just these. */
 export async function fetchStock(accessToken: string, deadline: number, sids?: string[]): Promise<JumiaCall<Map<string, number>>> {
   const stock = new Map<string, number>();

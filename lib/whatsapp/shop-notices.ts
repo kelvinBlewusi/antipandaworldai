@@ -41,7 +41,7 @@ import { inQuietHours, lastInboundAt, WINDOW_MS } from "@/lib/whatsapp/order-ale
 import { describeLiveChange, recordApplied } from "@/lib/whatsapp/shop";
 import { detailWord, lockedDetailIn, lockedText, rememberLocked } from "@/lib/jumia/locked-details";
 import {
-  feedItemResults, fetchPayouts, markNoticed, noticed, orderStatusWord, ordersChangedSince, type LiveChange, type PayoutStatement,
+  NOT_FOUND_RE, feedItemResults, fetchPayouts, fetchStock, markNoticed, noticed, orderStatusWord, ordersChangedSince, type LiveChange, type PayoutStatement,
 } from "@/lib/jumia/shop";
 import type { JumiaOrder } from "@/lib/jumia/orders";
 
@@ -79,11 +79,69 @@ const feedError = (errors: unknown[]): string => {
  * and kept so the next seller is told before asking (lib/jumia/locked-details.ts).
  */
 export async function explainRefusal(reason: string, change: LiveChange | null): Promise<string> {
+  if (NOT_FOUND_RE.test(reason)) return NOT_ON_JUMIA;
   const locked = lockedDetailIn(reason);
   if (!locked) return reason;
   await rememberLocked(locked);
   const attr = change?.kind === "content" ? change.fields.attributes?.find((a) => a.name.toLowerCase() === locked) : undefined;
   return lockedText(detailWord(locked, attr?.label), attr?.value);
+}
+
+/** Jumia's "The product with the sid [...] was not found", in the seller's words. */
+const NOT_ON_JUMIA = "it isn't on Jumia in your country (its quality check rejected it, or hasn't approved it yet), so Jumia can't change it";
+/** A change Jumia turned down only because others in the same feed couldn't change. */
+export const BATCH_REFUSED = "Jumia turned the whole batch down because of the products it couldn't change";
+
+export type FeedOutcome = { outcome: "applied" } | { outcome: "refused"; reason: string; own: boolean } | { outcome: "waiting" };
+
+/**
+ * What became of each change in one feed. A product Jumia names as failed is
+ * refused with its own reason. When Jumia turns the feed down (ERROR, or
+ * finished with failures), the ones it doesn't name were refused because of
+ * the others, unless Jumia shows the change landed: a stock change read back
+ * at its new number (`readBack`, stock by product sid). Before 11 Oct every
+ * product in such a feed got the first product's "not found" error: 248 good
+ * products were reported with someone else's error. Pure.
+ */
+export function feedOutcomes(
+  rows: { sku: string; sid: string | null; change: LiveChange }[],
+  feed: { status: string; failed: number; errors: unknown[]; raw: unknown } | null,
+  readBack: Map<string, number> | null = null,
+): FeedOutcome[] {
+  if (!feed) return rows.map(() => ({ outcome: "waiting" as const }));
+  const done = feed.status === "DONE" || feed.status === "FINISHED" || feed.status === "COMPLETED";
+  const errored = feed.status === "ERROR" || feed.status === "FAILED";
+  const items = feedItemResults(feed.raw);
+  const itemOf = (r: { sku: string; sid: string | null }) => items.get(r.sku) ?? (r.sid ? items.get(r.sid) : undefined);
+  const named = rows.filter((r) => itemOf(r)?.failed).length;
+  const batchRefused = errored || (done && feed.failed > 0);
+  return rows.map((r): FeedOutcome => {
+    const item = itemOf(r);
+    if (item?.failed) return { outcome: "refused", reason: item.error ?? feedError(feed.errors), own: true };
+    if (!batchRefused) return done ? { outcome: "applied" } : { outcome: "waiting" };
+    if (item && !errored) return { outcome: "applied" };
+    if (r.change.kind === "stock" && r.sid && readBack?.get(r.sid) === r.change.stock) return { outcome: "applied" };
+    return named > 0 ? { outcome: "refused", reason: BATCH_REFUSED, own: false } : { outcome: "refused", reason: feedError(feed.errors), own: true };
+  });
+}
+
+/**
+ * The message for a feed's refused changes: each product Jumia refused with
+ * its reason, and, when Jumia turned the rest of the batch down because of
+ * them, how many and what to do. Pure.
+ */
+export function refusedText(own: string[], batch: number, refused: number, allNotFound: boolean, what: string, total = refused): string {
+  const list = [...own.slice(0, 15).map((l) => `• ${l}`), ...(own.length > 15 ? [`+${own.length - 15} more`] : [])];
+  if (batch === 0) return own.length === 1 ? `⚠️ Jumia didn't apply the change to ${own[0]}` : ["⚠️ Jumia didn't apply these changes:", ...list].join("\n");
+  const nothing = refused === total ? "Nothing in that batch changed. " : `${total - refused} did change. `;
+  return [
+    `⚠️ Jumia didn't apply the change (${what}) to ${refused} products. It turns a whole batch down when it can't change one product in it, and it couldn't change ${own.length === 1 ? "this one" : `these ${own.length}`}:`,
+    ...list,
+    "",
+    allNotFound
+      ? `${nothing}Send it again and I'll leave ${own.length === 1 ? "it" : "them"} out.`
+      : `${nothing}Send it again without ${own.length === 1 ? "it" : "them"} to change the other ${batch}.`,
+  ].join("\n");
 }
 
 /**
@@ -113,36 +171,52 @@ async function checkSentChanges(now: Date, deadline: number, run: ShopNoticesRun
       const errored = feed && (feed.status === "ERROR" || feed.status === "FAILED");
       const age = now.getTime() - new Date(String(first.created_at)).getTime();
       if (!feed && age <= FEED_GIVE_UP_MS) continue;
-      const items = feed ? feedItemResults(feed.raw) : new Map<string, { failed: boolean; error: string | null }>();
-      const refusedLines: string[] = [];
-      for (const r of group) {
-        const item = items.get(String(r.seller_sku)) ?? items.get(String(r.product_sid));
-        // Without a line per product, a failure in the feed is everyone's.
-        const refused = errored || (item ? item.failed : !!feed && feed.failed > 0 && done);
-        if (refused || (!done && age > FEED_GIVE_UP_MS)) {
-          const reason = refused ? (item?.error ?? feedError(feed!.errors)) : "Jumia didn't confirm it within a day";
+      const rows = group.map((r) => ({ sku: String(r.seller_sku), sid: r.product_sid ? String(r.product_sid) : null, change: r.change as LiveChange }));
+      // A feed Jumia turned down: read back the stock changes it didn't name, to see whether they landed.
+      let readBack: Map<string, number> | null = null;
+      if (feed && (errored || (done && feed.failed > 0))) {
+        const items = feedItemResults(feed.raw);
+        const sids = rows.filter((r) => r.change.kind === "stock" && r.sid && !(items.get(r.sku) ?? items.get(r.sid!))?.failed).map((r) => r.sid!);
+        if (sids.length > 0) {
+          const back = await fetchStock(creds.accessToken, Math.min(deadline, Date.now() + 8_000), sids).catch(() => null);
+          readBack = back?.ok ? back.data : null;
+        }
+      }
+      const outcomes = feedOutcomes(rows, feed, readBack);
+      const own: string[] = [];
+      let batch = 0;
+      let refusedCount = 0;
+      let allNotFound = true;
+      for (let i = 0; i < group.length; i++) {
+        const r = group[i];
+        const o = outcomes[i];
+        const late = o.outcome === "waiting" && age > FEED_GIVE_UP_MS;
+        if (o.outcome === "refused" || late) {
+          const reason = o.outcome === "refused" ? o.reason : "Jumia didn't confirm it within a day";
           await db.from("jumia_product_changes").update({ status: "failed", error: reason, updated_at: now.toISOString() }).eq("id", String(r.id));
-          const what = describeLiveChange(r.change as LiveChange, null, { currency: creds.currency });
-          refusedLines.push(`*${String(r.name ?? r.seller_sku)}* (${what}): ${await explainRefusal(reason, r.change as LiveChange)}`);
+          refusedCount++;
+          if (o.outcome === "refused" && !o.own) batch++;
+          else {
+            if (!NOT_FOUND_RE.test(reason)) allNotFound = false;
+            const what = describeLiveChange(r.change as LiveChange, null, { currency: creds.currency });
+            own.push(`*${String(r.name ?? r.seller_sku)}* (${what}): ${await explainRefusal(reason, r.change as LiveChange)}`);
+          }
           run.changes++;
-        } else if (done) {
+        } else if (o.outcome === "applied") {
           await db.from("jumia_product_changes").update({ status: "done", updated_at: now.toISOString() }).eq("id", String(r.id));
           if (r.product_sid) await recordApplied(userId, String(r.product_sid), r.change as LiveChange);
           run.changes++;
         }
       }
-      if (refusedLines.length > 0) {
+      if (refusedCount > 0) {
         // Nothing of it applied: its credits back (lib/whatsapp/shop.ts charged the tap).
-        const back = refusedLines.length === group.length
+        const back = refusedCount === group.length
           ? (await refundService(first.group_id ? `lgrp:${String(first.group_id)}` : `lchg:${String(first.id)}`, "Refund: Jumia didn't apply the change")).refunded
           : 0;
         const credits = back > 0 ? `\n\nYour ${back} credits for it are back.` : "";
         const phone = await phoneOf(userId);
-        if (phone) {
-          await sendTextIfConfigured(phone, (refusedLines.length === 1
-            ? `⚠️ Jumia didn't apply the change to ${refusedLines[0]}`
-            : ["⚠️ Jumia didn't apply these changes:", ...refusedLines.slice(0, 15).map((l) => `• ${l}`), ...(refusedLines.length > 15 ? [`+${refusedLines.length - 15} more`] : [])].join("\n")) + credits);
-        }
+        if (phone) await sendTextIfConfigured(phone, refusedText(own, batch, refusedCount, allNotFound,
+          describeLiveChange(first.change as LiveChange, null, { currency: creds.currency }), group.length) + credits);
       }
     } catch (e) {
       run.failed++;
