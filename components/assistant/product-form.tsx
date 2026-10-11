@@ -18,6 +18,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ImagePlus, Loader2, Plus, Sparkles, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { CameraButton } from "@/components/assistant/camera-capture";
 import { blankCard as blank, newKey, openingCards, type FormDraft, type FormPhoto } from "@/components/assistant/chat-photos";
 
 /** Jumia takes at most 8 photos a product. */
@@ -268,6 +269,7 @@ function Card({ n, draft, currency, polishCost, problem, canRemove, onChange, on
             Photos
           </button>
         )}
+        {draft.photos.length < MAX_PHOTOS && <CameraButton tile room={MAX_PHOTOS - draft.photos.length} onPhotos={onPhotos} />}
         <input
           ref={input}
           type="file"

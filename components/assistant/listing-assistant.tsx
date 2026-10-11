@@ -15,6 +15,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { ArrowUp, ChevronDown, ChevronLeft, ClipboardList, ExternalLink, ImagePlus, Loader2, Lock, Plus, RotateCw, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { CameraButton } from "@/components/assistant/camera-capture";
 import { BuyCreditsButton } from "@/components/billing/buy-credits-button";
 import { matchingCommands, slashCommand, slashToText, unfinishedFill, type PaletteCommand } from "@/components/assistant/chat-commands";
 import { ProductForm, type FormDraft } from "@/components/assistant/product-form";
@@ -670,6 +671,7 @@ export function ListingAssistant({ firstName, productForm }: {
             <ImagePlus className="h-5 w-5 text-orange-500" />
             <span className="hidden sm:inline">Upload</span>
           </button>
+          <CameraButton disabled={sending} room={MAX_PHOTOS - attachments.length} onPhotos={addFiles} />
           <button
             type="button"
             onClick={() => setCommandsOpen((o) => !o)}
