@@ -12,7 +12,7 @@ import { isAdmin } from "@/lib/auth/is-admin";
 // surface isn't leaked. This is a SEPARATE route tree from
 // app/(main)/admin (outside the (main) route group, so it renders
 // without that group's own nav/shell) — the URLs don't collide since
-// this only adds /admin, /admin/messages, /admin/assistant-tests, /admin/errors,
+// this only adds /admin, /admin/messages, /admin/assistant-tests, /admin/wishes, /admin/errors,
 // /admin/blocked-categories, /admin/billing, none of which
 // app/(main)/admin/* already serves.
 
@@ -30,6 +30,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
             <Link href="/admin/messages" className="hover:text-zinc-900">WhatsApp messages</Link>
             <Link href="/admin/assistant-tests" className="hover:text-zinc-900">Assistant tests</Link>
             <Link href="/admin/jumia-api" className="hover:text-zinc-900">Jumia API</Link>
+            <Link href="/admin/wishes" className="hover:text-zinc-900">Wish list</Link>
             <Link href="/admin/errors" className="hover:text-zinc-900">Errors</Link>
             <Link href="/admin/blocked-categories" className="hover:text-zinc-900">Blocked categories</Link>
             <Link href="/admin/auto-fix" className="hover:text-zinc-900">Auto-fix</Link>

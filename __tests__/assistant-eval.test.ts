@@ -27,10 +27,20 @@ const ACTIONS = new Set([
   "edit", "submit", "list", "restart", "review", "orders", "credits", "help", "reply", "live_change", "product_info", "product_text", "fees", "stock", "shop",
   "order_status", "sales", "listings", "payouts", "payout_detail", "report", "bulk", "content_change", "brand_check", "category_info", "shops",
   "warehouse_stock", "warehouse_order", "warehouse_shipped", "polish", "health_report", "research", "note", "unclear", "fix_rejected", "add_size", "add_photos", "draft_text",
+  "not_yet",
 ]);
 const STAGES = new Set(["review", "sent", "idle", "starting", "collecting", "drafting"]);
 
 beforeEach(() => { db = new FakeDb(); prompts.length = 0; });
+
+describe("the context record", () => {
+  it("shows the whole recent conversation, not just the last 6 messages", () => {
+    const conversation = Array.from({ length: 12 }, (_, i) => `Seller: message ${i + 1}`);
+    const text = contextText({ stage: "idle", message: "what did I ask you?", conversation, drafts: [], listed: null, seller: [], links: {}, currency: "GHS", web: true });
+    expect(text).toContain("Seller: message 1\n");
+    expect(text).toContain("Seller: message 12");
+  });
+});
 
 describe("the test set", () => {
   it("has enough real messages, each case well-formed", () => {

@@ -5,7 +5,7 @@
  * 2026-10-09.
  */
 
-import { CAPABILITIES, cannotAnswer, cannotList } from "@/lib/jumia/capabilities";
+import { CAPABILITIES, canList, cannotAnswer, cannotList, capabilityAnswer } from "@/lib/jumia/capabilities";
 import { checkDetailValue, matchAttribute, resolveDetails } from "@/lib/whatsapp/live-details";
 import { contentAction, parseAction, assistantLinks } from "@/lib/whatsapp/assistant";
 import { feedItemResults, qcText, type ProductSet } from "@/lib/jumia/shop";
@@ -39,6 +39,19 @@ describe("the list of what's possible", () => {
       if (c.status === "vendor_center" || c.status === "impossible") expect({ id: c.id, answer: !!c.answer }).toEqual({ id: c.id, answer: true });
       if (c.status === "chat" || c.status === "whatsapp") expect({ id: c.id, requests: c.requests.length > 0 }).toEqual({ id: c.id, requests: true });
     }
+  });
+
+  it("everything the chat does has its answer to \"can you…?\", with the words that do it", () => {
+    for (const c of CAPABILITIES) {
+      if (c.status === "chat" || c.status === "whatsapp") expect({ id: c.id, yes: /^Yes[:,]/.test(c.yes ?? "") }).toEqual({ id: c.id, yes: true });
+      else expect({ id: c.id, yes: c.yes ?? null }).toEqual({ id: c.id, yes: null });
+    }
+    expect(canList()).toContain("- live_stock: Change a product's stock");
+    expect(canList()).not.toContain("delete_product");
+    expect(capabilityAnswer("live_stock")).toEqual({ text: expect.stringContaining("set the kettle's stock to 20"), link: null, wish: false });
+    expect(capabilityAnswer("main_photo")).toEqual({ text: expect.stringContaining("Vendor Center"), link: "vendor_center", wish: false });
+    expect(capabilityAnswer("translations")).toMatchObject({ wish: true });
+    expect(capabilityAnswer("made_up")).toBeNull();
   });
 
   it("the AI is told only what isn't possible, by key, and gets back the fixed answer", () => {

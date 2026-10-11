@@ -2487,7 +2487,8 @@ checks and taps.
     sale "end", submit all → "all", details list → record) and goes through
     `parseActionUnguarded`, the front door's checks: values from the
     message, products named, nothing widened. Changes to Jumia still go out
-    as confirm taps. A `clarify` goes out as the front door's buttons.
+    as confirm taps, except the immediate kinds (see "Smarter and honest
+    chat" below). A `clarify` goes out as the front door's buttons.
   - The prompt is in two parts. `agentSystem()` is the system instruction,
     the same for every seller and message: `capabilities()`,
     `cannotList()`, the site guide, every area's examples, and the rules
@@ -2578,6 +2579,108 @@ could show a draft's own text.
   router's drafts area now includes "showing"), the old prompt, and
   `capabilities()`. Test cases `draft-text-first-one` (the owner's message,
   with the live bodysuit in the catalog) and `draft-text-description`.
+
+### Smarter and honest chat (owner, 2026-10-11: "go ahead with steps 1, 2 and 4" and "Safe to make immediate implement this")
+
+The owner asked how to make the chat understand what sellers want, do it
+cleanly, and say when it can't do something. Four parts were proposed;
+these three were approved, plus some live changes made immediate.
+
+- **Immediate live changes** (lib/whatsapp/shop.ts `immediateChange`):
+  - One product's stock, ON/OFF, or ending its sale is sent to Jumia
+    straight away, with no confirm tap, when the message names exactly one
+    product. This uses `applyChange(..., { tapped: false })`:
+    - It is paid for first.
+    - The feed is sent, and the payment is refunded if the feed fails.
+    - The seller gets "✅ Sent to Jumia".
+    - If unpaid, the row is cancelled with "not paid" and the seller is told
+      "Buy credits, then send it again."
+  - These still wait for one tap:
+    - a price or a sale;
+    - several products;
+    - a product taken from the conversation (`fromContext`, so the bot
+      never guesses "it" into a live change).
+  - Picking from a "Which product?" list for an immediate change applies it
+    on the pick.
+  - Photos for a live product go to Jumia on Done (`makeChange` replaced
+    `offerChange`; lib/whatsapp/live-photos.ts).
+  - Everything else still asks first: bulk rules, content, sizes,
+    warehouse orders, submitting drafts, and anything about orders.
+  - `capabilities()` and the capability list (`NAMED_NOW`) say which
+    changes are immediate.
+- **The whole recent conversation**:
+  - `recentConversation` keeps 1,200 characters of each message
+    (`CONVERSATION_LINE_MAX`, was 300).
+  - It keeps the newest messages that fit in 12,000 characters
+    (`newestWithin`, `CONVERSATION_MAX`).
+  - The front door's context record (`contextText`) shows the last 20
+    messages (was 6), and so does agent mode.
+  - The reader and the agent are told to answer "what did I ask you?" from
+    the conversation and their memory, and never to say they don't keep a
+    record.
+- **Honest "can't"**:
+  - **"Can you…?"** (`capability` action and tool; `canList()`,
+    `capabilityAnswer()` in lib/jumia/capabilities.ts):
+    - Every `chat`/`whatsapp` entry has a fixed `yes` answer, "Yes: …" with
+      the words that do it.
+    - The AI names a key and the seller gets that text, word for word.
+    - Vendor Center and impossible entries give their `answer`.
+    - A `not_built` entry gives its answer and is noted as a wish (so does
+      `cannot` with one).
+    - A "can you…?" that says what to do and to which product is done, not
+      answered.
+    - /admin/jumia-api shows the yes answers.
+  - **`not_yet`** (`{type, what, outside}`): for what nothing does and that
+    isn't on Not possible.
+    - The seller gets `NOT_YET_TEXT` ("I can't do that yet. I've noted
+      it.").
+    - The request is noted in `assistant_wishes` (user, channel, the AI's
+      words for it, their message, and the stopped reply if any;
+      migration 2026-10-11_assistant-wishes.sql).
+    - `outside: true` (nothing to do with Jumia, selling or PandaWorld) gets
+      `OUTSIDE_TEXT` and isn't noted.
+    - **/admin/wishes** (Wish list in the admin nav) shows the most-asked
+      requests of 90 days, by sellers, then every request.
+  - **The reply guard** (`claimsInability` in lib/whatsapp/assistant.ts)
+    catches an AI reply in its own words that:
+    - says "I/we/PandaWorld can't / cannot / am unable / don't have the
+      ability / don't keep a record";
+    - says "not possible";
+    - or sends them to Vendor Center to do something ("update it in Vendor
+      Center", "you'll need to use Vendor Center").
+
+    Steps for connecting Jumia or the extension are let through (they
+    mention a token, Client ID, Self Authorization, applications, the API
+    key, the extension or Add Products). Fixed answers (cannot, capability)
+    never pass through it.
+    - **Classic path:** `parseActionRaw` turns such a reply into `not_yet`
+      with `blocked` set. `parseAction`'s word rules still rescue it like a
+      reply (on/off counts → overview, "last 10 products" → research,
+      "change X to N" → live change), and so does the shop-product-name
+      rescue in `runAssistant`.
+    - **Front door:** it reads again once, with `BLOCKED_NOTE` (the reply
+      wasn't sent; choose the action, cannot, capability or not_yet), if
+      the message is under 20 s in; otherwise it stays `not_yet`. `raw`
+      shows "its reply said it can't, read again".
+    - **Agent:** a lone `reply` that trips it gets `CANT_NOT_SENT` as its
+      functionResponse, and one more call is made where every action except
+      reply is allowed (`AgentCall`'s third argument, `noReply`). `raw`
+      shows "(said it can't: not sent)". If time runs out, it's `not_yet`.
+  - Prompt changes (all three readers share `CAPABILITY_ACTION`,
+    `NOT_YET_ACTION`, `NOT_YET_EXAMPLES` and `NEVER_CANT` from
+    front-door.ts):
+    - the classic prompt's "say you can't help with it" and "say you can't
+      see it here" are gone;
+    - the `vendor_center` link is "only with an answer from Not possible";
+    - the site guide says live products are changed in chat, except their
+      main photo and category.
+  - Test set: 248 cases.
+    - Off-topic and missing-feature cases accept `not_yet`.
+    - New cases: `can-you-prices`, `can-you-alerts`, `can-you-stock-named`,
+      `not-yet-instagram`, `not-yet-invoice`, `not-yet-competitors`,
+      `outside-football` and `chat-questions-remembered`.
+  - Tests: "honest can't" in whatsapp-assistant.test.ts and the capability
+    answers in jumia-capabilities.test.ts.
 
 ### What sellers can and can't ask of Jumia (owner, 2026-10-09)
 

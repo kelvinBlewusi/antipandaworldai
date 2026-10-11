@@ -111,6 +111,9 @@ const sales = (period?: string, status?: string | string[]): Shape => ({ type: "
 const newest = (limit: number): Shape => ({ type: "research", "needs.0.source": "products", "needs.0.sort": "newest", "needs.0.limit": limit });
 const research: Shape = { type: "research" };
 const linkReply = (link: string): Shape => ({ type: "reply", link });
+// Something PandaWorld doesn't do: one fixed line, noted (owner, 2026-10-11); outside Jumia, not noted.
+const notYet: Shape = { type: "not_yet" };
+const outside: Shape = { type: "not_yet", outside: true };
 
 // ─── The cases ───────────────────────────────────────────────────────────────
 
@@ -120,7 +123,7 @@ export const ASSISTANT_CASES: EvalCase[] = [
   { id: "chat-hi", src: "log 10-08 09:09", area: "chat", stage: "idle", ctx: ["Seller: the full list of the last 10products uploaded on my shop", HOW_MANY], msg: "Hi", ok: [reply, help] },
   { id: "chat-not-listing", src: "log 10-07 02:14", area: "chat", stage: "idle", ctx: ["Seller: 0", "Bot: ⚠️ I need at least 1 product to get started — reply with how many you're listing today (1–20)."], msg: "i am not listing today", ok: [reply, help] },
   { id: "chat-love", src: "log 10-07 02:38", area: "chat", stage: "idle", msg: "love youu", ok: [reply] },
-  { id: "chat-founder", src: "log 10-07 02:39", area: "chat", stage: "idle", msg: "who is your founder", ok: [reply] },
+  { id: "chat-founder", src: "log 10-07 02:39", area: "chat", stage: "idle", msg: "who is your founder", ok: [reply, notYet] },
   { id: "chat-how-are-you", src: "log 10-07 06:21", area: "chat", stage: "idle", msg: "how are you", ok: [reply] },
   { id: "chat-really", src: "log 10-07 06:21", area: "chat", stage: "idle", ctx: ["Seller: My credits", "Bot: Your account isn't charged credits right now, so list as much as you like."], msg: "really", ok: [reply] },
   { id: "chat-yo", src: "log 10-07 12:16", area: "chat", stage: "review", drafts: [PERFUME], msg: "YO YO", ok: [reply, help] },
@@ -128,12 +131,12 @@ export const ASSISTANT_CASES: EvalCase[] = [
   { id: "chat-good-night", src: "log 10-07 12:17", area: "chat", stage: "review", drafts: [PERFUME], msg: "good night", ok: [reply] },
   { id: "chat-hey-sup", src: "log 10-07 16:13", area: "chat", stage: "idle", msg: "Hey sup", ok: [reply, help] },
   { id: "chat-thanks", src: "log 10-07 20:26", area: "chat", stage: "idle", msg: "thanks", ok: [reply] },
-  { id: "chat-off-topic", src: "log 10-07 20:22", area: "chat", stage: "idle", msg: "let's do something outside jumia \n how old was micheale jackson", ok: [reply] },
-  { id: "chat-logo", src: "log 10-07 20:24", area: "chat", stage: "idle", msg: "send me pandaworldai logo", ok: [reply] },
-  { id: "chat-message-count", src: "log 10-07 20:24", area: "chat", stage: "idle", msg: "how many messages have i sent so far", ok: [reply] },
-  { id: "chat-message-count-review", src: "log 10-08 03:18", area: "chat", stage: "review", drafts: [BODYSUIT], msg: "my message count so far", ok: [reply], note: "Was read as an edit to the draft." },
+  { id: "chat-off-topic", src: "log 10-07 20:22", area: "chat", stage: "idle", msg: "let's do something outside jumia \n how old was micheale jackson", ok: [reply, outside] },
+  { id: "chat-logo", src: "log 10-07 20:24", area: "chat", stage: "idle", msg: "send me pandaworldai logo", ok: [reply, notYet] },
+  { id: "chat-message-count", src: "log 10-07 20:24", area: "chat", stage: "idle", msg: "how many messages have i sent so far", ok: [reply, notYet] },
+  { id: "chat-message-count-review", src: "log 10-08 03:18", area: "chat", stage: "review", drafts: [BODYSUIT], msg: "my message count so far", ok: [reply, notYet], note: "Was read as an edit to the draft." },
   { id: "chat-french", src: "log 10-07 03:26", area: "chat", stage: "idle", msg: "reply my shop name in french", ok: [reply] },
-  { id: "chat-weather", src: "variant", area: "chat", stage: "idle", msg: "whats the weather in accra today", ok: [reply] },
+  { id: "chat-weather", src: "variant", area: "chat", stage: "idle", msg: "whats the weather in accra today", ok: [reply, outside] },
   { id: "chat-twi", src: "variant", area: "chat", stage: "idle", msg: "Ɛte sɛn", ok: [reply, help] },
   { id: "chat-how-to", src: "log 10-07 19:01", area: "chat", stage: "idle", ctx: [FRESH], msg: "How to", ok: [reply, help], note: "Was read as listing." },
   { id: "chat-shop-assistant-mode", src: "log 10-08 09:51", area: "chat", stage: "idle", ctx: ["Seller: Change Foldable Drone with HD Camera to 10", "Bot: 📝 10 products: add each one's photos, price and details in the form, then tap *Draft*."], msg: "Let's enter Shop assistant mode", ok: [reply, help], note: "Offered a new batch." },
@@ -154,7 +157,7 @@ export const ASSISTANT_CASES: EvalCase[] = [
   { id: "help-description-can-you", src: "log 10-07 02:49", area: "account_help", stage: "idle", msg: "change a products description can you do that?", ok: [reply, { type: "content_change" }] },
   { id: "help-link-vendor-center", src: "log 10-07 02:58", area: "account_help", stage: "idle", msg: "link to vendor center", ok: [linkReply("vendor_center")] },
   { id: "help-link-dashboard", src: "log 10-07 02:59", area: "account_help", stage: "idle", msg: "link to admin dashboard", ok: [reply] },
-  { id: "help-link-youtube", src: "log 10-07 06:23", area: "account_help", stage: "idle", msg: "send me the link to youtube videos on how to get started", ok: [reply] },
+  { id: "help-link-youtube", src: "log 10-07 06:23", area: "account_help", stage: "idle", msg: "send me the link to youtube videos on how to get started", ok: [reply, notYet] },
   { id: "help-capabilities", src: "log 10-07 08:54", area: "account_help", stage: "review", drafts: [PERFUME], msg: "What are your full capabilities", ok: [reply, help] },
   { id: "help-capabilities-plain", src: "log 10-07 11:58", area: "account_help", stage: "review", drafts: [PERFUME], msg: "what are your capabilities? in plain language", ok: [reply, help] },
   { id: "help-what-can-you-do", src: "log 10-07 20:43", area: "account_help", stage: "idle", ctx: [HOW_MANY], msg: "What can you do?", ok: [reply, help] },
@@ -382,4 +385,14 @@ export const ASSISTANT_CASES: EvalCase[] = [
   { id: "add-size", src: "variant", area: "live_changes", stage: "idle", catalog: ["Satin Gown - Elegant Evening Dress (M)"], msg: "add size XL to the satin gown, 4 pieces at 150", ok: [{ type: "add_size", product: "~gown", "request.size": "~XL", "request.stock": 4, "request.price": 150 }] },
   { id: "add-colour", src: "variant", area: "live_changes", stage: "idle", catalog: [NECK_FAN], msg: "I now have the neck fan in pink too, 10 of them", ok: [{ type: "add_size", product: "~neck fan", "request.size": "~pink", "request.stock": 10 }] },
   { id: "add-photos", src: "variant", area: "live_changes", stage: "idle", catalog: [NECK_FAN], msg: "I want to add more pictures to the neck fan", ok: [{ type: "add_photos", product: "~neck fan" }] },
+
+  // ── Honest "can't" (owner, 2026-10-11): "can you…?" from the capability list, what isn't built noted, never "I can't" in its own words ──
+  { id: "can-you-prices", src: "variant", area: "account_help", stage: "idle", msg: "can you change the prices of my products?", ok: [{ type: "reply", text: "~Yes" }], note: "capability: the list's own answer." },
+  { id: "can-you-alerts", src: "variant", area: "account_help", stage: "idle", msg: "can you tell me when I get a new order?", ok: [{ type: "reply", text: "~Yes" }] },
+  { id: "can-you-stock-named", src: "variant", area: "live_changes", stage: "idle", catalog: [NECK_FAN], msg: "can you set the neck fan stock to 20?", ok: [stock("neck fan", 20)], note: "Says what and which: done, not answered." },
+  { id: "not-yet-instagram", src: "variant", area: "chat", stage: "idle", msg: "can you post my products on instagram and facebook?", ok: [notYet] },
+  { id: "not-yet-invoice", src: "variant", area: "orders", stage: "idle", msg: "make an invoice for my customer for order 394666919", ok: [notYet] },
+  { id: "not-yet-competitors", src: "variant", area: "shop_info", stage: "idle", catalog: [NECK_FAN], msg: "what price are other sellers selling the neck fan at on jumia?", ok: [notYet] },
+  { id: "outside-football", src: "variant", area: "chat", stage: "idle", msg: "who won the champions league last year", ok: [outside, reply] },
+  { id: "chat-questions-remembered", src: "log 10-11 web", area: "chat", stage: "idle", ctx: ["Seller: what is my shop name", "Bot: Your Jumia shop is GEM MALL.", "Seller: how many orders today", "Bot: 📦 No orders today yet."], msg: "send me all the questions you remember i ever ask you", ok: [{ type: "reply", text: "~shop name" }], note: "Was \"I don't keep a record\": it sees the conversation." },
 ];
