@@ -2944,6 +2944,15 @@ Jumia allows nothing, the answer says what can be done instead.
   - other sellers' prices.
   In test runs, `product_details` answers with the product's name and the
   same stand-in details for every product.
+- **A "can't" with the wrong key**: the first test runs after this (241/256
+  twice) had agent mode answer "download a label" with `cannot("labels")`
+  and "link to vendor center" with `cannot("vendor_center")`. The first is
+  on What the chat does, the second is a link key. `misnamedCannot` (agent.ts) sends
+  such a call back once, saying which list the key is on, and the agent
+  picks again (the same way a reply that says it can't is sent back). A key
+  on neither list is still not_yet. The list's header went back to "(for
+  capability)", and the product_details rule no longer says "edit" for a
+  live product's description (`edit` is the drafts' tool).
 - **Not yet confirmed in practice**: an update to a rejected product being
   taken and re-checked by Jumia. The spec allows it, and two such fixes for
   the owner's shop are waiting for the owner's tap.
