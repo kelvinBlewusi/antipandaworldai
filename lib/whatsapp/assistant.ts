@@ -79,6 +79,7 @@ import { answerResearch, parseNeeds, type ResearchNeed } from "@/lib/whatsapp/sh
 import { cannotAnswer, capability, capabilityAnswer, insteadLine } from "@/lib/jumia/capabilities";
 import { INTERACTIVE_BODY_MAX, splitForText } from "@/lib/whatsapp/text-limits";
 import { assistantGate, assistantSwitchedOn, sellerLimitText } from "@/lib/whatsapp/assistant-limits";
+import { sellerLanguages } from "@/lib/preferences/language";
 import { blankCodes, noteSellerMessage, sellerMemory } from "@/lib/whatsapp/seller-memory";
 import { isWebAddress } from "@/lib/whatsapp/channel";
 import { chatClearedAt } from "@/lib/whatsapp/chat-clear";
@@ -359,6 +360,8 @@ export function assistantLinks(opts: { batchId?: string | null; countrySlug?: st
   };
 }
 
+const LANGUAGE_IN_ENGLISH: Record<string, string> = { en: "English", fr: "French", ar: "Arabic" };
+
 /** What's true for this seller: their pack, what it gives them, their credits and country. Best-effort. */
 export async function sellerFacts(userId: string): Promise<{ lines: string[]; countrySlug: string | null }> {
   const lines: string[] = [];
@@ -366,6 +369,12 @@ export async function sellerFacts(userId: string): Promise<{ lines: string[]; co
   try {
     const country = jumiaCountryByCode(await sellerCountry(userId).catch(() => null));
     if (country) { lines.push(`- Country: ${country.name}`); countrySlug = country.slug; }
+    // Their languages (lib/preferences/language.ts): one they chose is the one to answer in.
+    const langs = await sellerLanguages(userId).catch(() => null);
+    if (langs) {
+      if (langs.chosen.ui) lines.push(`- Language: they chose ${LANGUAGE_IN_ENGLISH[langs.ui]}; always answer in ${LANGUAGE_IN_ENGLISH[langs.ui]}.`);
+      lines.push(`- Their listings are written in ${LANGUAGE_IN_ENGLISH[langs.listing]} (Settings → Language changes it, and the language PandaWorld talks to them in).`);
+    }
     const { data: conn } = await createServerClient().from("jumia_connections").select("store_name, seller_name").eq("user_id", userId).maybeSingle();
     const shopName = (conn as { store_name?: string | null; seller_name?: string | null } | null)?.store_name
       ?? (conn as { seller_name?: string | null } | null)?.seller_name;

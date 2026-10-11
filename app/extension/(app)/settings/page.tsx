@@ -6,6 +6,7 @@ import { RegenerateKeyButton } from "@/components/extension/regenerate-key-butto
 import { WhatsAppCard } from "@/components/whatsapp/whatsapp-card";
 import { JumiaConnectionCard } from "@/components/jumia/jumia-connection-card";
 import { InstallApp } from "@/components/install/install-app";
+import { LanguageCard } from "@/components/preferences/language-card";
 
 export const metadata: import("next").Metadata = {
   title: "Settings",
@@ -54,6 +55,10 @@ export default async function ExtensionSettingsPage() {
 
       <div className="mt-6">
         <WhatsAppCard />
+      </div>
+
+      <div className="mt-6">
+        <LanguageCard />
       </div>
 
       <div className="mt-6 rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">

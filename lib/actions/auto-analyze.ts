@@ -78,6 +78,8 @@ import { withAiUsageContext } from "@/lib/ai/usage";
 import { AI_DYNAMIC_ATTR_DEFAULTS, resolvePatternDefault } from "@/lib/ai/policy";
 import { webSearch, formatSearchSnippetsForPrompt, isWebSearchEnabled } from "@/lib/ai/web-search";
 import { loadLearnedRestrictedWords } from "@/lib/jumia/learned-restricted-words";
+import { sellerLanguages } from "@/lib/preferences/language";
+import { translateListingCopy } from "@/lib/ai/listing-language";
 
 export type AutoAnalyzeResult =
   | {
@@ -1754,6 +1756,21 @@ async function runAutoAnalyzeUnmetered(
       updates[col] = snapped;
       console.info(`[auto-analyze] listing=${listingId} snapped ${col}: "${raw}" -> "${snapped}"`);
     }
+  }
+
+  // The seller's listing language (lib/preferences/language.ts; French in
+  // Côte d'Ivoire, Senegal and Morocco unless they chose otherwise): drafted
+  // in English for the category search and the content rules, then the copy
+  // written this run is translated. A field that fails the checks, or a
+  // failed call, keeps its English.
+  const listingLang = (await sellerLanguages(userId).catch(() => null))?.listing ?? "en";
+  if (listingLang !== "en") {
+    const str = (v: unknown) => (typeof v === "string" && v.trim() ? v : null);
+    const translated = await translateListingCopy(
+      { title: str(updates.title), description: str(updates.description), highlights: str(updates.highlights) },
+      listingLang,
+    );
+    if (translated) Object.assign(updates, translated);
   }
 
   await db.from("listings").update({
