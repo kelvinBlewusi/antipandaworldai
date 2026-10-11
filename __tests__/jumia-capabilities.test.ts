@@ -69,11 +69,12 @@ describe("the list of what's possible", () => {
     expect(parseAction('{"type":"cannot","what":"buyer_contact"}', "give me the buyer's phone number", [], links))
       .toMatchObject({ type: "reply", text: expect.stringContaining("doesn't share buyers' phone numbers"), link: null });
     // A key not on the list: something PandaWorld doesn't do (noted). One the
-    // chat does is never "cannot": the change the message asks for is made.
+    // chat does is never "cannot": nothing is said, and the message is read
+    // again (agent mode's "found nothing to do", then the front door).
     expect(parseAction('{"type":"cannot","what":"competitor_prices"}', "what do other sellers charge for the kettle?", [], links))
       .toEqual({ type: "not_yet", what: "competitor prices", outside: false });
     expect(parseAction('{"type":"cannot","what":"live_stock"}', "set the kettle stock to 5", [], links))
-      .toEqual({ type: "live_change", product: "kettle", change: { kind: "stock", stock: 5 } });
+      .toEqual({ type: "unclear" });
   });
 });
 

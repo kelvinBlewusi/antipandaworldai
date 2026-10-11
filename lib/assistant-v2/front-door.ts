@@ -4,10 +4,12 @@
  * prototype the test set (lib/evals/assistant-eval.ts) ran beside the live
  * path (owner, 2026-10-08: "can we test what we had wanted to build against
  * what we have now without affecting anything?"): 97.5% against 94.0%, at a
- * third of the AI cost. Now the chat reads messages through it for the
- * accounts app_settings `assistant_front_door` names (frontDoorFor in
- * lib/whatsapp/assistant.ts), the owner's first (owner: "go ahead with
- * building step 2").
+ * third of the AI cost. It read every seller's messages from 9 Oct; since
+ * 11 Oct agent mode (lib/assistant-v2/agent.ts) reads them first and the
+ * front door is its automatic backup: it reads what the agent fails on,
+ * runs out of time on, or finds nothing to do with. The old one-call reader
+ * and its word rules are gone (owner: "keep the front door as its
+ * automatic backup").
  *
  * How it reads a message, in a fixed order:
  *   1. Context as one record: where they are, the bot's open question and
@@ -19,7 +21,7 @@
  *      the chat's own JSON format, or "clarify" with options when a needed
  *      detail is missing or could mean two things. It never guesses a
  *      value.
- *   4. Safety: the chat's own checks (parseActionUnguarded: values in the
+ *   4. Safety: the chat's own checks (parseAction: values in the
  *      message, products named, nothing widened). None of the chat's word
  *      rules.
  */
@@ -29,7 +31,7 @@ import { withAiUsageContext } from "@/lib/ai/usage";
 import { siteGuide } from "@/lib/whatsapp/site-guide";
 import { canList, cannotList } from "@/lib/jumia/capabilities";
 import {
-  capabilities, parseActionUnguarded, type AssistantAction, type AssistantLink, type ProductFacts, type Stage,
+  capabilities, parseAction, type AssistantAction, type AssistantLink, type ProductFacts, type Stage,
 } from "@/lib/whatsapp/assistant";
 
 export type Area = "listing" | "drafts" | "live_products" | "shop_info" | "orders" | "money" | "account_help" | "chat";
@@ -272,9 +274,9 @@ const ACTIONS: Record<Area, string[]> = {
 };
 
 /**
- * Worked examples, each in the one area it belongs to: the chat's own
- * examples (lib/whatsapp/assistant.ts buildPrompt), so the two are compared
- * on how they're built, not on what they were shown.
+ * Worked examples, each in the one area it belongs to (first taken from the
+ * old one-call reader's prompt, so the two were compared on how they're
+ * built, not on what they were shown). Agent mode is shown them too.
  */
 export const EXAMPLES: Record<Area, string[]> = {
   listing: [
@@ -500,7 +502,7 @@ export async function frontDoor(
   // they count as said, with the answer.
   const asked = input.answered ? [...input.conversation].reverse().find((l) => l.startsWith("Bot:"))?.slice(4).trim() : undefined;
   const said = asked ? `${asked}\n${input.message}` : input.message;
-  const read = (t: string) => parseActionUnguarded(t, said, input.drafts, input.links, input.currency, {
+  const read = (t: string) => parseAction(t, said, input.drafts, input.links, input.currency, {
     context, stage: input.stage, listed: !!input.listed,
   });
   let action: FrontDoorAction = read(text);

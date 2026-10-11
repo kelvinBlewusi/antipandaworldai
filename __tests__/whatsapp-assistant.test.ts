@@ -34,10 +34,17 @@ let aiCalls = 0;
 const toolReplies: { name: string; args: Record<string, unknown> }[][] = [];
 // The tools each agent turn could call (null: any).
 const toolAllowed: (string[] | null)[] = [];
+// The front door's sorting calls, answered "chat" unless a test scripts the area.
+const routerPrompts: string[] = [];
 jest.mock("@/lib/ai/gemini-client", () => ({
   callGeminiBackend: async (model: string, parts: { text?: string }[]) => {
+    const prompt = parts.map((p) => p.text ?? "").join("\n");
+    if (prompt.startsWith("You sort one message") && !(aiReplies[0] ?? "").includes('"area"')) {
+      routerPrompts.push(prompt);
+      return { text: '{"area":"chat","also":null}', model, backend: "vertex" };
+    }
     aiCalls++;
-    aiPrompts.push(parts.map((p) => p.text ?? "").join("\n"));
+    aiPrompts.push(prompt);
     const text = aiReplies.shift();
     if (text == null) throw new Error("no AI reply scripted");
     return { text, model, backend: "vertex" };
@@ -79,7 +86,7 @@ jest.mock("@/lib/jumia/categories", () => ({
 
 import {
   NOT_YET_TEXT, OUTSIDE_TEXT, agentFor, agentModel, answerLiveValue, claimsInability, assistantEnabled, assistantFor, assistantLinks, cleanReply, countBacked, fitsDraft, isStateQuestion, looksLikeQuestion, messageNumbers,
-  changeToAsked, draftNumberIn, draftTextLines, frontDoorFor, isProductName, sameName, namesAProduct, newestWithin, recentConversation, saidIsValues, saleWindow, splitProducts, parseAction, plainQuickEdit, runAssistant, verifyChanges, type ProductFacts,
+   draftNumberIn, draftTextLines,  sameName, namesAProduct, newestWithin, recentConversation, saidIsValues, saleWindow, splitProducts, parseAction, plainQuickEdit, runAssistant, verifyChanges, type ProductFacts,
 } from "@/lib/whatsapp/assistant";
 import { assistantGate } from "@/lib/whatsapp/assistant-limits";
 import { parseVariations } from "@/lib/whatsapp/variation-question";
@@ -99,6 +106,7 @@ beforeEach(() => {
   orderCalls.length = 0;
   aiReplies.length = 0;
   aiPrompts.length = 0;
+  routerPrompts.length = 0;
   toolReplies.length = 0;
   toolAllowed.length = 0;
   shopCalls.length = 0;
@@ -374,19 +382,15 @@ describe("between batches", () => {
 describe("the front door (step 2, owner 2026-10-08)", () => {
   const session = () => ({ phoneNumber: "233", userId: "seller", state: "awaiting_count", batchId: null, lastSubmittedBatchId: null }) as WhatsAppSession;
 
-  it("is on for the accounts the switch names", async () => {
-    expect(await frontDoorFor("admin")).toBe(false);
-    db.tables.app_settings = [{ key: "assistant_front_door", value: "admins" }];
-    expect(await frontDoorFor("admin")).toBe(true);
-    expect(await frontDoorFor("seller")).toBe(false);
-    db.tables.app_settings = [{ key: "assistant_front_door", value: ["seller"] }];
-    expect(await frontDoorFor("seller")).toBe(true);
-    db.tables.app_settings = [{ key: "assistant_front_door", value: "all" }];
-    expect(await frontDoorFor("anyone")).toBe(true);
+  it("reads every message agent mode doesn't, with no switch: sorts it, then reads it (11 Oct)", async () => {
+    aiReplies.push('{"area":"orders"}', '{"type":"orders"}');
+    expect(await runAssistant("seller", "233", session(), "show me my orders", "idle")).toBe("handled");
+    expect(aiPrompts[0]).toContain('Reply with JSON only: {"area"');
+    expect(aiPrompts[1]).toContain("This message is about: orders.");
+    expect(orderCalls).toEqual(["orders"]);
   });
 
   it("knows the shop's products the message names, and carries out a live change", async () => {
-    db.tables.app_settings = [{ key: "assistant_front_door", value: "all" }];
     db.tables.jumia_products = [{ user_id: "seller", name: "Foldable Drone with HD Camera" }, { user_id: "seller", name: "Pedestal Fan" }];
     aiReplies.push('{"area":"live_products"}', '{"type":"live_change","product":"Foldable Drone","stock":10}');
     expect(await runAssistant("seller", "233", session(), "Change Foldable Drone with HD Camera to 10", "idle")).toBe("handled");
@@ -396,7 +400,6 @@ describe("the front door (step 2, owner 2026-10-08)", () => {
   });
 
   it("long answers go as a list to choose from", async () => {
-    db.tables.app_settings = [{ key: "assistant_front_door", value: "all" }];
     aiReplies.push('{"area":"live_products"}', '{"type":"clarify","question":"Which products should stay on?","options":["I\'ll name the ones to keep on","None, turn everything off"]}');
     expect(await runAssistant("seller", "233", session(), "off all other products apart from the ones i asked you turn on", "idle")).toBe("handled");
     expect(sent[0]).toMatchObject({ kind: "list", body: "Which products should stay on?", rows: ["answer:@live_products:I'll name the ones to keep on", "answer:@live_products:None, turn everything off"] });
@@ -455,7 +458,7 @@ describe("agent mode (the pilot, owner 2026-10-10)", () => {
   });
 
   it("the front door reads what it found nothing to do with", async () => {
-    db.tables.app_settings = [{ key: "assistant_agent", value: "all" }, { key: "assistant_front_door", value: "all" }];
+    db.tables.app_settings = [{ key: "assistant_agent", value: "all" }];
     toolReplies.push([{ name: "capability", args: { what: "teleport" } }]);
     aiReplies.push('{"area":"orders"}', '{"type":"orders"}');
     expect(await runAssistant("seller", "233", session(), "show me my orders", "idle")).toBe("handled");
@@ -464,7 +467,7 @@ describe("agent mode (the pilot, owner 2026-10-10)", () => {
   });
 
   it("falls back to the front door when it fails", async () => {
-    db.tables.app_settings = [{ key: "assistant_agent", value: "all" }, { key: "assistant_front_door", value: "all" }];
+    db.tables.app_settings = [{ key: "assistant_agent", value: "all" }];
     aiReplies.push('{"area":"orders"}', '{"type":"orders"}');
     expect(await runAssistant("seller", "233", session(), "show me my orders", "idle")).toBe("handled");
     expect(orderCalls.length + shopCalls.length + sent.length).toBeGreaterThan(0);
@@ -553,7 +556,6 @@ describe("its own replies (owner, 2026-10-06)", () => {
     for (const key of ["assistant", "calculator_app", "connect_jumia", "guide_link_whatsapp", "community", "settings", "dashboard"]) {
       expect(prompt).toContain(`- ${key}: `);
     }
-    expect(prompt).toContain("How to do something on PandaWorld, or where to find it");
     expect(sent[0]).toMatchObject({ kind: "cta", body: "1. Open your Extension Dashboard.\n2. Tap *Regenerate key*." });
   });
 
@@ -582,7 +584,7 @@ describe("its own replies (owner, 2026-10-06)", () => {
     expect(prompt).toContain("- Credits: 9 available, enough for about 4 WhatsApp listings");
     expect(prompt).toContain("- home: PandaWorld's home page");
     expect(prompt).toContain("- country: selling on Jumia in their country");
-    expect(prompt).toContain("Reply in the language the seller wrote in.");
+    expect(prompt).toContain("in the language they wrote in.");
     expect(sent).toEqual([{ kind: "text", body: "Hi! I can list your products on Jumia, edit your drafts and tell you your credits. What would you like to do for your Jumia shop?" }]);
   });
 
@@ -624,12 +626,11 @@ describe("its own replies (owner, 2026-10-06)", () => {
     expect(cleanReply("## Your shop\nI can show **orders** and **sales**.", links)).toBe("Your shop\nI can show *orders* and *sales*.");
   });
 
-  it("asks for choices as bullets, never numbered, and sends vague insight to the free overview", async () => {
+  it("asks for choices as bullets, never numbered", async () => {
     aiReplies.push('{"type":"reply","text":"Hi!","link":null}');
     await runAssistant("seller", "233", session(), "what can you do?", "idle");
     const prompt = aiPrompts.at(-1)!;
     expect(prompt).toContain("never numbered");
-    expect(prompt).toContain("Insight, stats, analytics or how their shop is performing");
     expect(prompt).not.toContain("a short numbered list");
   });
 
@@ -663,11 +664,12 @@ describe("the live shop, through the assistant (owner, 2026-10-07)", () => {
   });
 
   it("is told what the live shop can do, and whether the seller's pack has it", async () => {
-    aiReplies.push('{"type":"reply","text":"Hi!","link":null}');
+    aiReplies.push('{"area":"live_products"}', '{"type":"reply","text":"Hi!","link":null}');
     await runAssistant("seller", "233", session(), "hi", "idle");
-    expect(aiPrompts[0]).toContain("- Their live Jumia products, found by name");
-    expect(aiPrompts[0]).toContain("- The chat's shop features (products, orders, reports, payouts, fees): on");
-    expect(aiPrompts[0]).toContain('{"type":"live_change"');
+    const prompt = aiPrompts.at(-1)!;
+    expect(prompt).toContain("- Their live Jumia products, found by name");
+    expect(prompt).toContain("- The chat's shop features (products, orders, reports, payouts, fees): on");
+    expect(prompt).toContain('{"type":"live_change"');
   });
 
   it("everyone", async () => {
@@ -744,10 +746,10 @@ describe("what the owner's live test showed (2026-10-07)", () => {
     aiReplies.push('{"type":"list","count":5}');
     const session = { phoneNumber: "233", userId: "seller", state: "awaiting_count", batchId: null, lastSubmittedBatchId: "b0" } as WhatsAppSession;
     expect(await runAssistant("seller", "233", session, "Let's do five then", "sent")).toEqual({ list: 5 });
-    expect(aiPrompts[0]).toContain("Recent conversation (oldest first; \"Bot\" is you):\nBot: the most is 20 at a time");
-    expect(aiPrompts[0]).toContain("Never reply that you can or will check or do something: do it with the action.");
-    expect(aiPrompts[0]).toContain('"has jumia paid me?" or "shop statement" → {"type":"payouts"}');
-    expect(db.tables.whatsapp_assistant_log[0]).toMatchObject({ raw: '{"type":"list","count":5}' });
+    expect(aiPrompts[0]).toContain("Recent conversation (oldest first):\nBot: the most is 20 at a time");
+    expect(aiPrompts[0]).toContain("A reply never says you changed, will change or are changing anything");
+    expect(aiPrompts[0]).toContain('"thanks" → {"type":"reply"');
+    expect(db.tables.whatsapp_assistant_log[0]).toMatchObject({ raw: expect.stringContaining('{"type":"list","count":5}') });
   });
 
   it("the model can be switched in app_settings, to known ones only", async () => {
@@ -858,14 +860,14 @@ describe("what the owner's second test showed (2026-10-07, round 3)", () => {
     expect(parseAction('{"type":"calculator","product":"creatine"}', "how much will I get for the creatine", [])).toEqual({ type: "fees", product: "creatine", price: null });
   });
 
-  it("the prompt says: no promises, questions are product_info, the new examples", async () => {
-    aiReplies.push('{"type":"reply","text":"Hi!","link":null}');
+  it("the prompt says: no promises, questions are product_info", async () => {
+    aiReplies.push('{"area":"shop_info","also":"money"}', '{"type":"reply","text":"Hi!","link":null}');
     await runAssistant("seller", "233", idle(), "hi there", "idle");
-    expect(aiPrompts[0]).toContain("Never promise anything for later");
-    expect(aiPrompts[0]).toContain('"did I have orders today?" → {"type":"sales","period":"today","status":null}');
-    expect(aiPrompts[0]).toContain('{"type":"product_info"');
-    expect(aiPrompts[0]).toContain('{"type":"fees"');
-    expect(aiPrompts[0]).toContain("- The chat's shop features (products, orders, reports, payouts, fees): on");
+    const prompt = aiPrompts.at(-1)!;
+    expect(prompt).toContain("A reply never says you changed, will change or are changing anything");
+    expect(prompt).toContain('{"type":"product_info"');
+    expect(prompt).toContain('{"type":"fees"');
+    expect(prompt).toContain("- The chat's shop features (products, orders, reports, payouts, fees): on");
   });
 
   it("a bare number answers \"What should its stock be?\"", async () => {
@@ -938,9 +940,12 @@ describe("more of the Jumia API (owner, 2026-10-07: \"do all\")", () => {
   const NOW = new Date("2026-10-07T10:00:00Z"); // a Wednesday
   const parse = (json: string, msg: string) => parseAction(json, msg, [], {}, "GHS", { now: NOW });
 
-  it("on/off counts go to the overview, whatever the AI picked", () => {
-    expect(parse('{"type":"product_info","product":"Vintage Radio"}', "How many of my products are on")).toEqual({ type: "shop", filter: "all" });
-    expect(parse('{"type":"reply","text":"I can\'t tell","link":null}', "How many of my products live on JUMIA is on and off")).toEqual({ type: "shop", filter: "all" });
+  // The word rules that used to correct the AI's choice went with the old
+  // one-call reader (11 Oct): a misreading is a test case, never a rule.
+  it("the AI's choice stands, checked for safety only", () => {
+    expect(parse('{"type":"shop","filter":"all"}', "How many of my products are on")).toEqual({ type: "shop", filter: "all" });
+    // A product the message doesn't name is asked about, never looked up.
+    expect(parse('{"type":"product_info","product":"Vintage Radio"}', "How many of my products are on")).toMatchObject({ type: "reply", text: expect.stringContaining("Which product?") });
     expect(parse('{"type":"listings","period":"today"}', "how many listings have I done today")).toEqual({ type: "listings", period: "today" });
   });
 
@@ -1035,12 +1040,12 @@ describe("the chat's billed commands, understood (owner, 2026-10-07)", () => {
   });
 
   it("the prompt lists them with their prices, and the commands", async () => {
-    aiReplies.push('{"type":"reply","text":"Hi!","link":null}');
+    aiReplies.push('{"area":"shop_info"}', '{"type":"reply","text":"Hi!","link":null}');
     await runAssistant("seller", "233", { phoneNumber: "233", userId: "seller", state: "awaiting_count", batchId: null, lastSubmittedBatchId: null } as never, "hi", "idle");
-    expect(aiPrompts[0]).toContain('{"type":"polish","product":<the product number from the message> or null}');
-    expect(aiPrompts[0]).toContain("2 credits each");
-    expect(aiPrompts[0]).toContain('{"type":"health_report"}');
-    expect(aiPrompts[0]).toContain("Only polish, the report and changes to live products cost credits");
+    const prompt = aiPrompts.at(-1)!;
+    expect(prompt).toContain("2 credits each");
+    expect(prompt).toContain('{"type":"health_report"}');
+    expect(prompt).toContain("Only polish, the report and changes to live products cost credits");
   });
 });
 
@@ -1096,16 +1101,11 @@ describe("research: several reads of the shop, answered together", () => {
     type: "research", needs: [{ source: "products", sort: "newest", filter: "all", words: null, limit, since: null }],
   });
 
-  it("\"the last 10 products uploaded\" is their newest products, never a batch of 10", () => {
-    // The owner's web chat: read as listing 10 products, then answered "I can't".
+  it("\"the last 10 products uploaded\": the AI's research, as it read it", () => {
     const msg = "the full list of the last 10products uploaded on my shop";
-    expect(parseAction('{"type":"list","count":10}', msg, [], links)).toEqual(newest(10));
-    expect(parseAction('{"type":"restart"}', msg, [], links)).toEqual(newest(10));
-    expect(parseAction('{"type":"reply","text":"I can\'t list your products here.","link":null}', msg, [], links)).toEqual(newest(10));
-    // And as the hello menu.
-    expect(parseAction('{"type":"reply","text":"Hi there! Here is what I can do","link":null}', "show me my latest products", [], links)).toEqual(newest(10));
+    expect(parseAction(JSON.stringify(newest(10)), msg, [], links)).toEqual(newest(10));
     expect(parseAction('{"type":"reply","text":"x","link":null}', "thanks", [], links)).toEqual({ type: "reply", text: "x", link: null });
-    expect(parseAction("nonsense", "what are the 5 items I added recently", [], links)).toEqual(newest(5));
+    expect(parseAction("nonsense", "what are the 5 items I added recently", [], links)).toEqual({ type: "unclear" });
   });
 
   it("listing new products now stays listing", () => {
@@ -1136,25 +1136,18 @@ describe("research: several reads of the shop, answered together", () => {
     expect(parseAction('{"type":"research","needs":[{"source":"secrets"}]}', "anything", [], links)).toEqual({ type: "unclear" });
   });
 
-  it("a product's name on its own is that product, from the bot's list or not", async () => {
-    const names = ["Malta Guinness Soft Drink - 330ml Bottles, Pack of 6 (6 Bottles)", "Water Wave Lace Front Wig - 13x4, 20 Inch"];
-    expect(isProductName("Malta Guinness Soft Drink - 330ml Bottles, Pack of 6", names)).toBe(true);
-    expect(isProductName("Water Wave Lace Front Wig", names)).toBe(true);
-    expect(isProductName("Malta Guinness Soft Drink - 330ml Bottles, Pack of 6…", names)).toBe(true);
-    expect(isProductName("is the Water Wave Lace Front Wig live?", names)).toBe(false);
-    expect(isProductName("Lace Wig", names)).toBe(false);
-    expect(isProductName("Water Wave Lace Front Wig Bundle", names)).toBe(false);
-    expect(isProductName("hi there friend", names)).toBe(false);
-
-    db.tables.jumia_products = [{ user_id: "seller", product_sid: "x", seller_sku: "MALTA-6", name: names[0] }];
-    aiReplies.push('{"type":"reply","text":"I\'m sorry, I can only look up products related to your shop.","link":null}');
+  it("a product's name on its own: the reading is told it's one of their products", async () => {
+    const name = "Malta Guinness Soft Drink - 330ml Bottles, Pack of 6 (6 Bottles)";
+    db.tables.jumia_products = [{ user_id: "seller", product_sid: "x", seller_sku: "MALTA-6", name }];
+    aiReplies.push('{"area":"shop_info"}', '{"type":"product_info","product":"Malta Guinness Soft Drink - 330ml Bottles, Pack of 6"}');
     shopCalls.length = 0;
     await runAssistant("seller", "233", { phoneNumber: "233", userId: "seller", state: "awaiting_count", batchId: null, lastSubmittedBatchId: null } as never, "Malta Guinness Soft Drink - 330ml Bottles, Pack of 6", "idle");
+    expect(aiPrompts.at(-1)).toContain(`Products in their Jumia shop the message names: "${name}"`);
     expect(shopCalls).toEqual([["answerProductInfo", "Malta Guinness Soft Drink - 330ml Bottles, Pack of 6"]]);
   });
 
   it("is in the prompt, with the owner's question as its example", async () => {
-    aiReplies.push('{"type":"reply","text":"Hi!","link":null}');
+    aiReplies.push('{"area":"shop_info"}', '{"type":"reply","text":"Hi!","link":null}');
     await runAssistant("seller", "233", { phoneNumber: "233", userId: "seller", state: "awaiting_count", batchId: null, lastSubmittedBatchId: null } as never, "hello", "idle");
     const prompt = aiPrompts[aiPrompts.length - 1];
     expect(prompt).toContain('{"type":"research","needs":[');
@@ -1168,40 +1161,19 @@ describe("a change to a product is never a count", () => {
   const links = assistantLinks();
   const stock = (product: string, n: number) => ({ type: "live_change", product, change: { kind: "stock", stock: n } });
 
-  it("reads which product, which field and the value", () => {
-    expect(changeToAsked("restock the foladable drone to. 10")).toEqual({ target: "foladable drone", field: "stock", value: 10, many: false, restock: true });
-    expect(changeToAsked("Change drone to 10 psc")).toMatchObject({ target: "drone", field: "stock", value: 10 });
-    expect(changeToAsked("Change Foldable Drone with HD Camera to 10")).toMatchObject({ target: "Foldable Drone with HD Camera", field: null, value: 10 });
-    expect(changeToAsked("set the price of the kettle to GHS 120")).toMatchObject({ target: "kettle", field: "price", value: 120 });
-    expect(changeToAsked("change the stock of the lat 10 to 20")).toMatchObject({ target: "lat 10", field: "stock", value: 20, many: true });
-    expect(changeToAsked("restock all back to 10")).toMatchObject({ target: "all", field: "stock", value: 10, many: true, restock: true });
-    expect(changeToAsked("change the price to 10")).toBeNull();
-    expect(changeToAsked("set it to 10")).toBeNull();
-    expect(changeToAsked("I want to list 10 products")).toBeNull();
-  });
-
-  it("the owner's messages, whatever the AI made of them", () => {
-    expect(parseAction('{"type":"restart"}', "restock the foladable drone to. 10", [], links)).toEqual(stock("foladable drone", 10));
-    expect(parseAction('{"type":"list","count":3}', "Change drone to 10 psc", [], links)).toEqual(stock("drone", 10));
-    expect(parseAction('{"type":"list","count":3}', "Change Foldable Drone with HD Camera to 10pcs", [], links)).toEqual(stock("Foldable Drone with HD Camera", 10));
-    // "to 10" alone could be its stock or its price: asked, never a form for 10 products.
-    const r = parseAction('{"type":"list","count":10}', "Change Foldable Drone with HD Camera to 10", [], links);
-    expect(r).toMatchObject({ type: "reply" });
-    expect((r as { text: string }).text).toContain("The *stock* or the *price* of the Foldable Drone with HD Camera?");
-    // A draft's own name is still the draft's edit, left to the AI's reading.
-    expect(parseAction('{"type":"unclear"}', "change the cotton t-shirt to 10", [SHIRT], links)).toEqual({ type: "unclear" });
+  it("a change the AI reads is carried out as it read it, values from the message", () => {
+    expect(parseAction('{"type":"live_change","product":"foladable drone","stock":10}', "restock the foladable drone to. 10", [], links)).toEqual(stock("foladable drone", 10));
+    expect(parseAction('{"type":"live_change","product":"drone","stock":10}', "Change drone to 10 psc", [], links)).toEqual(stock("drone", 10));
+    // A value the message doesn't give isn't set.
+    expect(parseAction('{"type":"live_change","product":"drone","stock":12}', "Change drone to 10 psc", [], links)).not.toEqual(stock("drone", 12));
   });
 
   it("\"those\" and \"the last 10\" are the products the bot just listed, never the whole shop", () => {
     const listed = (n: number) => ({ type: "bulk", scope: "listed", words: null, change: { kind: "stock", stock: n } });
-    const garbage = '{"type":"edit","edits":[{"products":[2],"said":null,"changes":{"color":"black,blue,grey"},"ask":false}]}';
-    expect(parseAction(garbage, "restock all back to 10", [SHIRT], links, "GHS", { listed: true })).toEqual(listed(10));
-    expect(parseAction(garbage, "change the stock of the lat 10 to 20", [SHIRT], links, "GHS", { listed: true })).toEqual(listed(20));
-    // The AI's own "listed" for "restock all": still only those.
+    // The AI's own "listed" for "restock all": only those.
     expect(parseAction('{"type":"bulk","scope":"listed","words":null,"stock":10}', "restock all back to 10", [], links, "GHS", { listed: true })).toEqual(listed(10));
-    // Nothing listed lately: restocking all is what's out of stock; "the last 10" asks which.
-    expect(parseAction(garbage, "restock all back to 10", [SHIRT], links)).toEqual({ type: "bulk", scope: "out_of_stock", words: null, change: { kind: "stock", stock: 10 } });
-    expect(parseAction(garbage, "change the stock of the lat 10 to 20", [SHIRT], links)).toMatchObject({ type: "reply", text: expect.stringContaining("Which products?") });
+    expect(parseAction('{"type":"bulk","scope":"listed","words":null,"stock":20}', "change the stock of the lat 10 to 20", [], links, "GHS", { listed: true })).toEqual(listed(20));
+    // Nothing listed lately: it asks which.
     expect(parseAction('{"type":"bulk","scope":"listed","words":null,"stock":10}', "set those to 10 pcs", [], links)).toMatchObject({ type: "reply", text: expect.stringContaining("Which products?") });
   });
 
@@ -1214,11 +1186,10 @@ describe("a change to a product is never a count", () => {
       lastListed: { sids: ["s1", "s2"], what: "The 10 newest products", at },
     } as never, "change the stock of the last 10 to 20", "idle");
     expect(shopCalls).toEqual([["proposeBulkChange", "listed", null, { kind: "stock", stock: 20 }, ["s1", "s2"]]]);
-    expect(aiPrompts[aiPrompts.length - 1]).toContain('You just listed 2 of their Jumia products for them (The 10 newest products).');
+    expect(aiPrompts[aiPrompts.length - 1]).toContain("Products you last listed for them: 2 (The 10 newest products).");
   });
 
-  it("only listing words start or stop a batch", () => {
-    expect(parseAction('{"type":"list","count":3}', "Let's enter Shop assistant mode", [], links)).toEqual({ type: "help" });
+  it("a count the message doesn't give is only a wish to list", () => {
     expect(parseAction('{"type":"list","count":3}', "let's enter listing mode", [], links)).toEqual({ type: "restart" });
     expect(parseAction('{"type":"restart"}', "Stop listing", [], links)).toEqual({ type: "restart" });
   });
@@ -1301,7 +1272,6 @@ describe("honest \"can't\" (owner, 2026-10-11)", () => {
   });
 
   it("the front door reads it again when its reply said it can't", async () => {
-    db.tables.app_settings = [{ key: "assistant_front_door", value: "all" }];
     aiReplies.push('{"area":"chat"}', '{"type":"reply","text":"I can\'t post to Instagram.","link":null}', '{"type":"not_yet","what":"post to Instagram","outside":false}');
     await runAssistant("seller", "233", session(), "post my kettle on instagram", "idle");
     expect(aiPrompts[2]).toContain("It was NOT sent");
