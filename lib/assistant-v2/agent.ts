@@ -287,8 +287,9 @@ export async function agentRead(
 
   const asking = finals.find((c) => c.name === "clarify");
   if (asking) {
-    const options = (Array.isArray(asking.args.options) ? asking.args.options : []).filter((o): o is string => typeof o === "string").map((o) => o.slice(0, 40)).slice(0, 3);
-    return { actions: [], clarify: { type: "clarify", question: String(asking.args.question ?? "").slice(0, 300), options }, raw, calls };
+    const ask = actionJson("clarify", asking.args);
+    const options = (Array.isArray(ask.options) ? ask.options : []).filter((o): o is string => typeof o === "string").map((o) => o.slice(0, 40)).slice(0, 3);
+    return { actions: [], clarify: { type: "clarify", question: String(ask.question ?? "").slice(0, 300), options }, raw, calls };
   }
 
   // The same checks as the front door's reading: values from the message, products named.

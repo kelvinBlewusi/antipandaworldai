@@ -87,6 +87,18 @@ describe("the tools", () => {
     expect(actionJson("polish", {})).toEqual({ type: "polish", product: null });
   });
 
+  // Owner's chat, 11 Oct 06:13: the hello came out as "…for your shop:\n• List new products…".
+  // A tool's arguments are already decoded; the model writes JSON's escapes
+  // out as it sees them in the examples.
+  it("a \\n the model writes in an argument is a new line, in a reply or text sent to Jumia", () => {
+    expect(actionJson("reply", { text: "Hi! 👋 Here's what I can do:\\n• List products\\n• Orders\\n\\nWhat would you like?" }))
+      .toEqual({ type: "reply", text: "Hi! 👋 Here's what I can do:\n• List products\n• Orders\n\nWhat would you like?" });
+    expect(actionJson("content_change", { product: "fan", description: 'Quiet.\\r\\nSays \\"cool\\"\\tand it\\\'s light' }))
+      .toMatchObject({ description: 'Quiet.\nSays "cool"\tand it\'s light' });
+    // Real new lines stay as they are.
+    expect(actionJson("reply", { text: "a\nb" })).toEqual({ type: "reply", text: "a\nb" });
+  });
+
   // Test run e14c46b9 (11 Oct): 3.5 Flash-Lite filled every field of bulk with
   // zero, and the chat read a 0% price change ("By what percentage?").
   it("a change of 0% or to a price of 0 is no change: left out, so the one asked for is read", () => {

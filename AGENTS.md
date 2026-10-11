@@ -2850,6 +2850,14 @@ report and a weekly test run. All four are done (11 Oct).
     live-describe-latest, live-bulk-answer-0): the next cases to work on,
     each by a better instruction checked against the whole set.
   - Front door (3.1 Flash-Lite) got 227/248 (run cfb15ab4; 228 before).
+- **"\n" in agent mode's replies** (owner's chat, 11 Oct 06:13: the hello
+  read "…for your shop:\n• List new products…\n• …"). A tool's arguments
+  come already decoded, and the model wrote JSON's escapes out as it sees
+  them in the examples. `actionJson` (actions.ts `unescape`) now turns a
+  literal \n, \r\n, \t, \" or \' in any argument into the character, so
+  replies, questions back (agent.ts sends clarify through it too) and text
+  sent to Jumia (a copied description) are right. The front door was never
+  affected: its JSON is decoded once.
 - **Test runs** (lib/evals/assistant-eval.ts): pipelines `"agent"` (the
   default for `queueRun`, with `agentModel()`) and `"front_door"`. Old runs
   of the one-call reader (`pipeline` "current" or null) stay in the table as

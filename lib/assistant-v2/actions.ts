@@ -505,8 +505,24 @@ export function actionTools(): GeminiTool[] {
   return ACTION_DEFS.map((d) => ({ name: d.name, description: d.tool.does, parameters: obj(d.tool.fields ?? {}, d.tool.required ?? []) }));
 }
 
+/**
+ * A tool's arguments come already decoded, so a "\\n" left in one is the
+ * model writing JSON's escape out, copied from the examples it's shown
+ * (owner's chat, 11 Oct 06:13: the hello read "…for your shop:\\n• List new
+ * products…"). It's a new line; \\t, \\" and \\' likewise. Pure.
+ */
+function unescape(v: unknown): unknown {
+  if (typeof v === "string") {
+    return v.replace(/\\r\\n|\\n|\\r/g, "\n").replace(/\\t/g, "\t").replace(/\\(["'])/g, "$1");
+  }
+  if (Array.isArray(v)) return v.map(unescape);
+  if (v && typeof v === "object") return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, unescape(x)]));
+  return v;
+}
+
 /** A tool call as the chat's own action JSON (what parseAction reads). Pure. */
 export function actionJson(name: string, args: Args): Args {
   const d = BY_NAME.get(name);
-  return d?.toJson ? d.toJson(args) : { type: name, ...args };
+  const clean = unescape(args) as Args;
+  return d?.toJson ? d.toJson(clean) : { type: name, ...clean };
 }
