@@ -7,10 +7,11 @@
  *      new ones. The change waits in jumia_product_changes ('collecting').
  *   2. Each photo they send is kept (live_photo_uploads, one row each: an
  *      album arrives as several deliveries at once).
- *   3. "Done": the photos become the change, offered for one tap like every
- *      live change, and sent as an update feed with the product's photos
- *      first and these after (lib/jumia/shop.ts withImages). Jumia doesn't
- *      let its API change the main photo, so the main one stays first.
+ *   3. "Done": the photos become the change and go to Jumia at once (owner,
+ *      2026-10-11: no second tap after Done), as an update feed with the
+ *      product's photos first and these after (lib/jumia/shop.ts
+ *      withImages). Jumia doesn't let its API change the main photo, so the
+ *      main one stays first.
  */
 
 import { createServerClient } from "@/lib/supabase/server";
@@ -18,7 +19,7 @@ import { sendButtonsIfConfigured, sendTextIfConfigured } from "@/lib/whatsapp/cl
 import { ingestWhatsAppImage } from "@/lib/whatsapp/media";
 import { updateSession, type AddPhotosAsk } from "@/lib/whatsapp/session";
 import { MAX_PRODUCT_IMAGES, fetchProductSet, findProducts, fromRow, type LiveChange } from "@/lib/jumia/shop";
-import { CHANGES, CHANGES_FEATURE, catalog, offerChange, sendLong, shopContext, shorten } from "@/lib/whatsapp/shop";
+import { CHANGES, CHANGES_FEATURE, catalog, makeChange, sendLong, shopContext, shorten } from "@/lib/whatsapp/shop";
 
 /** Photos not finished in this long are let go. */
 const PHOTOS_TTL_MS = 30 * 60_000;
@@ -89,8 +90,8 @@ async function letGo(phone: string, ask: AddPhotosAsk): Promise<void> {
 }
 
 /**
- * A message while photos are asked for: a photo (kept), "done" (offered for
- * the tap), "stop". False for anything else: the question is let go and the
+ * A message while photos are asked for: a photo (kept), "done" (sent to
+ * Jumia), "stop". False for anything else: the question is let go and the
  * message handled as usual.
  */
 export async function answerAddPhotos(
@@ -140,6 +141,6 @@ export async function answerAddPhotos(
     await sendTextIfConfigured(phone, "I couldn't find that product any more. Ask again to add the photos.");
     return true;
   }
-  await offerChange(userId, phone, ask.changeId, fromRow(prow as Record<string, unknown>), change);
+  await makeChange(userId, phone, ask.changeId, fromRow(prow as Record<string, unknown>), change);
   return true;
 }

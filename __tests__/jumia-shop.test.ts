@@ -197,20 +197,20 @@ describe("the Vendor API calls for a live change", () => {
 });
 
 describe("changing a live product on WhatsApp", () => {
-  it("one tap to confirm, then the feed; nothing reaches Jumia before the tap", async () => {
-    await proposeLiveChange(USER, PHONE, "Hisense fridge", { kind: "stock", stock: 20 });
+  it("a price: one tap to confirm, then the feed; nothing reaches Jumia before the tap", async () => {
+    await proposeLiveChange(USER, PHONE, "Hisense fridge", { kind: "price", price: 4100 });
     expect(writes()).toHaveLength(0);
     const offer = last();
     expect(offer.kind).toBe("buttons");
-    expect(offer.body).toBe("Change *Hisense 205L Double Door Fridge* (SKU HIS-205): stock 3 → 20?\n\nThis changes it on Jumia.");
+    expect(offer.body).toMatch(/^Change \*Hisense 205L Double Door Fridge\* \(SKU HIS-205\): price GHS [\d,]+ → GHS 4,100\?\n\nThis changes it on Jumia\.$/);
     const [yes, no] = offer.ids!;
     expect(yes).toMatch(/^lchg:[0-9a-f-]{36}$/);
     expect(no).toMatch(/^lchgno:/);
 
     await handleShopTap(USER, PHONE, yes);
-    expect(writes()).toEqual([expect.objectContaining({ path: "/feeds/products/stock" })]);
+    expect(writes()).toEqual([expect.objectContaining({ path: "/feeds/products/price" })]);
     expect(db.tables.jumia_product_changes[0]).toMatchObject({ status: "sent", feed_id: "feed-0001", seller_sku: "HIS-205" });
-    expect(last().body).toContain("✅ Sent to Jumia: *Hisense 205L Double Door Fridge*, stock 3 → 20.");
+    expect(last().body).toContain("✅ Sent to Jumia: *Hisense 205L Double Door Fridge*, price");
 
     await handleShopTap(USER, PHONE, yes);
     expect(last().body).toBe("That change was already handled.");
@@ -241,15 +241,44 @@ describe("changing a live product on WhatsApp", () => {
     expect(last().body).toContain("LG 250L Top Freezer Fridge");
   });
 
-  it("No changes nothing", async () => {
+  // Owner, 2026-10-11: "Safe to make immediate" — stock, ON/OFF and ending a sale of one product.
+  it("stock, ON/OFF and ending a sale of the one product they name go straight to Jumia, no tap", async () => {
+    await proposeLiveChange(USER, PHONE, "Hisense fridge", { kind: "stock", stock: 20 });
+    expect(writes()).toEqual([expect.objectContaining({ path: "/feeds/products/stock" })]);
+    expect(last()).toMatchObject({ kind: "text" });
+    expect(last().body).toContain("✅ Sent to Jumia: *Hisense 205L Double Door Fridge*, stock 3 → 20.");
+    expect(db.tables.jumia_product_changes[0]).toMatchObject({ status: "sent", seller_sku: "HIS-205" });
+
     await proposeLiveChange(USER, PHONE, "blender", { kind: "status", active: false });
+    expect(writes()[1].path).toBe("/feeds/products/status");
+    await proposeLiveChange(USER, PHONE, "Hisense fridge", { kind: "sale", sale: null });
+    expect(writes()[2].path).toBe("/feeds/products/price");
+    expect(sent.every((m) => m.kind !== "buttons")).toBe(true);
+  });
+
+  it("the same change to a product taken from the conversation still waits for the tap", async () => {
+    await proposeLiveChange(USER, PHONE, "Hisense fridge", { kind: "stock", stock: 20 }, { fromContext: true });
+    expect(writes()).toHaveLength(0);
+    expect(last()).toMatchObject({ kind: "buttons" });
+  });
+
+  it("several fit: the one they pick is changed at once, the list having said what", async () => {
+    await proposeLiveChange(USER, PHONE, "fridge", { kind: "stock", stock: 9 });
+    expect(last().kind).toBe("list");
+    expect(last().body).toContain("Tap it and I'll change it on Jumia");
+    await handleShopTap(USER, PHONE, last().ids!.find((id) => id.endsWith(":1"))!);
+    expect(writes()).toEqual([expect.objectContaining({ path: "/feeds/products/stock" })]);
+  });
+
+  it("No changes nothing", async () => {
+    await proposeLiveChange(USER, PHONE, "blender", { kind: "price", price: 300 });
     await handleShopTap(USER, PHONE, last().ids![1]);
     expect(last().body).toBe("OK, nothing changed on Jumia.");
     expect(writes()).toHaveLength(0);
   });
 
   it("an old offer isn't applied", async () => {
-    await proposeLiveChange(USER, PHONE, "blender", { kind: "stock", stock: 5 });
+    await proposeLiveChange(USER, PHONE, "blender", { kind: "price", price: 300 });
     db.tables.jumia_product_changes[0].created_at = new Date(Date.now() - 31 * 60_000).toISOString();
     await handleShopTap(USER, PHONE, last().ids![0]);
     expect(writes()).toHaveLength(0);
@@ -257,7 +286,7 @@ describe("changing a live product on WhatsApp", () => {
   });
 
   it("someone else's change can't be tapped", async () => {
-    await proposeLiveChange(USER, PHONE, "blender", { kind: "stock", stock: 5 });
+    await proposeLiveChange(USER, PHONE, "blender", { kind: "price", price: 300 });
     await handleShopTap("intruder", PHONE, last().ids![0]);
     expect(writes()).toHaveLength(0);
   });
@@ -284,7 +313,7 @@ describe("changing a live product on WhatsApp", () => {
   });
 
   it("a confirm tap without the pack changes nothing either", async () => {
-    await proposeLiveChange(USER, PHONE, "fridge", { kind: "stock", stock: 5 });
+    await proposeLiveChange(USER, PHONE, "Hisense fridge", { kind: "price", price: 4100 });
     const tap = last().ids![0];
     calls.length = 0;
     off.add("shop_changes");
@@ -767,7 +796,7 @@ describe("live changes cost credits when billing is on (owner, 2026-10-07)", () 
 
   it("the question says the price; the tap pays it, once", async () => {
     billing(5);
-    await proposeLiveChange(USER, PHONE, "Hisense fridge", { kind: "stock", stock: 20 });
+    await proposeLiveChange(USER, PHONE, "Hisense fridge", { kind: "price", price: 4100 });
     expect(last().body).toContain("This changes it on Jumia (0.5 credits).");
     const yes = last().ids![0];
     await handleShopTap(USER, PHONE, yes);
@@ -775,6 +804,21 @@ describe("live changes cost credits when billing is on (owner, 2026-10-07)", () 
     expect(balance()).toBe(4.5);
     await handleShopTap(USER, PHONE, yes);
     expect(balance()).toBe(4.5);
+  });
+
+  it("a change made without a tap is paid once, as it's made", async () => {
+    billing(5);
+    await proposeLiveChange(USER, PHONE, "Hisense fridge", { kind: "stock", stock: 20 });
+    expect(writes()).toHaveLength(1);
+    expect(balance()).toBe(4.5);
+  });
+
+  it("not enough credits for a change made without a tap: nothing reaches Jumia, and they send it again", async () => {
+    billing(0.2);
+    await proposeLiveChange(USER, PHONE, "Hisense fridge", { kind: "stock", stock: 20 });
+    expect(writes()).toHaveLength(0);
+    expect(last()).toMatchObject({ kind: "cta", body: "A change on Jumia costs 0.5 credits, and you have 0.2. Buy credits, then send it again." });
+    expect(db.tables.jumia_product_changes[0].status).toBe("cancelled");
   });
 
   it("several products are one charge", async () => {
@@ -787,7 +831,7 @@ describe("live changes cost credits when billing is on (owner, 2026-10-07)", () 
 
   it("not enough credits: nothing reaches Jumia, and the offer stays", async () => {
     billing(0.2);
-    await proposeLiveChange(USER, PHONE, "Hisense fridge", { kind: "stock", stock: 20 });
+    await proposeLiveChange(USER, PHONE, "Hisense fridge", { kind: "price", price: 4100 });
     const yes = last().ids![0];
     await handleShopTap(USER, PHONE, yes);
     expect(writes()).toHaveLength(0);
@@ -798,7 +842,7 @@ describe("live changes cost credits when billing is on (owner, 2026-10-07)", () 
   it("Jumia refusing all of it gives the credits back", async () => {
     billing(5);
     db.tables.whatsapp_connections = [{ user_id: USER, phone_number: PHONE }];
-    await proposeLiveChange(USER, PHONE, "Hisense fridge", { kind: "stock", stock: 20 });
+    await proposeLiveChange(USER, PHONE, "Hisense fridge", { kind: "price", price: 4100 });
     await handleShopTap(USER, PHONE, last().ids![0]);
     expect(balance()).toBe(4.5);
     const row = db.tables.jumia_product_changes[0];

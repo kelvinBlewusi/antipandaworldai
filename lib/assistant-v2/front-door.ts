@@ -27,7 +27,7 @@
 import { callGeminiBackend } from "@/lib/ai/gemini-client";
 import { withAiUsageContext } from "@/lib/ai/usage";
 import { siteGuide } from "@/lib/whatsapp/site-guide";
-import { cannotList } from "@/lib/jumia/capabilities";
+import { canList, cannotList } from "@/lib/jumia/capabilities";
 import {
   capabilities, parseActionUnguarded, type AssistantAction, type AssistantLink, type ProductFacts, type Stage,
 } from "@/lib/whatsapp/assistant";
@@ -131,7 +131,8 @@ export function contextText(input: FrontDoorInput): string {
     `Drafts in their batch: ${input.drafts.length ? `\n${input.drafts.map((p) => draftLine(p, input.currency)).join("\n")}` : "none"}`,
     `Products you last listed for them: ${input.listed ? `${input.listed.count} (${input.listed.what}). "Those", "them", "all of them" and "the last N" mean these; "the approved ones", "the rejected ones", "the first one" pick among them.${input.listed.items?.length ? `\n${input.listed.items.slice(0, 30).map((l, i) => `${i + 1}. ${l}`).join("\n")}` : ""}` : "none"}`,
     ...(named.length ? [`Products in their Jumia shop the message names: ${named.map((n) => `"${n}"`).join(", ")}`] : []),
-    `Recent conversation (oldest first):${input.conversation.length ? `\n${input.conversation.slice(-6).join("\n")}` : " none"}`,
+    // All of it (up to 20 messages; 6 until 2026-10-11, when "the first one" lost its list).
+    `Recent conversation (oldest first):${input.conversation.length ? `\n${input.conversation.slice(-20).join("\n")}` : " none"}`,
     `Their new message: "${input.message.replace(/"/g, "'").slice(0, 600)}"`,
   ].join("\n");
 }
@@ -177,6 +178,20 @@ function routerPrompt(input: FrontDoorInput): string {
 const CLARIFY = '{"type":"clarify","question":"<one short question, ending with ?>","options":["<2 or 3 answers they can tap, each up to 20 characters and clear on its own, e.g. \\"Stock to 10\\", not \\"10\\">"]} - only when you can\'t tell which action or which product they mean, or a change is missing the value to set (e.g. "change the drone to 10": its stock or its price?).';
 const REPLY = '{"type":"reply","text":"<your message>","link":"<a link key, or null>"} - a question you answer in a line or two; a hello; anything this area\'s actions don\'t cover.';
 const CANNOT = '{"type":"cannot","what":"<a key from Not possible from here>"} - they ask for (or ask whether you can do) one of these: PandaWorld gives the true answer and what it can do instead.';
+/**
+ * "Can you…?" answered from the capability list, and what PandaWorld doesn't
+ * do answered with one fixed line and noted (owner, 2026-10-11): in every
+ * reading, the chat's own prompt and agent mode's examples.
+ */
+export const CAPABILITY_ACTION = '{"type":"capability","what":"<a key from What the chat does>"} - they ask whether you can do something ("can you…?", "is it possible to…?", "do you do…?") without saying what to do it to: PandaWorld answers from its list, with the words that do it. When they say what to do and to which product ("can you set the kettle\'s stock to 20?", "can you fix my rejected products?"), do it with its action instead.';
+export const NOT_YET_ACTION = '{"type":"not_yet","what":"<what they asked for, in a few words>","outside":false} - they ask for something no action here does and that isn\'t on Not possible: PandaWorld says it can\'t do that yet and notes the request. "outside":true when it has nothing to do with Jumia, selling or PandaWorld (the weather, football, homework).';
+export const NOT_YET_EXAMPLES = [
+  '"can you change my prices?" → {"type":"capability","what":"live_price"}',
+  '"can you post my products on Instagram?" → {"type":"not_yet","what":"post products on Instagram","outside":false}',
+  '"what\'s the weather in Accra today?" → {"type":"not_yet","what":"the weather","outside":true}',
+];
+/** The rule beside them. */
+export const NEVER_CANT = "- Never say PandaWorld can't do something, and never send them to Vendor Center to do it: what isn't possible is cannot, what PandaWorld doesn't do is not_yet, and anything outside Jumia, selling and PandaWorld is not_yet with \"outside\":true.";
 
 const ACTIONS: Record<Area, string[]> = {
   listing: [
@@ -343,6 +358,7 @@ function readerPrompt(areas: Area[], input: FrontDoorInput): string {
     ...(input.memory ? ["", "What you remember about them from earlier (to understand them; never quote it):", input.memory] : []),
     "", "What PandaWorld can do (all true; nothing else is: there is no team doing things by hand):", capabilities(input.listingCost ?? 2),
     "", "Not possible from here (Jumia's API doesn't allow it, or it isn't built): answer these with cannot:", cannotList(),
+    "", "What the chat does, by key (for capability):", canList(),
     ...(replyArea ? [
       "", siteGuide(),
       "", "Links you can send (put the key in \"link\"):", ...Object.entries(input.links).map(([k, l]) => `- ${k}: ${l.what}`),
@@ -352,21 +368,26 @@ function readerPrompt(areas: Area[], input: FrontDoorInput): string {
     ...Array.from(new Set(areas.flatMap((a) => ACTIONS[a]))),
     REPLY,
     CANNOT,
+    CAPABILITY_ACTION,
+    NOT_YET_ACTION,
     CLARIFY,
     "",
     "Examples (message → JSON):",
     ...areas.flatMap((a) => EXAMPLES[a]),
+    ...NOT_YET_EXAMPLES,
     "",
     "Rules:",
     "- Every number and word you put in an action must be in their message (or, for which product, the recent conversation). Never guess or invent a value.",
     "- A reply never says you changed, will change or are changing anything (\"Okay, I'll update the quantity to 7\" changed nothing). Only an action changes things: use it, or ask.",
     "- You don't have their products' descriptions, highlights, prices, stock or sales: never write them yourself. Use the action that reads them (product_text, product_info, stock, research).",
     "- Name products as their shop calls them when you can tell which: from the products you last listed (\"the approved ones\" are those whose quality check passed, on or off; \"my latest uploaded product\" is the first of a list of their newest) or the products the message names.",
-    "- A question about what you can do (\"can you…?\"): answer from What PandaWorld can do, and if it can, offer to do it. Never say a team or a person will do something.",
+    "- A question about what you can do (\"can you…?\"): when they say what to do and to which product, do it with its action; asked in general, capability with its key. Never say a team or a person will do something.",
+    NEVER_CANT,
     "- Ask (clarify) only when you can't tell which action or which product, or a change has no value to set. Never ask for a detail that has a default: a period (use the action's usual one), a report's kind, the price for fees (null), how many to list (10). Use the default and answer.",
     ...(replyArea ? [
       "- A hello or \"what can you do\": a short list (\"• \" lines, never numbered) of what you can do for them, with the words that do it, then ask what they'd like.",
-      "- About themselves (pack, credits, shop, connections): only from About this seller. Outside Jumia and PandaWorld: say you can't help with that and suggest something you can do.",
+      "- About themselves (pack, credits, shop, connections): only from About this seller; what isn't there isn't shown here (say where to look: Settings).",
+      "- You see the recent conversation, and what you remember of them from before: answer questions about what they asked or what you said from those (\"what did I ask you?\" lists their questions). Never say you don't keep a record or can't remember.",
       "- Write for WhatsApp: short and warm, *bold* with single asterisks, in the language they wrote in. Never write a web address; use \"link\". A product's status is ON or OFF, in capitals.",
     ] : []),
     "",
@@ -459,7 +480,7 @@ export async function frontDoor(
     text = await ask(FRONT_DOOR_FALLBACK, prompt, usage, limits.fallbackMs);
     note = ` (read by ${FRONT_DOOR_FALLBACK}: ${(e as Error).message})`;
   }
-  const raw = `${secs(t1 - t0)}+${secs(Date.now() - t1)}${note} ${routed.trim()} → ${text.trim()}`;
+  let raw = `${secs(t1 - t0)}+${secs(Date.now() - t1)}${note} ${routed.trim()} → ${text.trim()}`;
   // Two answers as a list ("orders for yesterday and today"): the first.
   try {
     const whole = JSON.parse(text.trim()) as unknown;
@@ -479,8 +500,33 @@ export async function frontDoor(
   // they count as said, with the answer.
   const asked = input.answered ? [...input.conversation].reverse().find((l) => l.startsWith("Bot:"))?.slice(4).trim() : undefined;
   const said = asked ? `${asked}\n${input.message}` : input.message;
-  const action = parseActionUnguarded(text, said, input.drafts, input.links, input.currency, {
+  const read = (t: string) => parseActionUnguarded(t, said, input.drafts, input.links, input.currency, {
     context, stage: input.stage, listed: !!input.listed,
   });
+  let action: FrontDoorAction = read(text);
+  // Its own words said PandaWorld can't do it (the chat stops those:
+  // claimsInability). Read once more, told it wasn't sent, while there's
+  // time; otherwise, and if that fails, it's not_yet.
+  if (action.type === "not_yet" && action.blocked && Date.now() - t0 < BLOCKED_RETRY_BEFORE_MS) {
+    const t2 = Date.now();
+    try {
+      const again = await ask(models.reader, `${prompt}\n\n${BLOCKED_NOTE(action.blocked)}`, usage, limits.readerMs);
+      const second = read(again);
+      raw += ` | its reply said it can't, read again (${secs(Date.now() - t2)}) → ${again.trim()}`;
+      if (second.type !== "unclear") action = second;
+    } catch (e) {
+      raw += ` | its reply said it can't; reading again failed: ${(e as Error).message.slice(0, 100)}`;
+    }
+  }
   return { area: reading, action, raw };
 }
+
+/** A reply that said it can't is read again only this soon into the message (the website's request has 60 s). */
+const BLOCKED_RETRY_BEFORE_MS = 20_000;
+/** What the second reading is told. */
+export const BLOCKED_NOTE = (reply: string) => [
+  `You answered with a reply: "${reply.replace(/"/g, "'").slice(0, 300)}"`,
+  "It was NOT sent: it says PandaWorld can't do something, or sends them to Vendor Center. Choose again: the action that does what they ask;",
+  "cannot when it is on Not possible; capability when they ask whether you can; not_yet when PandaWorld doesn't do it (\"outside\":true when it has",
+  "nothing to do with Jumia, selling or PandaWorld). Reply with ONLY one JSON object.",
+].join("\n");

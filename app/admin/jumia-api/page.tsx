@@ -102,6 +102,7 @@ export default async function JumiaApiPage() {
                     {c.requests.length > 0 && <p className="mt-0.5 font-mono text-[11px] text-zinc-500">{c.requests.join(" · ")}</p>}
                     {c.needs && <p className="mt-0.5 text-xs text-zinc-500">Needs: {c.needs.join(", ")}</p>}
                     {c.answer && <p className="mt-1 text-xs text-zinc-700">The assistant says: &ldquo;{c.answer}&rdquo;</p>}
+                    {c.yes && <p className="mt-1 text-xs text-zinc-700">Asked &ldquo;can you…?&rdquo;, it says: &ldquo;{c.yes}&rdquo;</p>}
                   </div>
                   <span className="shrink-0 font-mono text-[11px] text-zinc-400">{c.id}</span>
                 </div>

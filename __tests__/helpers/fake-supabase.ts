@@ -145,6 +145,9 @@ export class FakeDb {
               then(resolve: (v: unknown) => unknown) {
                 return Promise.resolve({ data: hits.map((r) => ({ ...r })), error: null }).then(resolve);
               },
+              async maybeSingle() {
+                return { data: hits[0] ? { ...hits[0] } : null, error: null };
+              },
             };
           },
           then(resolve: (v: unknown) => unknown) {

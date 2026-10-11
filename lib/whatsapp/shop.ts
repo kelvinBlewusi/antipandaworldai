@@ -246,13 +246,28 @@ function confirmText(products: ShopProduct[], change: LiveChange, ctx: { currenc
 }
 
 /**
+ * Changes made on the seller's word, without a confirm tap (owner,
+ * 2026-10-11: "Safe to make immediate"): one product's stock, turning it ON
+ * or OFF, and ending its sale. Easy to undo, so the tap only slowed them
+ * down. Prices, sales, content, sizes and rules for many products still wait
+ * for the tap. Pure.
+ */
+export function immediateChange(change: LiveChange): boolean {
+  return change.kind === "stock" || change.kind === "status" || (change.kind === "sale" && change.sale === null);
+}
+
+/**
  * Offer a change to the product the seller means, for one tap. Several
  * products (a list of their words, or "all" of what one fits) go together:
- * one question, one tap, one feed. Returns what was done, for the
- * assistant's log.
+ * one question, one tap, one feed. An `immediateChange` to the one product
+ * their own words name is made straight away; when the product came from
+ * the conversation ("turn it off": `fromContext`), it still waits for the
+ * tap, since the risk there is the wrong product. Returns what was done, for
+ * the assistant's log.
  */
 export async function proposeLiveChange(
-  userId: string, phone: string, query: string | string[], change: LiveChange, opts: { preferSid?: string | null; all?: boolean } = {},
+  userId: string, phone: string, query: string | string[], change: LiveChange,
+  opts: { preferSid?: string | null; all?: boolean; fromContext?: boolean } = {},
 ): Promise<string> {
   const ctx = await shopContext(userId, phone, CHANGES_FEATURE, CHANGES);
   if (!ctx) return "blocked";
@@ -296,6 +311,9 @@ export async function proposeLiveChange(
   const id = (data as { id: string }).id;
 
   if (one) {
+    if (immediateChange(change) && !preferred && !opts.fromContext) {
+      return `${await applyChange(ctx, id, one, change, { tapped: false })} ${change.kind} for ${one.sellerSku} (no tap)`;
+    }
     await sendButtonsIfConfigured(
       phone,
       confirmText([one], change, ctx),
@@ -305,7 +323,9 @@ export async function proposeLiveChange(
   }
   await sendListIfConfigured(
     phone,
-    `Which product should I change (${describeLiveChange(change, null, ctx)})? I'll ask you to confirm before anything changes on Jumia.`,
+    immediateChange(change)
+      ? `Which product should I change (${describeLiveChange(change, null, ctx)})? Tap it and I'll change it on Jumia.`
+      : `Which product should I change (${describeLiveChange(change, null, ctx)})? I'll ask you to confirm before anything changes on Jumia.`,
     "Choose product",
     matches.map((m, i) => ({
       id:          `lpick:${id}:${i}`,
@@ -661,13 +681,14 @@ export async function proposeContentChange(userId: string, phone: string, query:
   return `offered content (${Object.keys(fields).join(", ")}) for ${product.sellerSku}`;
 }
 
-/** A change already kept (its row), offered for its tap. */
-export async function offerChange(userId: string, phone: string, id: string, product: ShopProduct, change: LiveChange): Promise<void> {
+/**
+ * A change already kept (its row), made now: more photos for a live
+ * product, once they've tapped Done (owner, 2026-10-11: no second tap).
+ */
+export async function makeChange(userId: string, phone: string, id: string, product: ShopProduct, change: LiveChange): Promise<string> {
   const ctx = await shopContext(userId, phone, CHANGES_FEATURE, CHANGES);
-  if (!ctx) return;
-  await sendButtonsIfConfigured(phone, confirmText([product], change, ctx), [
-    { id: `lchg:${id}`, title: "Yes, update it ✅" }, { id: `lchgno:${id}`, title: "No" },
-  ]);
+  if (!ctx) return "blocked";
+  return applyChange(ctx, id, product, change, { tapped: false });
 }
 
 /** A new size (or colour) for a live product: its name, and the stock and price the seller gave. */
@@ -790,17 +811,44 @@ export function parseShopTap(text: string | undefined): ShopTap | null {
  * it all (here, or the worker: lib/whatsapp/shop-notices.ts). False, and
  * said, when the seller can't cover it: the offer stays for its tap.
  */
-async function payForChange(ctx: Ctx, reference: string, description: string): Promise<boolean> {
+async function payForChange(ctx: Ctx, reference: string, description: string, tapped = true): Promise<boolean> {
   const paid = await chargeService(ctx.userId, LIVE_CHANGE_CREDIT_COST, reference, description);
   if (paid.ok) return true;
+  const again = tapped ? "tap Yes again" : "send it again";
   if (paid.reason === "insufficient") {
     await sendCtaUrlIfConfigured(ctx.phone,
-      `A change on Jumia costs ${LIVE_CHANGE_CREDIT_COST} credits, and you have ${Math.max(0, Math.round(paid.available * 100) / 100)}. Buy credits, then tap Yes again.`,
+      `A change on Jumia costs ${LIVE_CHANGE_CREDIT_COST} credits, and you have ${Math.max(0, Math.round(paid.available * 100) / 100)}. Buy credits, then ${again}.`,
       "Buy credits", `${appUrl()}/extension/dashboard`);
   } else {
-    await sendTextIfConfigured(ctx.phone, "I couldn't get that ready just now. Tap Yes again in a moment.");
+    await sendTextIfConfigured(ctx.phone, `I couldn't get that ready just now. ${again[0].toUpperCase()}${again.slice(1)} in a moment.`);
   }
   return false;
+}
+
+/**
+ * A change kept as its row (`jumia_product_changes`, pending), paid for and
+ * sent to Jumia: on its Yes tap, or straight away for an `immediateChange`
+ * (`tapped` false: there's no Yes to tap again, so one that can't be paid
+ * for is dropped and they send it again). Returns what happened, for the log.
+ */
+async function applyChange(ctx: Ctx, id: string, product: ShopProduct, live: LiveChange, opts: { tapped: boolean }): Promise<"sent" | "failed" | "unpaid"> {
+  const db = createServerClient();
+  const where = { product_sid: product.sid, seller_sku: product.sellerSku, name: label(product) };
+  if (!(await payForChange(ctx, `lchg:${id}`, `Change on Jumia: ${shorten(label(product), 60)}`, opts.tapped))) {
+    if (!opts.tapped) await db.from("jumia_product_changes").update({ status: "cancelled", error: "not paid", ...where, updated_at: new Date().toISOString() }).eq("id", id);
+    return "unpaid";
+  }
+  const sent = await sendLiveChange(ctx.token, product, live, { country: ctx.country, currency: ctx.currency });
+  const now = new Date().toISOString();
+  if (!sent.ok) {
+    await refundService(`lchg:${id}`, "Refund: Jumia didn't take the change");
+    await db.from("jumia_product_changes").update({ status: "failed", error: sent.message, ...where, updated_at: now }).eq("id", id);
+    await sendTextIfConfigured(ctx.phone, `⚠️ Jumia didn't take that change to ${shorten(label(product), 80)}: ${sent.message}`);
+    return "failed";
+  }
+  await db.from("jumia_product_changes").update({ status: "sent", feed_id: sent.data.feedId, ...where, updated_at: now }).eq("id", id);
+  await sendTextIfConfigured(ctx.phone, `✅ Sent to Jumia: *${shorten(label(product), 100)}*, ${describeLiveChange(live, product, ctx)}. Jumia usually applies it within a few minutes; I'll tell you if it refuses.`);
+  return "sent";
 }
 
 /** The tap on a several-products change: every product in one feed, or none. */
@@ -900,7 +948,12 @@ export async function handleShopTap(userId: string, phone: string, text: string 
 
   // Picked from the list: the product is now known, the change is still
   // confirmed with its own tap. Live 2026-10-07, one tap on a list row sent
-  // "end its sale" that the seller hadn't asked for.
+  // "end its sale" that the seller hadn't asked for. A change made without a
+  // tap anyway is made now: the list's question named it.
+  if (tap.kind === "pick" && immediateChange(live)) {
+    await applyChange(ctx, tap.id, product, live, { tapped: false });
+    return true;
+  }
   if (tap.kind === "pick") {
     await db.from("jumia_product_changes").update({
       product_sid: sid, seller_sku: product.sellerSku, name: label(product), updated_at: new Date().toISOString(),
@@ -912,19 +965,7 @@ export async function handleShopTap(userId: string, phone: string, text: string 
     );
     return true;
   }
-  if (!(await payForChange(ctx, `lchg:${tap.id}`, `Change on Jumia: ${shorten(label(product), 60)}`))) return true;
-  const sent = await sendLiveChange(ctx.token, product, live, { country: ctx.country, currency: ctx.currency });
-  const now = new Date().toISOString();
-  if (!sent.ok) {
-    await refundService(`lchg:${tap.id}`, "Refund: Jumia didn't take the change");
-    await db.from("jumia_product_changes").update({ status: "failed", error: sent.message, product_sid: sid, seller_sku: product.sellerSku, name: label(product), updated_at: now }).eq("id", tap.id);
-    await sendTextIfConfigured(phone, `⚠️ Jumia didn't take that change to ${shorten(label(product), 80)}: ${sent.message}`);
-    return true;
-  }
-  await db.from("jumia_product_changes").update({
-    status: "sent", feed_id: sent.data.feedId, product_sid: sid, seller_sku: product.sellerSku, name: label(product), updated_at: now,
-  }).eq("id", tap.id);
-  await sendTextIfConfigured(phone, `✅ Sent to Jumia: *${shorten(label(product), 100)}*, ${describeLiveChange(live, product, ctx)}. Jumia usually applies it within a few minutes; I'll tell you if it refuses.`);
+  await applyChange(ctx, tap.id, product, live, { tapped: true });
   return true;
 }
 

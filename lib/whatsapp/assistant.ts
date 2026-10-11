@@ -77,7 +77,7 @@ import {
 } from "@/lib/whatsapp/shop-insights";
 import { shopProducts, type LiveChange, type ShopProduct } from "@/lib/jumia/shop";
 import { MAX_NEEDS, answerResearch, parseNeeds, type ResearchNeed } from "@/lib/whatsapp/shop-research";
-import { cannotAnswer, cannotList } from "@/lib/jumia/capabilities";
+import { canList, cannotAnswer, cannotList, capability, capabilityAnswer } from "@/lib/jumia/capabilities";
 import { INTERACTIVE_BODY_MAX, splitForText } from "@/lib/whatsapp/text-limits";
 import { assistantGate, assistantSwitchedOn } from "@/lib/whatsapp/assistant-limits";
 import { blankCodes, noteSellerMessage, sellerMemory } from "@/lib/whatsapp/seller-memory";
@@ -88,7 +88,9 @@ import { resetSession, updateSession, type AssistantPending, type LiveValueAsk, 
 import { parseVariations, saveVariations, sizeNamedIn, variationOptions, VARIATION_FIELD } from "@/lib/whatsapp/variation-question";
 import { carryPriceToVariants, carrySaleToVariants, carryStockToVariants, chatPrice, shopCurrencyForUser } from "@/lib/whatsapp/listing-edits";
 import type { ListingRow } from "@/lib/supabase/types";
-import { FRONT_DOOR_LIMITS, FRONT_DOOR_ROUTER, frontDoor, namesInMessage, type Clarify, type FrontDoorInput } from "@/lib/assistant-v2/front-door";
+import {
+  CAPABILITY_ACTION, FRONT_DOOR_LIMITS, FRONT_DOOR_ROUTER, NOT_YET_ACTION, NOT_YET_EXAMPLES, frontDoor, namesInMessage, type Clarify, type FrontDoorInput,
+} from "@/lib/assistant-v2/front-door";
 import { agentRead, agentSystem, catalogLookups, geminiAgentCall } from "@/lib/assistant-v2/agent";
 
 /** Small and quick, like the review step's older fallback (lib/whatsapp/intent.ts). */
@@ -250,6 +252,15 @@ export type AssistantAction =
   /** Several reads of their shop, answered together as asked (lib/whatsapp/shop-research.ts). */
   | { type: "research"; needs: ResearchNeed[] }
   | { type: "note" }
+  /**
+   * Something PandaWorld doesn't do (owner, 2026-10-11: "tell the user it can
+   * not do that yet"): a fixed answer, and the request noted on the wish list
+   * (assistant_wishes, /admin/wishes). `outside`: nothing to do with Jumia or
+   * PandaWorld, answered but not noted. `text`: a fixed answer of its own (a
+   * capability not built yet). `blocked`: the AI's own reply that said it
+   * can't, stopped (claimsInability).
+   */
+  | { type: "not_yet"; what: string; outside: boolean; text?: string; blocked?: string }
   | { type: "unclear" };
 
 /** "quarter" is the last 90 days: as far back as Jumia's orders go. */
@@ -315,9 +326,9 @@ export function capabilities(listingCost = LIVE_LISTING_CREDIT_COST): string {
     "- Chatting is free on every pack. Every pack, free credits included: listing, orders (see, pack, ready to ship, cancel), reading their shop (products, stock, sales, reports, payouts, fees), image polish and the shop health report; only the commands below that cost credits are charged. Only these need a pack: changes to live Jumia products from the chat, Jumia QC rejection alerts and guided fixes and shipping label PDFs on WhatsApp (Standard and up); order alerts on WhatsApp and the extension's fee calculator (Pro and up). Everything pauses at 0 credits.",
     "- Submit to Jumia and report back when each product goes live or is rejected; fix common rejections itself (banned words, restricted brands) and guide the seller through the rest with Fix & resubmit. After Jumia accepts a listing, its quality-check verdict is followed up (and the credits returned if QC rejects it) with the Standard pack and up.",
     "- Orders: \"orders\" shows orders waiting to be packed; pack them, mark them ready to ship, or cancel, here or on WhatsApp; where any order is, by its number; orders and sales for today, the week, the month or 90 days. Shipping label PDFs only on WhatsApp (Standard pack and up). Pro and up also: alerts for new Jumia orders on WhatsApp, grouped and quiet at night, and a message when orders are delivered, returned, fail delivery or are cancelled.",
-    `- Their live Jumia products, found by name among everything in their shop: change a product's stock, price, a sale price with its dates, or turn it on or off, with one tap to confirm, for one product or several named together (up to ${MAX_GROUP}); where a product is (on or off, Jumia's quality check, price, sale, stock); how many are left; what's out of stock or low; which products are turned off or rejected by Jumia's quality check.`,
+    `- Their live Jumia products, found by name among everything in their shop: change a product's stock, price, a sale price with its dates, end its sale, or turn it on or off, for one product or several named together (up to ${MAX_GROUP}). One product's stock, ON/OFF or ending its sale is done straight away when they name it; a price, a sale, a product taken from the conversation, or several products wait for one tap to confirm; where a product is (on or off, Jumia's quality check, price, sale, stock); how many are left; what's out of stock or low; which products are turned off or rejected by Jumia's quality check.`,
     `- Rules for many products at once, shown in full before one tap: prices up or down by a percentage, a sale a percentage off (with dates), a stock or price, ending sales, turning on or off; for all their products, the ones out of stock, low, off or on, or all that match words ("all perfumes"); up to ${BULK_MAX} products per tap, and a bigger rule in parts of ${BULK_MAX}, one tap each (up to ${BULK_MAX * BULK_PARTS_MAX}).`,
-    "- A live product's name, description and highlights shown as Jumia has them now (product_text). Changing them, or the brand: the seller's own text, or rewritten by AI from what Jumia has now with their instructions (\"remove the word X from the name\"), shown before one tap. Also its other details (colour, material, weight, model and whatever its category takes, checked against Jumia's options), its barcode, or a size's name. Jumia checks content changes again. More photos after its main one (add_photos: they send them, then Done, then one tap), and a new size or colour with its own stock and price (add_size: one tap; Jumia's quality check looks at it like a new product). Its main photo and category are changed in Vendor Center.",
+    "- A live product's name, description and highlights shown as Jumia has them now (product_text). Changing them, or the brand: the seller's own text, or rewritten by AI from what Jumia has now with their instructions (\"remove the word X from the name\"), shown before one tap. Also its other details (colour, material, weight, model and whatever its category takes, checked against Jumia's options), its barcode, or a size's name. Jumia checks content changes again. More photos after its main one (add_photos: they send them, then Done, and they go to Jumia), and a new size or colour with its own stock and price (add_size: one tap; Jumia's quality check looks at it like a new product). Its main photo and category are changed in Vendor Center.",
     "- Reports: best sellers, products with no sale, what runs out soon at the rate it sells, returns and failed deliveries, for the last 7, 30 or 90 days.",
     "- Products rejected by Jumia's quality check: which ones, with Jumia's reason when its API gives one (often it doesn't: then the reason is only in Vendor Center, never guessed). Fixing them (fix_rejected): one listed through PandaWorld gets its Fix & resubmit (redrafted, or the seller asked for what only they know, and sent again); one listed another way gets a rewritten name or description, a brand or a detail from the seller, shown before one tap, and Jumia checks it again. Its category, main photo or price before approval can't change through Jumia's API: those are changed in Vendor Center, or it is listed again here.",
     "- Payouts: the last Jumia payout and the statement not yet paid; every statement of the last 90 days; one statement's fees, refunds and balances. A message when Jumia pays: Pro and up.",
@@ -327,12 +338,12 @@ export function capabilities(listingCost = LIVE_LISTING_CREDIT_COST): string {
     "- Before listing: whether a brand is on Jumia and allowed in a category; what a kind of product needs on Jumia (its category, the details asked, variation options, commission).",
     "- The shops under their Jumia account. Jumia's warehouse (for sellers who stock it): what it holds of a product, a delivery order into it (products and quantities, with a tap), and telling Jumia one has shipped with its tracking number.",
     "- Fees: what Jumia takes when one of their products sells (commission for its category, the per-item shipping contribution) and what they receive, at its price or a price they give.",
-    `- Credits: tell the balance; a WhatsApp listing or an extension autofill costs ${listingCost} credits for this seller, a listing charged only when it goes live on Jumia; a shipping label ${LABEL_CREDIT_COST} credits (the same label again is free), a confirmed change to live products ${LIVE_CHANGE_CREDIT_COST} (back if Jumia refuses it), an order-updates message ${NOTICE_CREDIT_COST}; new-order alerts, payout messages and chatting are free (no limit on chatting); warn when running low. Credits are bought on the dashboard.`,
+    `- Credits: tell the balance; a WhatsApp listing or an extension autofill costs ${listingCost} credits for this seller, a listing charged only when it goes live on Jumia; a shipping label ${LABEL_CREDIT_COST} credits (the same label again is free), a change to live products ${LIVE_CHANGE_CREDIT_COST} (back if Jumia refuses it), an order-updates message ${NOTICE_CREDIT_COST}; new-order alerts, payout messages and chatting are free (no limit on chatting); warn when running low. Credits are bought on the dashboard.`,
     "- The PandaWorld Chrome extension fills Jumia's Vendor Center product form on a laptop; image polish and a fee calculator in it on Pro.",
     "- A free Jumia price calculator, Jumia commission rates, how-to guides and an FAQ on the website.",
     `- Image polish: ${PRODUCT_SHOT_COUNT} product photos made from the seller's own (main on white, angle, lifestyle, detail), ${POLISH_CREDIT_COST} credits each, for a product being listed (\"polish 2\"), or by itself when the product's note asks for polished photos. They go first on the listing, the seller's own after.`,
     `- The shop health report: a full check of their shop from live Jumia data, a score out of 100, what's working, what isn't and what to do, ${REPORT_CREDIT_COST} credits.`,
-    "- Commands (type / in the Listing Assistant or tap +; \"menu\" on WhatsApp): orders, sales today, sales week, shop, out of stock, payouts, report, polish and a product number, credits, status, restart, how it works, disconnect. Only polish, the report and confirmed changes to live products cost credits; chatting and everything else is free.",
+    "- Commands (type / in the Listing Assistant or tap +; \"menu\" on WhatsApp): orders, sales today, sales week, shop, out of stock, payouts, report, polish and a product number, credits, status, restart, how it works, disconnect. Only polish, the report and changes to live products cost credits; chatting and everything else is free.",
     "- Words the bot always knows: \"status\" (where they are), \"restart\", \"help\", \"menu\", \"orders\", \"disconnect\" (Jumia).",
   ].join("\n");
 }
@@ -367,7 +378,7 @@ export function assistantLinks(opts: { batchId?: string | null; countrySlug?: st
     calculator:      { label: "Price calculator",  url: `${base}/jumia-price-calculator`, what: "Jumia selling price and fee calculator" },
     commission:      { label: "Commission rates",  url: `${base}/jumia-commission-rates`, what: "Jumia's commission rates by category" },
     ...(opts.countrySlug ? { country: { label: "Selling on Jumia", url: `${base}/sell-on-jumia/${opts.countrySlug}`, what: "selling on Jumia in their country" } } : {}),
-    vendor_center:   { label: "Vendor Center",     url: "https://vendorcenter.jumia.com", what: "Jumia Vendor Center, where products already with Jumia are changed" },
+    vendor_center:   { label: "Vendor Center",     url: "https://vendorcenter.jumia.com", what: "Jumia Vendor Center, only with an answer from Not possible from here" },
     privacy:         { label: "Privacy policy",    url: `${base}/privacy`, what: "privacy policy" },
     terms:           { label: "Terms",             url: `${base}/terms`, what: "terms of service" },
     community:       { label: "Community group",   url: COMMUNITY_WHATSAPP_URL, what: "PandaWorld's community WhatsApp group" },
@@ -523,7 +534,7 @@ export function buildPrompt(stage: Stage, message: string, ctx: PromptContext): 
       : "You are PandaWorld's assistant on WhatsApp. PandaWorld lists sellers' products on Jumia (Africa's online marketplace) and helps them run their Jumia shop.",
     ...(web ? [
       "This chat works like the WhatsApp bot: the seller uploads product photos with the image button, adds the price and notes as text, and you draft, edit and submit them to Jumia.",
-      "Orders work here too: the orders action shows the ones waiting, with buttons to pack them, mark them ready to ship or cancel them. Here, NOT available: shipping labels and new-order alerts, which are on WhatsApp only (or labels in Vendor Center): for those, say so in a reply.",
+      "Orders work here too: the orders action shows the ones waiting, with buttons to pack them, mark them ready to ship or cancel them. Here, NOT available: shipping labels and new-order alerts, which are on WhatsApp only: for those, capability with labels or order_alerts.",
     ] : []),
     "You choose ONE action as JSON, and PandaWorld's code checks it and carries it out.",
     "",
@@ -539,6 +550,9 @@ export function buildPrompt(stage: Stage, message: string, ctx: PromptContext): 
     "",
     "Not possible from here (Jumia's API doesn't allow it, or it isn't built): answer these with cannot:",
     cannotList(),
+    "",
+    "What the chat does, by key (for capability):",
+    canList(),
     "",
     siteGuide(),
     "",
@@ -563,7 +577,7 @@ export function buildPrompt(stage: Stage, message: string, ctx: PromptContext): 
     "- Insight, stats, analytics or how their shop is performing, without asking for a report or health check: shop (the overview, free). \"How is my shop doing?\" and a report or health check they ask for: health_report.",
     "- A message that changes a product (\"change the drone to 10\", \"restock the kettle to 20\", \"set X to 50 pcs\") is live_change (an edit for a draft above), never a count of products to list, even right after you asked how many products they're listing. \"Restock\" and \"pcs\" mean stock.",
     "- A bare number right after your own list of options picks that option (\"4\" after a list whose 4th line is shop insight is shop), not a count of products.",
-    "- About themselves (their pack, credits, WhatsApp number, Jumia connection, shop), answer only from \"About this seller\", word for word where it gives a number or name. If it isn't there, say you can't see it here and where to look (Settings).",
+    "- About themselves (their pack, credits, WhatsApp number, Jumia connection, shop), answer only from \"About this seller\", word for word where it gives a number or name. If it isn't there, say it isn't shown here and where to look (Settings).",
     "- Asked what pack they're on or what it includes: name the pack (or \"no pack yet, your free credits\"), then list what's on and what isn't from \"About this seller\", one short line each, and what the next pack adds.",
     "",
     "- Your own messages are WhatsApp text: *bold* with single asterisks, never ** or # headings. Choices as \"• \" lines, never numbered (a number on its own is how many products they're listing).",
@@ -647,6 +661,8 @@ export function buildPrompt(stage: Stage, message: string, ctx: PromptContext): 
     '  a yes or no), or, while they send a product, it describes that product (its notes). PandaWorld\'s usual steps take it. In review, a',
     '  drafted product\'s sizes or variations (even answering the bot\'s question) are an edit, matched to its category\'s options.',
     '{"type":"cannot","what":"<a key from Not possible from here>"} - they ask for (or whether you can do) one of those: PandaWorld gives the true answer and what it can do instead',
+    CAPABILITY_ACTION,
+    NOT_YET_ACTION,
     '{"type":"reply","text":"<your message>","link":"<a key above, or null>"} - everything else. You write the message:',
     "  - \"What can you do\", a hello (\"hi\", \"hello there\"), or something you can't match: in your own words (vary it, never a set",
     "    script), a short list (4 to 6 lines starting with \"• \", never numbered) of what you can do for them, each with the words that do it",
@@ -660,8 +676,8 @@ export function buildPrompt(stage: Stage, message: string, ctx: PromptContext): 
     "  - How to do something on PandaWorld, or where to find it (link WhatsApp, connect Jumia, the extension, the API key, buying",
     "    credits, a page): the steps from the website guide above, in order, as \"1.\" lines with the page's own button words, and",
     "    \"link\" set to the page or guide (the key in [brackets]). Only steps the guide gives; up to 900 characters for steps.",
-    "  - Anything outside Jumia, their shop and PandaWorld, or something PandaWorld can't do: say plainly that you don't understand",
-    "    that or can't help with it, suggest something you can do, and ask them to try something different.",
+    "  - Never say PandaWorld can't do something, and never send them to Vendor Center to do it: what isn't possible is cannot,",
+    "    what PandaWorld doesn't do is not_yet, and anything outside Jumia, selling and PandaWorld is not_yet with \"outside\":true.",
     "  Write for WhatsApp: short and warm, at most 600 characters (steps up to 900), *bold* with single asterisks, \"1.\" lines only for steps in order. A product's status is ON or OFF, in capitals.",
     "  Reply in the language the seller wrote in.",
     "",
@@ -717,6 +733,7 @@ export function buildPrompt(stage: Stage, message: string, ctx: PromptContext): 
     '(after you listed what\'s out of stock) "restock all back to 10" → {"type":"bulk","scope":"listed","words":null,"stock":10}',
     '(after you listed their newest products) "change the stock of the last 10 to 20" → {"type":"bulk","scope":"listed","words":null,"stock":20}',
     '"let\'s enter shop assistant mode" → {"type":"reply","text":"<what you can do for their shop, as • lines>","link":null}',
+    ...NOT_YET_EXAMPLES,
     '"the full list of the last 10 products uploaded on my shop" → {"type":"research","needs":[{"source":"products","sort":"newest","filter":"all","words":null,"limit":10,"since":null}]}',
     '"my 5 most expensive perfumes and their stock" → {"type":"research","needs":[{"source":"products","sort":"price_high","filter":"all","words":"perfumes","limit":5,"since":null}]}',
     '"which of my products added this month have sold?" → {"type":"research","needs":[{"source":"products","sort":"newest","filter":"all","words":null,"limit":30,"since":"month"},{"source":"product_sales","period":"month"}]}',
@@ -1377,6 +1394,50 @@ export function changeToAsked(message: string): { target: string; field: "stock"
 /** "How many of my products are on", "...live on Jumia, on and off": the shop's overview. */
 const SHOP_COUNT = /\bhow many\b[^.?!]*\b(products?|items?|listings?)\b[^.?!]*\b(on|off|live|active|inactive|turned|deactivated|enabled|disabled)\b|\bhow many\b[^.?!]*\b(products?|items?)\b[^.?!]*\b(do i have|have i got|in my (shop|store)|on jumia)\b/i;
 
+// ─── Honest "can't" ───────────────────────────────────────────────────────
+
+/** What PandaWorld doesn't do: one answer, never the AI's own words (owner, 2026-10-11). */
+export const NOT_YET_TEXT = "I can't do that yet. I've noted it.";
+/** Nothing to do with Jumia, selling or PandaWorld. */
+export const OUTSIDE_TEXT = "That's outside what I do: I help with your Jumia shop and PandaWorld. Ask me about your products, orders, sales or payouts, or list something new.";
+
+const INABILITY = new RegExp([
+  // "I can't", "we cannot", "PandaWorld is unable to", "I don't keep a record"
+  "\\b(?:i|we|pandaworld)(?: (?:currently|still|really|just|unfortunately|actually|also))? (?:can't|cannot|can not|am unable|are unable|is unable|am not able|are not able|"
+    + "(?:don't|do not|doesn't|does not) have (?:the |a |any )?(?:ability|capability|access|way|option|feature)|have no (?:way|ability|access|option)|"
+    + "(?:don't|do not) (?:keep|store|save|remember|record|track)|(?:won't|will not) be able)\\b",
+  "\\bi'm (?:currently |still |unfortunately |afraid i'm )?(?:unable|not able)\\b",
+  "\\b(?:that|this|it)(?:'s| is) not (?:possible|something (?:i|we) can)\\b",
+  "\\bisn't (?:possible|something (?:i|we) can)\\b",
+  "\\bnot (?:supported|available) (?:here|in this chat|on whatsapp|yet)\\b",
+].join("|"), "i");
+// Sent to Vendor Center for something to be done there.
+const TO_VENDOR_CENTER = new RegExp([
+  "\\b(?:change|update|edit|delete|remove|do|manage|set|turn|adjust|modify|add|upload)\\b[^.!?\\n]{0,60}\\b(?:in|on|via|through|from|using|at) (?:the |your )?(?:jumia )?vendor ?cent(?:er|re)\\b",
+  "\\b(?:use|(?:need|have) to (?:use|go to|log ?in(?:to| to)|open|visit)|go to|head to|head over to|visit) (?:the |your )?(?:jumia )?vendor ?cent(?:er|re)\\b",
+].join("|"), "i");
+// Steps that happen in Vendor Center: connecting Jumia, the extension.
+const VENDOR_CENTER_STEPS = /\b(?:token|client id|self.?authori[sz]ation|applications?|api key|extension|autofill|add products)\b/i;
+const OUTSIDE_SCOPE = /\b(?:only (?:help|assist)(?: you)? with|outside (?:of )?(?:jumia|pandaworld|what i|my)|not related to (?:jumia|your shop|pandaworld|selling)|unrelated to|but i can help (?:you )?with your (?:jumia|shop))\b/i;
+
+/**
+ * A reply in the AI's own words that says PandaWorld can't do something, or
+ * sends them to Vendor Center to do it: stopped before it's sent (owner,
+ * 2026-10-11: "Any reply that claims 'I can't' or 'use Vendor Center' for
+ * something on the can-do list is blocked"). What truly isn't possible has
+ * its fixed answer (cannot), and what isn't built, not_yet. Pure.
+ */
+export function claimsInability(text: string): boolean {
+  const t = text.replace(/[‘’]/g, "'");
+  return INABILITY.test(t) || (TO_VENDOR_CENTER.test(t) && !VENDOR_CENTER_STEPS.test(t));
+}
+
+/** A reply that claimed it can't, as not_yet: their message is the request. */
+function blockedReply(text: string, message: string): AssistantAction {
+  const t = text.replace(/[‘’]/g, "'");
+  return { type: "not_yet", what: message.trim().slice(0, 200), outside: OUTSIDE_SCOPE.test(t), blocked: text.slice(0, 500) };
+}
+
 /** The AI's reply as an action our code can carry out, or unclear. */
 export function parseAction(
   raw: string, message: string, products: ProductFacts[], links: Record<string, AssistantLink> = {}, currency = "GHS",
@@ -1388,7 +1449,9 @@ export function parseAction(
   // and "restock all back to 10" warned about a colour (owner's web chat,
   // 2026-10-08, after the bot had asked how many products they're listing).
   // A change to a product is never a count.
-  const missed = action.type === "list" || action.type === "restart" || action.type === "unclear" || action.type === "help"
+  // A reply that said it can't (now not_yet) is a miss too: the words below may know what it is.
+  const cant = action.type === "not_yet" && !!action.blocked;
+  const missed = action.type === "list" || action.type === "restart" || action.type === "unclear" || action.type === "help" || cant
     || (action.type === "edit" && action.edits.length === 0);
   const asked = missed ? changeToAsked(message) : null;
   if (asked && !products.some((p) => namesAProduct(asked.target) && fitsDraft(asked.target, p.listing.title))) {
@@ -1413,14 +1476,14 @@ export function parseAction(
   // listing 10 products, as "I can't" and as the hello menu (owner's web
   // chat, 2026-10-08): it's their newest products, read from Jumia.
   const newest = newestProductsAsked(message);
-  if (newest != null && (action.type === "list" || action.type === "restart" || action.type === "unclear" || action.type === "reply")) {
+  if (newest != null && (action.type === "list" || action.type === "restart" || action.type === "unclear" || action.type === "reply" || cant)) {
     return { type: "research", needs: [{ source: "products", sort: "newest", filter: "all", words: null, limit: newest, since: null }] };
   }
   // Owner's test, 2026-10-07: "How many of my products are on" went to a
   // product search, and "...live on JUMIA is on and off" was answered "I
   // can't tell you". The overview has those counts.
   if (SHOP_COUNT.test(message) && !/\b(out of stock|low|sold|orders?|listed|list(ed)? (today|this))\b/i.test(message)
-    && (action.type === "product_info" || action.type === "reply" || action.type === "unclear" || action.type === "stock")) {
+    && (action.type === "product_info" || action.type === "reply" || action.type === "unclear" || action.type === "stock" || cant)) {
     return { type: "shop", filter: "all" };
   }
   return action;
@@ -1467,7 +1530,21 @@ function parseActionRaw(
       const link = typeof parsed.link === "string" && parsed.link in links ? parsed.link : null;
       const text = typeof parsed.text === "string" ? cleanReply(parsed.text, links) : "";
       if (!text) return link ? { type: "reply", text: `Here's the ${links[link].label.toLowerCase()}:`, link } : { type: "unclear" };
+      if (claimsInability(text)) return blockedReply(text, message);
       return { type: "reply", text, link };
+    }
+    case "not_yet": {
+      const what = typeof parsed.what === "string" && parsed.what.trim() ? parsed.what.trim().slice(0, 200) : message.trim().slice(0, 200);
+      return { type: "not_yet", what, outside: parsed.outside === true };
+    }
+    case "capability":
+    case "can": {
+      // "Can you…?": the list's own answer, never the AI's words about it.
+      const id = String(parsed.what ?? parsed.id ?? "");
+      const a = capabilityAnswer(id);
+      if (!a) return { type: "unclear" };
+      if (a.wish) return { type: "not_yet", what: capability(id)?.what ?? id, outside: false, text: a.text };
+      return { type: "reply", text: a.text, link: a.link && a.link in links ? a.link : null };
     }
     case "live_change":
       return liveChangeAction(parsed, message, context, now, currency);
@@ -1483,7 +1560,10 @@ function parseActionRaw(
     case "cannot": {
       // Something Jumia's API doesn't allow: its fixed, true answer
       // (lib/jumia/capabilities.ts), never the AI's own words about it.
-      const a = cannotAnswer(String(parsed.what ?? ""));
+      const id = String(parsed.what ?? "");
+      const a = cannotAnswer(id);
+      // Not built yet: its answer, and the request noted.
+      if (a && capability(id)?.status === "not_built") return { type: "not_yet", what: capability(id)?.what ?? id, outside: false, text: a.text };
       return a ? { type: "reply", text: a.text, link: a.link && a.link in links ? a.link : null } : { type: "unclear" };
     }
     case "draft_text": {
@@ -1788,12 +1868,33 @@ export async function assistantModel(): Promise<string> {
   }
 }
 
+/** One message of the conversation, at most this long. */
+export const CONVERSATION_LINE_MAX = 1_200;
+/** The whole conversation, at most this long: the newest messages are kept. */
+export const CONVERSATION_MAX = 12_000;
+
+/**
+ * The newest lines that fit in `budget` characters, oldest first. Pure.
+ */
+export function newestWithin(lines: string[], budget = CONVERSATION_MAX): string[] {
+  const kept: string[] = [];
+  let used = 0;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    used += lines[i].length + 1;
+    if (used > budget && kept.length > 0) break;
+    kept.unshift(lines[i]);
+  }
+  return kept;
+}
+
 /**
  * The last messages with this seller, oldest first, as "Seller: …" / "Bot:
  * …" lines, without the one being answered. Taps on buttons read as such;
  * a pasted code (Client ID, token, key) as "[a code]". Twenty since the
  * assistant reads every message (owner, 2026-10-07), with what came before
- * in the seller's memory (lib/whatsapp/seller-memory.ts).
+ * in the seller's memory (lib/whatsapp/seller-memory.ts). Each up to
+ * CONVERSATION_LINE_MAX characters (300 until 2026-10-11, when "the first
+ * one" and "the questions I asked" were lost), CONVERSATION_MAX in all.
  */
 export async function recentConversation(phone: string, current: string, max = 20): Promise<string[]> {
   try {
@@ -1811,13 +1912,13 @@ export async function recentConversation(phone: string, current: string, max = 2
       .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
     const lastIn = rows[rows.length - 1];
     if (lastIn && lastIn.direction === "inbound" && (lastIn.body_text ?? "").trim() === current.trim()) rows.pop();
-    return rows.slice(-max).map((r) => {
+    return newestWithin(rows.slice(-max).map((r) => {
       // A tapped answer to the front door's question reads as the answer.
       const body = (r.body_text ?? "").trim().replace(/^answer:(?:@[a-z_]+:)?/, "");
       const shown = !body ? (r.message_type === "image" ? "[a photo]" : "[a message]")
-        : /^[a-z_]+:\S+$/i.test(body) ? "[tapped a button]" : blankCodes(body.replace(/\s+/g, " ").slice(0, 300));
+        : /^[a-z_]+:\S+$/i.test(body) ? "[tapped a button]" : blankCodes(body.replace(/\s+/g, " ").slice(0, CONVERSATION_LINE_MAX));
       return `${r.direction === "inbound" ? "Seller" : "Bot"}: ${shown}`;
-    });
+    }));
   } catch {
     return [];
   }
@@ -2327,7 +2428,8 @@ export async function runAssistant(
   // "Water Wave Lace Front Wig" the review step's help (owner's web chat,
   // 2026-10-08): it's that product. The front door is told the shop's
   // matching names instead.
-  if (!unguarded && actions.length === 1 && (actions[0].type === "reply" || actions[0].type === "unclear") && stage !== "collecting" && stage !== "starting"
+  const said = actions[0]?.type === "reply" || actions[0]?.type === "unclear" || (actions[0]?.type === "not_yet" && !!actions[0].blocked);
+  if (!unguarded && actions.length === 1 && said && stage !== "collecting" && stage !== "starting"
     && (await namesShopProduct(userId, text).catch(() => false))) {
     actions = [{ type: "product_info", product: text.trim().slice(0, 120) }];
   }
@@ -2353,7 +2455,7 @@ export async function runAssistant(
     // With others beside it, a step or "nothing to do here" doesn't hand the message back to the flow.
     if (actions.length === 1 || (done !== "default" && done !== "step")) outcome = actions.length === 1 ? done : "handled";
     // Starting a batch: after answering, where they are (a reply carries it already).
-    if (stage === "starting" && action.type !== "reply" && done !== "default" && done !== "step" && done !== "stopped batch" && done !== "kept batch"
+    if (stage === "starting" && action.type !== "reply" && action.type !== "not_yet" && done !== "default" && done !== "step" && done !== "stopped batch" && done !== "kept batch"
       && i === actions.length - 1) {
       await sendTextIfConfigured(phone, startingNudge(session));
     }
@@ -2462,6 +2564,7 @@ async function carryOut(
     case "live_change":
       return proposeLiveChange(userId, phone, action.others ? [action.product, ...action.others] : action.product, action.change, {
         preferSid: action.fromContext ? await lastChangedSid(userId) : null,
+        ...(action.fromContext ? { fromContext: true } : {}),
         ...(action.all ? { all: true } : {}),
       });
     case "product_info":
@@ -2551,10 +2654,34 @@ async function carryOut(
       else await sendTextIfConfigured(phone, text);
       return link ? `replied with ${action.link}` : action.awaiting ? `asked for ${action.awaiting.field}` : "replied";
     }
+    case "not_yet": {
+      // A fixed answer, sent the way a reply is (with where they are while a batch is on).
+      const answer = action.outside ? OUTSIDE_TEXT : action.text ?? NOT_YET_TEXT;
+      if (!action.outside) await noteWish(userId, phone, action, text);
+      await carryOut(userId, phone, stage, batchId, products, { type: "reply", text: answer, link: null }, text, links, session);
+      return `${action.outside ? "outside" : "not yet"}: ${action.what}${action.blocked ? " (its reply said it can't)" : ""}`.slice(0, 300);
+    }
     case "unclear":
       return "default";
   }
   return "default";
+}
+
+/**
+ * What a seller asked for that PandaWorld doesn't do, for the wish list
+ * (/admin/wishes): the AI's words for it, their message, and the reply that
+ * was stopped when it said it can't. Best-effort: the answer goes either way.
+ */
+async function noteWish(userId: string, phone: string, action: Extract<AssistantAction, { type: "not_yet" }>, message: string): Promise<void> {
+  try {
+    const { error } = await createServerClient().from("assistant_wishes").insert({
+      user_id: userId, channel: isWebAddress(phone) ? "web" : "whatsapp", request: action.what.slice(0, 200), message: message.slice(0, 1000),
+      blocked_reply: action.blocked ?? null,
+    });
+    if (error) console.warn(`[assistant] noting a wish for ${userId} failed: ${error.message}`);
+  } catch (e) {
+    console.warn(`[assistant] noting a wish for ${userId} failed: ${(e as Error).message}`);
+  }
 }
 
 /** While a batch's photos come in: where they are, after an answer to something else. */

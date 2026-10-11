@@ -32,6 +32,8 @@ const aiPrompts: string[] = [];
 let aiCalls = 0;
 // Agent mode's turns: each the tool calls it makes.
 const toolReplies: { name: string; args: Record<string, unknown> }[][] = [];
+// The tools each agent turn could call (null: any).
+const toolAllowed: (string[] | null)[] = [];
 jest.mock("@/lib/ai/gemini-client", () => ({
   callGeminiBackend: async (model: string, parts: { text?: string }[]) => {
     aiCalls++;
@@ -40,9 +42,10 @@ jest.mock("@/lib/ai/gemini-client", () => ({
     if (text == null) throw new Error("no AI reply scripted");
     return { text, model, backend: "vertex" };
   },
-  callGeminiWithTools: async (_model: string, _turns: unknown[], opts: { system: string }) => {
+  callGeminiWithTools: async (_model: string, _turns: unknown[], opts: { system: string; allowed?: string[] }) => {
     aiCalls++;
     aiPrompts.push(opts.system);
+    toolAllowed.push(opts.allowed ?? null);
     const calls = toolReplies.shift();
     if (calls == null) throw new Error("no tool calls scripted");
     return { calls, text: "", turn: { role: "model", parts: calls.map((c) => ({ functionCall: c })) }, backend: "ai-studio" };
@@ -75,8 +78,8 @@ jest.mock("@/lib/jumia/categories", () => ({
 }));
 
 import {
-  agentFor, answerLiveValue, assistantEnabled, assistantFor, assistantLinks, cleanReply, countBacked, fitsDraft, isStateQuestion, looksLikeQuestion, messageNumbers,
-  changeToAsked, draftNumberIn, draftTextLines, frontDoorFor, isProductName, sameName, namesAProduct, recentConversation, saidIsValues, saleWindow, splitProducts, parseAction, plainQuickEdit, runAssistant, verifyChanges, type ProductFacts,
+  NOT_YET_TEXT, OUTSIDE_TEXT, agentFor, answerLiveValue, claimsInability, assistantEnabled, assistantFor, assistantLinks, cleanReply, countBacked, fitsDraft, isStateQuestion, looksLikeQuestion, messageNumbers,
+  changeToAsked, draftNumberIn, draftTextLines, frontDoorFor, isProductName, sameName, namesAProduct, newestWithin, recentConversation, saidIsValues, saleWindow, splitProducts, parseAction, plainQuickEdit, runAssistant, verifyChanges, type ProductFacts,
 } from "@/lib/whatsapp/assistant";
 import { assistantGate } from "@/lib/whatsapp/assistant-limits";
 import { parseVariations } from "@/lib/whatsapp/variation-question";
@@ -97,6 +100,7 @@ beforeEach(() => {
   aiReplies.length = 0;
   aiPrompts.length = 0;
   toolReplies.length = 0;
+  toolAllowed.length = 0;
   shopCalls.length = 0;
   aiCalls = 0;
 });
@@ -613,9 +617,9 @@ describe("its own replies (owner, 2026-10-06)", () => {
 
   it("keeps the review step's buttons under a reply there", async () => {
     db.tables.listings = [{ id: "l1", user_id: "seller", whatsapp_batch_id: "b1", whatsapp_seq: 1, title: "Hisense 205L Fridge", status: "draft" }];
-    aiReplies.push('{"type":"reply","text":"Sorry, I can\'t book deliveries. I can change your fridge\'s price, quantity or size, or submit it.","link":null}');
-    await runAssistant("seller", "233", session({ state: "awaiting_confirmation", batchId: "b1" }), "book me a delivery truck", "review");
-    expect(sent).toEqual([{ kind: "buttons", body: "Sorry, I can't book deliveries. I can change your fridge's price, quantity or size, or submit it.", rows: ["submit all", "review"] }]);
+    aiReplies.push('{"type":"reply","text":"Jumia\'s couriers deliver your orders. I can change your fridge\'s price, quantity or size, or submit it.","link":null}');
+    await runAssistant("seller", "233", session({ state: "awaiting_confirmation", batchId: "b1" }), "who delivers my orders?", "review");
+    expect(sent).toEqual([{ kind: "buttons", body: "Jumia's couriers deliver your orders. I can change your fridge's price, quantity or size, or submit it.", rows: ["submit all", "review"] }]);
   });
 });
 
@@ -699,6 +703,20 @@ describe("what the owner's live test showed (2026-10-07)", () => {
       "Bot: ⚠️ 30 is more than I can draft in one go — the most is 20 at a time.",
       "Seller: [tapped a button]",
     ]);
+  });
+
+  // Owner, 2026-10-11: "the first one" and "the questions I asked" were lost at 300 characters and 6 messages.
+  it("keeps long messages whole up to 1,200 characters, and the newest that fit in 12,000", async () => {
+    const long = `Here are your drafts: ${"a fairly long product name, ".repeat(30)}the end`;
+    db.tables.whatsapp_message_log = [
+      { phone_number: "233", direction: "outbound", message_type: "text", body_text: long, created_at: "2026-10-11T01:00:00Z" },
+      { phone_number: "233", direction: "inbound", message_type: "text", body_text: "the first one", created_at: "2026-10-11T01:01:00Z" },
+    ];
+    const lines = await recentConversation("233", "something new");
+    expect(lines[0].length).toBeGreaterThan(800);
+    expect(lines[0]).toContain("the end");
+    expect(newestWithin(["Seller: a", "Bot: " + "x".repeat(50), "Seller: c"], 30)).toEqual(["Seller: c"]);
+    expect(newestWithin(["Seller: a", "Seller: b"], 100)).toEqual(["Seller: a", "Seller: b"]);
   });
 
   it("the prompt carries the conversation, the rules and the examples", async () => {
@@ -1004,7 +1022,7 @@ describe("the chat's billed commands, understood (owner, 2026-10-07)", () => {
     expect(aiPrompts[0]).toContain('{"type":"polish","product":<the product number from the message> or null}');
     expect(aiPrompts[0]).toContain("2 credits each");
     expect(aiPrompts[0]).toContain('{"type":"health_report"}');
-    expect(aiPrompts[0]).toContain("Only polish, the report and confirmed changes to live products cost credits");
+    expect(aiPrompts[0]).toContain("Only polish, the report and changes to live products cost credits");
   });
 });
 
@@ -1191,5 +1209,95 @@ describe("a change to a product is never a count", () => {
     const raw = '{"type":"edit","edits":[{"products":[2],"said":null,"changes":{"variations":[{"said":"Large","option":"L"},{"said":"Medium","option":"M"}],"color":"Navy Blue"},"ask":false}]}';
     expect(parseAction(raw, "Large and Medium", [SHIRT], links)).toEqual({ type: "edit", edits: [{ seqs: [2], changes: { variations: ["L", "M"] }, ask: false }], dropped: [] });
     expect(parseAction(raw, "Large and Medium, colour navy", [SHIRT], links)).toMatchObject({ dropped: ["colour"] });
+  });
+});
+
+describe("honest \"can't\" (owner, 2026-10-11)", () => {
+  const session = () => ({ phoneNumber: "233", userId: "seller", state: "awaiting_count", batchId: null, lastSubmittedBatchId: null }) as WhatsAppSession;
+  const links = assistantLinks();
+  const wishes = () => (db.tables.assistant_wishes ?? []) as { user_id: string; channel: string; request: string; message: string; blocked_reply: string | null }[];
+
+  it("knows a reply that says PandaWorld can't, or sends them to Vendor Center to do it", () => {
+    for (const t of [
+      "Sorry, I can't book deliveries.", "I’m unable to do that from here.", "I don't keep a record of our chats.", "We cannot change that.",
+      "You'll need to use Vendor Center for that.", "Please update the price in Vendor Center.", "That's not possible here.", "PandaWorld doesn't have the ability to do this.",
+    ]) expect({ t, can: claimsInability(t) }).toEqual({ t, can: true });
+    for (const t of [
+      "You're welcome! 🙌", "Jumia's couriers deliver your orders.", "Your pack isn't shown here: see Settings.",
+      "1. In Jumia Vendor Center, open Settings → Applications → Create Application.\n2. Copy the Client ID and the token.",
+      "Log in to Vendor Center, create a Self Authorization application and paste its token here.",
+    ]) expect({ t, can: claimsInability(t) }).toEqual({ t, can: false });
+  });
+
+  it("a reply that says it can't is stopped: not_yet, with their message as the request", () => {
+    expect(parseAction('{"type":"reply","text":"Sorry, I can\'t book deliveries.","link":null}', "book me a delivery truck", [], links))
+      .toEqual({ type: "not_yet", what: "book me a delivery truck", outside: false, blocked: "Sorry, I can't book deliveries." });
+    expect(parseAction('{"type":"reply","text":"I can\'t help with that, I only help with your Jumia shop.","link":null}', "what's the weather", [], links))
+      .toMatchObject({ type: "not_yet", outside: true });
+  });
+
+  it("\"can you…?\" is answered from the capability list, word for word", () => {
+    expect(parseAction('{"type":"capability","what":"live_price"}', "can you change prices?", [], links))
+      .toEqual({ type: "reply", text: expect.stringMatching(/^Yes: .*make the kettle 150/), link: null });
+    expect(parseAction('{"type":"capability","what":"delete_product"}', "can you delete products?", [], links))
+      .toEqual({ type: "reply", text: expect.stringContaining("Jumia's API can't delete products"), link: "vendor_center" });
+    // Not built yet: its own answer, and noted.
+    expect(parseAction('{"type":"capability","what":"translations"}', "can you list in french?", [], links))
+      .toMatchObject({ type: "not_yet", outside: false, text: expect.stringContaining("in English for now") });
+    expect(parseAction('{"type":"cannot","what":"translations"}', "list it in french", [], links)).toMatchObject({ type: "not_yet" });
+    expect(parseAction('{"type":"capability","what":"teleport"}', "can you teleport?", [], links)).toEqual({ type: "unclear" });
+  });
+
+  it("not_yet answers with one line and notes the request; outside Jumia it isn't noted", async () => {
+    aiReplies.push('{"type":"not_yet","what":"post products on Instagram","outside":false}');
+    expect(await runAssistant("seller", "233", session(), "can you post my products on instagram?", "idle")).toBe("handled");
+    expect(sent).toEqual([{ kind: "text", body: NOT_YET_TEXT }]);
+    expect(wishes()).toEqual([expect.objectContaining({ user_id: "seller", channel: "whatsapp", request: "post products on Instagram", message: "can you post my products on instagram?", blocked_reply: null })]);
+
+    sent.length = 0;
+    aiReplies.push('{"type":"not_yet","what":"the weather","outside":true}');
+    await runAssistant("seller", "233", session(), "what's the weather in accra", "idle");
+    expect(sent).toEqual([{ kind: "text", body: OUTSIDE_TEXT }]);
+    expect(wishes()).toHaveLength(1);
+  });
+
+  it("agent mode: a reply that says it can't isn't sent; it's asked once more without reply", async () => {
+    db.tables.app_settings = [{ key: "assistant_agent", value: "all" }];
+    toolReplies.push(
+      [{ name: "reply", args: { text: "Sorry, I can't change stock from here. Use Vendor Center." } }],
+      [{ name: "live_change", args: { product: "kettle", stock: 10 } }],
+    );
+    expect(await runAssistant("seller", "233", session(), "set the kettle stock to 10", "idle")).toBe("handled");
+    expect(toolAllowed[1]).not.toContain("reply");
+    expect(toolAllowed[1]).toContain("not_yet");
+    expect(shopCalls[0]).toEqual(["proposeLiveChange", "kettle", { kind: "stock", stock: 10 }, { preferSid: null }]);
+    expect((db.tables.whatsapp_assistant_log as { raw: string }[])[0].raw).toContain("(said it can't: not sent)");
+  });
+
+  it("agent mode: what PandaWorld doesn't do gets the fixed line and goes on the wish list", async () => {
+    db.tables.app_settings = [{ key: "assistant_agent", value: "all" }];
+    toolReplies.push([{ name: "not_yet", args: { what: "design a logo", outside: false } }]);
+    await runAssistant("seller", "233", session(), "can you design a logo for my shop", "idle");
+    expect(sent).toEqual([{ kind: "text", body: NOT_YET_TEXT }]);
+    expect(wishes().map((w) => w.request)).toEqual(["design a logo"]);
+  });
+
+  it("the front door reads it again when its reply said it can't", async () => {
+    db.tables.app_settings = [{ key: "assistant_front_door", value: "all" }];
+    aiReplies.push('{"area":"chat"}', '{"type":"reply","text":"I can\'t post to Instagram.","link":null}', '{"type":"not_yet","what":"post to Instagram","outside":false}');
+    await runAssistant("seller", "233", session(), "post my kettle on instagram", "idle");
+    expect(aiPrompts[2]).toContain("It was NOT sent");
+    expect(sent).toEqual([{ kind: "text", body: NOT_YET_TEXT }]);
+    expect(wishes().map((w) => w.request)).toEqual(["post to Instagram"]);
+  });
+
+  it("every prompt has the new actions and the list of what the chat does", async () => {
+    aiReplies.push('{"type":"reply","text":"Hi!","link":null}');
+    await runAssistant("seller", "233", session(), "hello", "idle");
+    const prompt = aiPrompts.at(-1)!;
+    expect(prompt).toContain('{"type":"capability"');
+    expect(prompt).toContain('{"type":"not_yet"');
+    expect(prompt).toContain("- live_price: Change a product's price");
+    expect(prompt).not.toContain("can't help with it");
   });
 });

@@ -16,18 +16,25 @@
  *
  * What doesn't: every action goes through the chat's own safety checks
  * (parseActionUnguarded: each value in the message, products named, nothing
- * widened), anything that changes Jumia is still offered for a confirm tap,
- * and what isn't possible is answered by the capability list's fixed text
- * (cannot). It never acts on a lookup alone.
+ * widened), a change to Jumia is offered for a confirm tap unless it's one
+ * the owner made immediate (one named product's stock, ON/OFF or end of
+ * sale: lib/whatsapp/shop.ts immediateChange), and what isn't possible is
+ * answered by the capability list's fixed text (cannot). It never acts on a
+ * lookup alone.
+ *
+ * Honest "can't" (owner, 2026-10-11): "can you…?" is answered from the
+ * capability list (capability), what PandaWorld doesn't do gets one fixed
+ * line and is noted (not_yet), and a reply in its own words that says it
+ * can't is not sent: it's asked once more without reply.
  */
 
 import { callGeminiWithTools, type GeminiTool, type GeminiTurn } from "@/lib/ai/gemini-client";
 import { withAiUsageContext } from "@/lib/ai/usage";
 import { siteGuide } from "@/lib/whatsapp/site-guide";
-import { cannotList } from "@/lib/jumia/capabilities";
-import { capabilities, parseActionUnguarded, type AssistantAction } from "@/lib/whatsapp/assistant";
+import { canList, cannotList } from "@/lib/jumia/capabilities";
+import { capabilities, claimsInability, parseActionUnguarded, type AssistantAction } from "@/lib/whatsapp/assistant";
 import { findProducts, type ShopProduct } from "@/lib/jumia/shop";
-import { EXAMPLES, contextText, type Clarify, type FrontDoorInput, type FrontDoorUsage } from "@/lib/assistant-v2/front-door";
+import { EXAMPLES, NEVER_CANT, NOT_YET_EXAMPLES, contextText, type Clarify, type FrontDoorInput, type FrontDoorUsage } from "@/lib/assistant-v2/front-door";
 
 // ─── Tools ───────────────────────────────────────────────────────────────────
 
@@ -83,7 +90,7 @@ export const ACTION_TOOLS: GeminiTool[] = [
   tool("draft_text", "Show drafts as drafted: name, price, sizes, highlights and description (\"show me the highlights you wrote for the first one\", \"what did you write for draft 2\"). Drafts only: a product already on Jumia is product_text.",
     { products: arr(int("A draft number."), "The drafts to show (\"the first one\" is 1).") }, ["products"]),
   // Live products
-  tool("live_change", "Change one or several products already on Jumia: exactly one of stock, price, sale_price, end_sale or active. Offered for a confirm tap.", {
+  tool("live_change", "Change one or several products already on Jumia: exactly one of stock, price, sale_price, end_sale or active. One product's stock, ON/OFF or end of sale is done straight away; the rest is offered for a confirm tap.", {
     product: PRODUCT, products: arr(str("A product."), "Several products, the same change."),
     stock: int("New stock."), price: num("New price (\"sell it at 120\", \"make it 120\")."),
     sale_price: num("A sale price, only when they say sale, discount, promo or off (dates are read from the message)."),
@@ -144,7 +151,12 @@ export const ACTION_TOOLS: GeminiTool[] = [
   tool("help", "What PandaWorld can do, when they ask in general."),
   // Saying, not doing
   tool("cannot", "They ask for something on the Not possible list: PandaWorld gives the true answer.", { what: str("A key from Not possible from here.") }, ["what"]),
-  tool("reply", "A short answer in your words: a hello, thanks, a question about PandaWorld or their account, anything the other tools don't cover. Never says you did, paused, stopped, changed or will change anything, never gives a number about their shop or credits (tools read them), and never says PandaWorld can't do something or sends them to Vendor Center for it (what isn't possible is cannot; the rest has a tool).", {
+  tool("capability", "They ask whether you can do something (\"can you…?\", \"is it possible to…?\", \"do you do…?\") without saying what to do it to: PandaWorld answers from its list, with the words that do it. When they say what to do and to which product, call the tool that does it instead.",
+    { what: str("A key from What the chat does.") }, ["what"]),
+  tool("not_yet", "They ask for something no tool does and that isn't on Not possible: PandaWorld says it can't do that yet and notes the request. outside: true when it has nothing to do with Jumia, selling or PandaWorld.", {
+    what: str("What they asked for, in a few words."), outside: bool("Nothing to do with Jumia, selling or PandaWorld (the weather, football, homework)."),
+  }, ["what"]),
+  tool("reply", "A short answer in your words: a hello, thanks, a question about PandaWorld or their account, anything the other tools don't cover. Never says you did, paused, stopped, changed or will change anything, never gives a number about their shop or credits (tools read them), and never says PandaWorld can't do something or sends them to Vendor Center for it (what isn't possible is cannot; what PandaWorld doesn't do, not_yet; the rest has a tool).", {
     text: str("Your message."), link: str("A link key, if one fits."),
   }, ["text"]),
   tool("clarify", "Only when you can't tell which action or which product, or a change has no value: one short question with 2 or 3 answers to tap.", {
@@ -158,6 +170,8 @@ export const NO_MATCH = "None of the products in PandaWorld's saved copy of thei
 /** Every tool, declared on every call (earlier turns call the lookups). */
 export const AGENT_TOOLS: GeminiTool[] = [...LOOKUP_TOOLS, ...ACTION_TOOLS];
 const ACTION_NAMES = ACTION_TOOLS.map((t) => t.name);
+/** After a reply that said it can't: every action but reply. */
+const ACTION_NAMES_NO_REPLY = ACTION_NAMES.filter((n) => n !== "reply");
 
 /**
  * A tool call as the chat's own action JSON (what parseAction reads): the
@@ -193,14 +207,16 @@ export function actionJson(name: string, args: Record<string, unknown>): Record<
 export function agentSystem(listingCost = 2): string {
   return [
     "You are PandaWorld's assistant for Jumia sellers, on WhatsApp or in the Jumia Listing Assistant chat on the PandaWorld website. PandaWorld lists sellers' products on Jumia and helps them run their Jumia shop.",
-    "You act by calling tools. PandaWorld's code checks every call and carries it out; anything that changes their Jumia shop is shown to them first for a confirm tap.",
+    "You act by calling tools. PandaWorld's code checks every call and carries it out; a change to their Jumia shop is shown to them first for a confirm tap, except one product's stock, ON/OFF or end of sale, which is done straight away.",
     "The first message tells you where the seller is, what they've been shown, who they are, and their new message.",
     "", "What PandaWorld can do (all true; nothing else is: there is no team doing things by hand):", capabilities(listingCost),
     "", "Not possible from here (answer these with cannot):", cannotList(),
+    "", "What the chat does, by key (for capability):", canList(),
     "", siteGuide(),
     "",
     "Examples (message → the tool and its arguments, as JSON):",
     ...Object.values(EXAMPLES).flat(),
+    ...NOT_YET_EXAMPLES,
     "",
     "Rules:",
     "- Call the tool that does what they ask. When they ask for two or three different things, call a tool for each (at most 3), in the order they asked. One request is one tool.",
@@ -214,10 +230,12 @@ export function agentSystem(listingCost = 2): string {
     "- While a batch's products are being sent, their details (sizes, pieces, prices, SKUs, \"those are 3 different products\") are step: no lookup.",
     "- A product's name on its own after you listed products: product_info. An order number: order_status. How much they made or sold: sales. What PandaWorld listed for them (\"from this chat\"): research with pandaworld_listings.",
     "- Fixing rejected products: fix_rejected (no product to see them and pick one). Which ones are rejected: shop with rejected.",
-    "- A question about what you can do (\"can you…?\"): answer from What PandaWorld can do, and if it can, do it or offer to. Never say you can't do something unless it is on the Not possible list (then use cannot), and never send them to Vendor Center for something a tool does (a live product's name, description, highlights, details, stock, price, sale, ON/OFF, sizes, photos). Never say a team or a person will do something.",
+    "- A question about what you can do (\"can you…?\"): when they say what to do and to which product, call the tool that does it; asked in general, capability with its key. Never send them to Vendor Center for something a tool does (a live product's name, description, highlights, details, stock, price, sale, ON/OFF, sizes, photos). Never say a team or a person will do something.",
+    NEVER_CANT,
     "- Ask (clarify) only when you can't tell which action or which product, or a change has no value to set. Never ask for a detail that has a default: a period (the tool's usual one), a report's kind (best_sellers), the price for fees, how many to list (restart asks).",
     "- A reply never says you did, paused, stopped, changed or will change anything (\"I've paused the current draft\" did nothing). Only a tool does things: use it, or ask.",
-    "- About themselves (pack, credits, shop, connections, extension use): only from About this seller. Outside Jumia and PandaWorld: say you can't help with that and suggest something you can do.",
+    "- About themselves (pack, credits, shop, connections, extension use): only from About this seller.",
+    "- You see the recent conversation, and what you remember of them from before: answer questions about what they asked or what you said from those (\"what did I ask you?\" lists their questions). Never say you don't keep a record or can't remember.",
     "- Replies: short and warm, *bold* with single asterisks, in the language they wrote in, never a web address (use link). A hello or \"what can you do\": a short list (\"• \" lines) of what you can do, then ask what they'd like. A product's status is ON or OFF, in capitals.",
   ].join("\n");
 }
@@ -296,20 +314,26 @@ async function timed<T>(work: Promise<T>, ms: number, what: string): Promise<T> 
 
 type ToolCall = { name: string; args: Record<string, unknown>; id?: string };
 
-/** One model turn (`onlyAct`: the lookups may not be called): injectable for tests. */
-export type AgentCall = (turns: GeminiTurn[], onlyAct: boolean) => Promise<{
+/**
+ * One model turn (`onlyAct`: the lookups may not be called; `noReply`: nor
+ * reply, after one that said it can't): injectable for tests.
+ */
+export type AgentCall = (turns: GeminiTurn[], onlyAct: boolean, noReply?: boolean) => Promise<{
   calls: ToolCall[]; text: string; turn: GeminiTurn; usage?: { prompt: number; cached: number };
 }>;
 
 /** `system` is agentSystem(): the same for every seller, so it's cached. */
 export function geminiAgentCall(model: string, system: string, usage: FrontDoorUsage): AgentCall {
-  return (turns, onlyAct) => withAiUsageContext(usage, () => callGeminiWithTools(model, turns, {
-    system, tools: AGENT_TOOLS, mode: "ANY", ...(onlyAct ? { allowed: ACTION_NAMES } : {}),
+  return (turns, onlyAct, noReply) => withAiUsageContext(usage, () => callGeminiWithTools(model, turns, {
+    system, tools: AGENT_TOOLS, mode: "ANY", ...(noReply ? { allowed: ACTION_NAMES_NO_REPLY } : onlyAct ? { allowed: ACTION_NAMES } : {}),
     ...(model.startsWith("gemini-3") ? { preferBackend: "ai-studio" as const } : {}),
   }));
 }
 
 const brief = (calls: ToolCall[]) => calls.map((c) => `${c.name}(${JSON.stringify(c.args).slice(0, 200)})`).join(" + ");
+
+/** What the model is told when its reply said it can't (claimsInability). */
+export const CANT_NOT_SENT = "Not sent: that reply says PandaWorld can't do something, or sends them to Vendor Center. Call the tool that does what they ask; cannot when it is on Not possible; capability when they ask whether you can; not_yet when PandaWorld doesn't do it (outside: true when it has nothing to do with Jumia, selling or PandaWorld).";
 
 /**
  * What the agent makes of a message: the actions to carry out (checked by
@@ -326,12 +350,17 @@ export async function agentRead(
   const log: string[] = [];
   let finals: ToolCall[] = [];
   let calls = 0;
+  let cant = false;
   const tokens = { prompt: 0, cached: 0 };
   for (let round = 0; ; round++) {
-    const last = round >= MAX_LOOKUP_ROUNDS;
+    const last = round >= MAX_LOOKUP_ROUNDS || cant;
     const left = lim.totalMs - (Date.now() - t0);
-    if (left <= 1000) throw new Error(`agent ran out of time after ${calls} calls`);
-    const r = await timed(call(turns, last), Math.min(lim.callMs, left), "agent call");
+    if (left <= 1000) {
+      // Out of time after a reply that said it can't: it isn't sent (not_yet).
+      if (cant) break;
+      throw new Error(`agent ran out of time after ${calls} calls`);
+    }
+    const r = await timed(call(turns, last, cant), Math.min(lim.callMs, left), "agent call");
     calls++;
     tokens.prompt += r.usage?.prompt ?? 0;
     tokens.cached += r.usage?.cached ?? 0;
@@ -341,6 +370,18 @@ export async function agentRead(
     // Acted, wrote instead, or looked again when it may only act: done.
     if (acted.length > 0 || looked.length === 0 || last) {
       finals = acted.length > 0 ? acted : r.text.trim() ? [{ name: "reply", args: { text: r.text.trim() } }] : [];
+      // Its own words said PandaWorld can't (owner, 2026-10-11: blocked
+      // before it's sent): told so, and asked once more without reply.
+      const only = finals.length === 1 && finals[0].name === "reply" ? finals[0] : null;
+      if (!cant && only && claimsInability(String(only.args.text ?? ""))) {
+        cant = true;
+        log.push("(said it can't: not sent)");
+        const answer = acted.length > 0
+          ? [{ functionResponse: { ...(only.id ? { id: only.id } : {}), name: "reply", response: { result: CANT_NOT_SENT } } }]
+          : [{ text: CANT_NOT_SENT }];
+        turns.push(r.turn, { role: "user", parts: answer });
+        continue;
+      }
       break;
     }
     // Look it up, answer the model, and let it decide.
