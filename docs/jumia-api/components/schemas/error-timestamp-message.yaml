@@ -1,0 +1,31 @@
+type: object
+title: timestampError
+description: |-
+  Returned by the **Orders** and **Payments** endpoints (VCS) for a subset of failures — invalid
+  arguments, access denied, and unhandled server errors — and by the **Shops** and **Feeds**
+  endpoints for every failure, where it is the Spring Boot default error body.
+
+  On Shops and Feeds the body carries `path` and no `message`. On Orders and Payments it carries
+  `message` and no `path`.
+properties:
+  timestamp:
+    type: string
+    format: date-time
+    description: When the error occurred.
+  status:
+    type: integer
+    format: int32
+    description: HTTP status code, repeated in the body.
+  error:
+    type: string
+    description: 'Reason phrase for the status code. Example: Unauthorized.'
+  message:
+    type: string
+    description: Human-readable description of what went wrong. Absent on Shops and Feeds.
+  path:
+    type: string
+    description: 'The request path, including the `/api/vendor` prefix. Only present on Shops and Feeds.'
+required:
+  - timestamp
+  - status
+  - error

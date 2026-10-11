@@ -1,0 +1,69 @@
+# Jumia Vendor API: error messages
+
+From vendorcenter.jumia.com/api-docs/text-files/error-messages.html (kept as text).
+
+- Error Message
+- Product name or translations [ ] contains Brand name [ ].
+- Product name or translations [ ] contains Seller name [ ] or Company name [ ].
+- The column [ ] is missing from the file.
+- Attribute [ ] with invalid value [ ].
+- The Global Sale Price StartAt and Sale Price EndAt must be bigger than the current date.
+- A product with the Barcode EAN [ ] already exists.
+- Product Main Image [https://...] download or storage failed.
+- Category not found by Code [ ]
+- Failed to run quality check on your product. Please reach out to Support
+- Product with variation [ ] already exists in parent sku [ ], Please create the product with a different parent SKU
+- The submitted currency [ ] is different from the shop default currency [ ]
+- You have referred to a trademark that is protected, but you have not accurately specified the corresponding brand of the product.
+- Global Sale Price discount [{0}%] must be equal or less than [{1}%]
+- Selected primary category [ ] has a different attribute list than Category [ ]. Please use the same category as the Product Set.
+- The Global Sale Price StartAt is after than Sale Price EndAt.
+- The Global Sale Price should not be zero.
+- The Global Sale Price should not be greater than or equal Price.
+- Product Name [ ] has prohibited characters [ ]
+- Product Name [ ] has prohibited characters [ ] not allowed for language [ ].
+- Duplicate Variation on Product with seller sku [ ] and Product set parent sku [ ]
+- An error occurred while processing the current product creation request. Please contact the support team.
+- Connection timeout while connecting to specified Image URL [http://...].
+- Image [ ] should be a link.
+- Product Image [ ] extension [gif] is not allowed. The available image extension list are [[JPEG, JPG, PNG]].
+- Product Image [ ] Dimensions Height X should be between 200 and 3000 and Width Y should be between 200 and 3000.
+- The Product with seller sku [ ] already exists for seller [ ]
+- Attribute [ ] with the value [ ] should be a number number without decimals.
+- Attribute [ ] should have between [X] to [Y] characters.
+- Image has invalid link [http://...].
+- The [ ] cannot be updated since the product has been already approved in at least one country.
+- The product [ ] does not have defined a valid variation.
+- The user does not have permissions to the provided shop.
+- The Attribute [ ] contains the restricted words : [ ];
+- EndAt is mandatory when Sale Price is filled.
+- StartAt is mandatory when Sale Price is filled.
+- The [MainImage] is mandatory and cannot be empty.
+- The initial Stock is mandatory in order to create a Product.
+- Column [ ] is missing.
+- Column [ ] has invalid value [ ].
+- File contains duplicate columns [[ ]].
+- The Global Sale Price cannot have more than two decimal places.
+- Required field [Product.Brand.Code] is missing or null.
+- Additional Category <category> is not related to Primary Category
+- Additional Category is the same as Primary Category
+- Category Attribute Set not found using Category code <code> and name <name>
+- Attribute [{0}] not found on payload
+- The attribute [{0}] is missing validations associated. Please contact the support
+- The attribute [{0}] with the value [{1}] is a not valid number.
+- The attribute [{0}] with the value [{1}] is a not valid number with decimal [{2}]
+- The attribute [{0}] with the value [{1}] is a not valid number without decimals
+- The attribute [{0}] with the value [{1}] should not be null or a negative value
+- Attribute [{0}] should have a value with a length between [{1}] and [{2}].
+- Attribute [{0}] with language [{1}] should have a value with a length between [{2}] and [{3}].
+- The attribute [{0}] with value [{1}] should be in accordance to the format [{2}]
+- Attribute [{0}] with value [{1}] should be a boolean.
+- Global Sale Price discount [{0}%] must be equal or bigger than [{1}%]
+- The Global Price [{0}] must be equal or more than [{1}].
+- The Global Price [{0}] must be equal or less than [{1}].
+- The Global Price cannot have more than two decimal places.
+- The Global Price should not be a negative value.
+- The Global Price should not be zero.
+- The Global Price is mandatory in order to create a Product.
+- The Global Sale Price should not be a negative value.
+- The Global StartAt and EndAt are mandatory when Sale Price is filled.

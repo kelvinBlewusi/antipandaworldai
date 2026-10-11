@@ -1,0 +1,143 @@
+openapi: 3.0.3
+info:
+  title: 'VC - Global Product Management (GPM) & Global Order Processing (GOP) API'
+  version: 'latest'
+  x-logo:
+    url: images/Jumia-Logo.png
+    backgroundColor: '#FFFFFF'
+    altText: Jumia logo
+  description:
+    $ref: './text-files/version-control-&-intro.md'
+  license:
+    name: 'Not applicable'
+    url: ' '
+servers:
+  - url: 'https://vendor-api-staging.jumia.com'
+    description: Staging
+  - url:  'https://vendor-api.jumia.com'
+    description: Live
+tags:
+  - name: Step-by-Step Authentication
+    description:
+      $ref: './text-files/step-by-step-auth-description.md'
+  - name: Endpoints
+    description: |-
+      The three endpoints used to obtain an Access Token. None of them require a Bearer token.
+
+      Which ones you use depends on your application type — see
+      [Step-by-Step Authentication](#tag/Step-by-Step-Authentication). Self Authorization applications
+      only need the [Token endpoint](#tag/Endpoints/operation/post-token).
+  - name: Shops
+    description: Shops related requests.
+  - name: Products
+    description: Products related requests.
+  - name: Catalog
+    description: Catalog related requests.
+  - name: Consignment
+    description: Consignment related requests.
+  - name: Payments
+    description: Payments related requests.
+  - name: Orders
+    description: Orders related requests.
+  - name: Product Creation
+    description: 
+      $ref: './text-files/error-messages.md'
+x-tagGroups:
+  - name: Authentication
+    tags:
+      - Step-by-Step Authentication
+      - Endpoints
+  - name: GPM API Endpoints
+    tags:
+      - Shops
+      - Products
+      - Catalog
+      - Consignment
+      - Payments
+  - name: GOP API Endpoints
+    tags:
+      - Orders
+  - name: API Error Messages
+    tags:
+      - Product Creation
+paths:
+  /shops:
+    $ref: './paths/shops/shops.yaml'
+  /shops-of-master-shop:
+    $ref: './paths/shops/shops-of-master-shop.yaml'
+  /catalog/brands:
+    $ref: './paths/catalog/catalog@brands.yaml'
+  /catalog/categories:
+    $ref: './paths/catalog/catalog@categories.yaml'
+  /catalog/products:
+    $ref: './paths/catalog/catalog@products.yaml'
+  /catalog/attribute-sets/{id}:
+    $ref: './paths/catalog/catalog@attribute-sets@{id}.yaml'
+  /feeds/{id}:
+    $ref: './paths/feeds/feeds@{id}.yaml'
+  /feeds/products/stock:
+    $ref: './paths/feeds/feeds@products@stock.yaml'
+  /feeds/products/price:
+    $ref: './paths/feeds/feeds@products@price.yaml'
+  /feeds/products/status:
+    $ref: './paths/feeds/feeds@products@status.yaml'
+  /feeds/products/create:
+    $ref: './paths/feeds/feeds@products@create.yaml'
+  /feeds/products/update:
+    $ref: './paths/feeds/feeds@products@update.yaml'
+  /consignment-order:
+    $ref: './paths/consignment/consignment-order.yaml'
+  /consignment-order/{purchaseOrderNumber}:
+    $ref: './paths/consignment/consignment-order@{purchaseOrderNumber}.yaml'
+  /consignment-stock:
+    $ref: './paths/consignment/consignment-stock.yaml'
+  /payout-statement:
+    $ref: './paths/payments/payout-statement.yaml'
+  /catalog/stock:
+    $ref: './paths/catalog/catalog@stock.yaml'
+  /catalog/stock/salesorderitem/{orderItemSid}:
+    $ref: './paths/catalog/catalog@stock@salesorderitem@{orderItemSid}.yaml'
+  /login:
+    $ref: './paths/authentication/login.yaml'                   
+  /callback:
+    $ref: './paths/authentication/application-redirect-uri.yaml'
+  /token:
+    $ref: './paths/authentication/token.yaml'
+  /orders:
+    $ref: './paths/orders/orders.yaml'
+  /orders/cancel:
+    $ref: './paths/orders/orders@cancel.yaml'
+  /orders/items:
+    $ref: './paths/orders/orders@items.yaml'
+  /orders/pack:
+    $ref: './paths/orders/orders@pack.yaml'
+  /orders/print-labels:
+    $ref: './paths/orders/orders@print-labels.yaml'
+  /orders/ready-to-ship:
+    $ref: './paths/orders/orders@ready-to-ship.yaml'
+  /orders/shipment-providers:
+    $ref: './paths/orders/orders@shipment-providers.yaml'
+  /v2/orders/pack:
+    $ref: './paths/orders/v2@orders@pack.yaml'  
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT 
+      description: |-
+        [Bearer Token Reference](https://oauth.net/2/bearer-tokens/)
+
+        Every request must carry the Access Token obtained from the
+        [Token endpoint](#tag/Endpoints/operation/post-token), regardless of application type.
+
+        Concatenate the word `Bearer`, a single space, and the Access Token:
+
+        `Authorization: Bearer <Access Token>`
+
+        Access Tokens are JSON Web Tokens (JWT) and are short-lived. Read `expires_in` from the token
+        response to know how long the current one is valid for — do not hardcode a duration.
+
+        To obtain a token, see [Step-by-Step Authentication](#tag/Step-by-Step-Authentication).
+security:
+  - bearerAuth: []    

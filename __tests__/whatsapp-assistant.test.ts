@@ -1229,7 +1229,7 @@ describe("honest \"can't\" (owner, 2026-10-11)", () => {
     expect(parseAction('{"type":"capability","what":"live_price"}', "can you change prices?", [], links))
       .toEqual({ type: "reply", text: expect.stringMatching(/^Yes: .*make the kettle 150/), link: null });
     expect(parseAction('{"type":"capability","what":"delete_product"}', "can you delete products?", [], links))
-      .toEqual({ type: "reply", text: expect.stringContaining("Jumia's API can't delete products"), link: "vendor_center" });
+      .toEqual({ type: "reply", text: expect.stringContaining("Jumia only lets a product be deleted in Vendor Center"), link: "vendor_center" });
     // Not built yet: its own answer, and noted.
     expect(parseAction('{"type":"capability","what":"translations"}', "can you list in french?", [], links))
       .toMatchObject({ type: "not_yet", outside: false, text: expect.stringContaining("in English for now") });

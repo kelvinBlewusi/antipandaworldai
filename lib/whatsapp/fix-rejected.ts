@@ -74,15 +74,15 @@ export function fixPlan(action: QcAction, name: string, reason: string, pickerUr
             : `Send it like "add <it> to the ${short}'s description" and I'll add it.`),
       };
     case "ask_price":
-      return { kind: "say", vendorCenter: true, text: `🔍 *${shorten(name, 60)}*: Jumia's quality check flagged the price${action.why}. Jumia only takes a price change through its API once a product has been approved, so change the price in Vendor Center (${REJECTED_PATH}) and send it for checking again there.` };
+      return { kind: "say", vendorCenter: true, text: `🔍 *${shorten(name, 60)}*: Jumia's quality check flagged the price${action.why}. Before a product is approved, Jumia only lets its price be changed in Vendor Center, so change the price there (${REJECTED_PATH}) and send it for checking again there.` };
     case "ask_photos":
-      return { kind: "say", vendorCenter: true, text: `📷 *${shorten(name, 60)}*: Jumia's quality check rejected the photos${action.why}. Jumia doesn't let its API change a product's main photo, so change them in Vendor Center (${REJECTED_PATH}), or list it again here with new photos (clear, well lit, plain background).` };
+      return { kind: "say", vendorCenter: true, text: `📷 *${shorten(name, 60)}*: Jumia's quality check rejected the photos${action.why}. Jumia only lets a product's main photo be changed in Vendor Center, so change them there (${REJECTED_PATH}), or list it again here with new photos (clear, well lit, plain background).` };
     case "switch_category":
-      return { kind: "say", vendorCenter: true, text: `🗂️ *${shorten(name, 60)}*: Jumia's quality check says it belongs in "${action.path}". Jumia doesn't let its API move a product to another category, so change it in Vendor Center (${REJECTED_PATH}), or list it again here and I'll put it there.${findIt}` };
+      return { kind: "say", vendorCenter: true, text: `🗂️ *${shorten(name, 60)}*: Jumia's quality check says it belongs in "${action.path}". Jumia only lets a product move to another category in Vendor Center, so change it there (${REJECTED_PATH}), or list it again here and I'll put it there.${findIt}` };
     case "ask_category":
-      return { kind: "say", vendorCenter: true, text: `🗂️ *${shorten(name, 60)}*: Jumia's quality check says the category is wrong, without saying which is right. Jumia doesn't let its API move a product to another category, so change it in Vendor Center (${REJECTED_PATH}), or list it again here in the right one.${findIt}` };
+      return { kind: "say", vendorCenter: true, text: `🗂️ *${shorten(name, 60)}*: Jumia's quality check says the category is wrong, without saying which is right. Jumia only lets a product move to another category in Vendor Center, so change it there (${REJECTED_PATH}), or list it again here in the right one.${findIt}` };
     case "ask_details":
-      return { kind: "say", vendorCenter: true, text: `🔍 *${shorten(name, 60)}*: Jumia's API didn't send why it was rejected. Open it in Vendor Center (${REJECTED_PATH}), copy Jumia's reason, and send it here as "fix the ${short}: <the reason>". I'll work out the fix.` };
+      return { kind: "say", vendorCenter: true, text: `🔍 *${shorten(name, 60)}*: Jumia didn't send why it was rejected with the product. Open it in Vendor Center (${REJECTED_PATH}), copy Jumia's reason, and send it here as "fix the ${short}: <the reason>". I'll work out the fix.` };
     case "cannot_fix":
       return { kind: "say", text: `⚠️ *${shorten(name, 60)}*: ${action.why}` };
   }

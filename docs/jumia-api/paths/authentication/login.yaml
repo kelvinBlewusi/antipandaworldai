@@ -1,0 +1,90 @@
+get:
+  tags:
+    - Endpoints
+  summary: Start the Authorization Code Flow
+  description: |-
+    Redirect the user's browser to this URL to start the Authorization Code Flow.
+
+    **Web Applications only.** Self Authorization applications have no login prompt — they start from the
+    Refresh Token issued in Vendor Center instead.
+
+    After a successful login the user is redirected to your
+    [Redirect URI](#tag/Endpoints/operation/get-Application-Redirect-URI) carrying a one-time Authorization
+    Code, which you then exchange at the [Token endpoint](#tag/Endpoints/operation/post-token).
+
+    Send the user through this endpoint again whenever the Access Token expires — a Web Application has no
+    Refresh Token to fall back on.
+  operationId: get-login
+  parameters:
+    - in: query
+      name: client_id
+      required: true
+      schema:
+        type: string
+      description: Your Application Client Id attribute
+    - in: query
+      name: response_type
+      required: true
+      schema:
+        type: string
+        enum:
+          - code
+    - in: query
+      name: scope
+      required: true
+      schema:
+        type: string
+        default: openid
+      description: |-
+        Space-delimited list of requested scopes. `openid` is required.
+
+        Vendor Center additionally grants `email`, `profile` and `offline_access` whether or not you ask
+        for them, so the `scope` returned by the [Token endpoint](#tag/Endpoints/operation/post-token) is
+        wider than what you requested. **Requesting `offline_access` does not cause a Refresh Token to be
+        issued** — that depends only on your application type.
+    - in: query
+      name: prompt
+      required: true
+      schema:
+        type: string
+        enum:
+          - login
+    - in: query
+      name: redirect_uri
+      required: true
+      schema:
+        type: string
+      description: Should be the same that you previously configured on your Application.
+    - in: query
+      name: state
+      schema:
+        type: string
+      description: 'Optional value. If present, the same value will be returned on the RedirectURI.'
+  responses:
+    '200':
+      description: 'OK. After a successful login, the user is redirected to RedirectURI.'
+    '400':
+      $ref: '../../components/responses/auth/oauth-error400.yaml'
+    '401':
+      $ref: '../../components/responses/auth/oauth-error401.yaml'
+    '403':
+      $ref: '../../components/responses/auth/oauth-error403.yaml'
+    '500':
+      $ref: '../../components/responses/auth/oauth-error500.yaml'
+  x-codeSamples:
+  - lang: 'curl'
+    source:
+      $ref: '../../code-samples/curl/login.txt'      
+  - lang: 'python'
+    source: 
+      $ref: '../../code-samples/python/login.py'      
+  - lang: 'java'
+    source: 
+      $ref: '../../code-samples/java/login.java'      
+  - lang: 'go'
+    source: 
+      $ref: '../../code-samples/go/login.go'      
+  - lang: 'php'
+    source: 
+      $ref: '../../code-samples/php/login.php'      
+  security: []

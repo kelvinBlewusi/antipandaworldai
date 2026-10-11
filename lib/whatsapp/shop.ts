@@ -1127,7 +1127,7 @@ export async function answerProducts(userId: string, phone: string, filter: "all
     const hint = filter === "inactive" ? "Tell me which to turn ON, e.g. \"turn on the blender\"."
       // Jumia's API often gives no reason (owner's web chat, 2026-10-08: "rejection reasons" had none to show).
       : list.some((p) => p.qcReason) ? "Say \"fix the <name>\" and I'll work out the fix, or \"fix my rejected products\" to pick one."
-      : "Jumia didn't send the reasons through its API. Say \"fix the <name>\" and I'll work out what I can, or check the reason in Vendor Center.";
+      : "Jumia didn't send the reasons with the products. Say \"fix the <name>\" and I'll work out what I can, or check the reason in Vendor Center.";
     await sendRich(phone, [head, ...lines, ...(list.length > 40 ? [`+${list.length - 40} more`] : []), "", hint].join("\n"), [
       { kind: "heading", text: head },
       filter === "inactive"
@@ -1135,7 +1135,7 @@ export async function answerProducts(userId: string, phone: string, filter: "all
           rows: list.slice(0, 40).map((p) => [shorten(label(p), 70), stockCell(p.stock, LOW_STOCK), p.price != null ? formatAmount(p.price, p.currency || ctx.currency, ctx.jc) : "?"]),
           ...(list.length > 40 ? { more: `+${list.length - 40} more` } : {}) }
         : { kind: "table", columns: ["Product", "Jumia's reason"],
-          rows: list.slice(0, 40).map((p) => [shorten(label(p), 70), p.qcReason ? shorten(p.qcReason, 160) : cell("Not given by Jumia's API", "neutral")]),
+          rows: list.slice(0, 40).map((p) => [shorten(label(p), 70), p.qcReason ? shorten(p.qcReason, 160) : cell("Not sent by Jumia", "neutral")]),
           ...(list.length > 40 ? { more: `+${list.length - 40} more` } : {}) },
       { kind: "text", text: hint },
     ]);

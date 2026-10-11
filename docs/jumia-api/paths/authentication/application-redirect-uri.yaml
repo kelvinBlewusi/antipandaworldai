@@ -1,0 +1,74 @@
+get:
+  tags:
+    - Endpoints
+  summary: Receive the Authorization Code on your Redirect URI
+  description: |-
+    This is **your** endpoint, not ours. After a successful login, our authorization server redirects the
+    user's browser to the Redirect URI you registered, appending the values below as **query string
+    parameters**.
+
+    Your application reads `code` from the query string and exchanges it at the
+    [Token endpoint](#tag/Endpoints/operation/post-token). The code is single-use and short-lived.
+
+    Example of the redirect your server will receive:
+
+    ```
+    GET https://your-app.example.com/callback?code=<authorization-code>&state=<your-state>&session_state=<session-id>
+    ```
+  operationId: get-Application-Redirect-URI
+  parameters:
+    - in: query
+      name: code
+      required: true
+      schema:
+        type: string
+      description: |-
+        The one-time Authorization Code. Exchange it at the
+        [Token endpoint](#tag/Endpoints/operation/post-token) — it cannot be reused, and it is not a
+        Refresh Token.
+    - in: query
+      name: state
+      schema:
+        type: string
+      description: |-
+        The exact value you sent on the [Login endpoint](#tag/Endpoints/operation/get-login). Compare it
+        against what you stored before trusting the callback.
+    - in: query
+      name: session_state
+      required: true
+      schema:
+        type: string
+      description: Identifier of the session that was established.
+  servers:
+    - url: 'https://{your-domain}'
+      variables:
+        your-domain:
+          default: your-app.example.com
+          description: Your own host. The path shown here is an example — the Redirect URI you registered can be any path.
+      description: |-
+        Your own server, not Jumia's. Substitute the host and path of the Redirect URI you registered for
+        your application.
+  responses:
+    '200':
+      description: |-
+        Your application handled the callback and rendered a page. The status code here is whatever your
+        own endpoint returns — it is not produced by Jumia.
+    '302':
+      description: |-
+        Your application handled the callback and redirected the user onward, which is the usual pattern.
+        Also not produced by Jumia.
+    '400':
+      description: |-
+        Returned by **our** authorization server instead of redirecting, when the callback cannot be
+        trusted — typically an unknown `client_id`, or a `redirect_uri` that does not exactly match the one
+        registered for the application. The user never reaches your Redirect URI in this case.
+      content:
+        application/json:
+          schema:
+            $ref: '../../components/schemas/oauth-error.yaml'
+          examples:
+            Redirect URI does not match the registered value:
+              value:
+                error: invalid_request
+                error_description: The redirect_uri does not match the one registered for this application
+  security: []

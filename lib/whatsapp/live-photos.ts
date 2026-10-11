@@ -56,7 +56,7 @@ export async function startAddPhotos(userId: string, phone: string, query: strin
   const have = set.data.images.length;
   const room = MAX_PRODUCT_IMAGES - have;
   if (room <= 0) {
-    await sendTextIfConfigured(phone, `${shorten(product.name, 60)} already has ${have} photos, the most Jumia takes. Jumia doesn't let its API remove or swap photos, so that's done in Vendor Center.`);
+    await sendTextIfConfigured(phone, `${shorten(product.name, 60)} already has ${have} photos, the most Jumia takes. Jumia only lets photos be removed or swapped in Vendor Center.`);
     return "photos full";
   }
   const change: LiveChange = { kind: "content", fields: { images: [] } };
@@ -72,7 +72,7 @@ export async function startAddPhotos(userId: string, phone: string, query: strin
   await updateSession(phone, { assistantPending: ask });
   await sendButtonsIfConfigured(phone,
     `📷 Send up to ${room} more photo${room === 1 ? "" : "s"} for *${shorten(product.name, 80)}* (it has ${have}). Clear, well lit, plain background, no watermarks. ` +
-    "Its main photo stays first: Jumia doesn't let its API change that one. Tap Done when they're all here.",
+    "Its main photo stays first: Jumia only lets that one be changed in Vendor Center. Tap Done when they're all here.",
     [DONE]);
   return `asked for photos (${room}) for ${product.sellerSku}`;
 }

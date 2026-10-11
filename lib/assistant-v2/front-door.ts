@@ -295,7 +295,7 @@ function readerPrompt(areas: Area[], input: FrontDoorInput): string {
     "", "About this seller:", ...input.seller,
     ...(input.memory ? ["", "What you remember about them from earlier (to understand them; never quote it):", input.memory] : []),
     "", "What PandaWorld can do (all true; nothing else is: there is no team doing things by hand):", capabilities(input.listingCost ?? 2),
-    "", "Not possible from here (Jumia's API doesn't allow it, or it isn't built): answer these with cannot:", cannotList(),
+    "", "Not possible from here (Jumia only allows it in Vendor Center, or nobody can): answer these with cannot:", cannotList(),
     "", "What the chat does, by key (for capability):", canList(),
     ...(replyArea ? [
       "", siteGuide(),

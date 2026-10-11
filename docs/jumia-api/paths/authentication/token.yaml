@@ -1,0 +1,199 @@
+post:
+  tags:
+    - Endpoints
+  summary: Obtain an Access Token
+  description: |-
+    Exchanges an Authorization Code or a Refresh Token for an Access Token.
+
+    **The `grant_type` you use is decided by your application type, not by you.** It is fixed when the
+    application is created in Vendor Center and cannot be changed afterwards.
+
+    | Your application type | Use `grant_type` | Do you get a `refresh_token` back? |
+    |---|---|---|
+    | **Web Application** | `authorization_code` | **No — never.** See below. |
+    | **Self Authorization** | `refresh_token` | Yes, a new one with every call. |
+
+    Sending the wrong `grant_type` for your application returns
+    `400 unauthorized_client`.
+
+    ### Web Applications do not receive a Refresh Token
+
+    A Web Application is registered for the `authorization_code` grant only, so the response contains
+    **no `refresh_token` and no `refresh_expires_in`**. This is expected behaviour, not an error, and it
+    holds even though `offline_access` appears in the returned `scope`.
+
+    When the Access Token expires, send the user through the
+    [Login endpoint](#tag/Endpoints/operation/get-login) again to obtain a fresh Authorization Code.
+
+    If your integration runs unattended and cannot show a login prompt, you need a **Self Authorization**
+    application instead — see [Step-by-Step Authentication](#tag/Step-by-Step-Authentication).
+
+    ### Access Token lifetime
+
+    Read `expires_in` from the response and refresh shortly before it elapses. Do not hardcode a
+    duration: it is configurable and has changed in the past.
+  operationId: post-token
+  parameters:
+    - in: header
+      name: Content-Type
+      required: true
+      schema:
+        type: string
+        default: application/x-www-form-urlencoded
+  requestBody:
+    required: true
+    content:
+      application/x-www-form-urlencoded:
+        schema:
+          oneOf:
+            - title: Authorization Code grant (Web Application)
+              type: object
+              description: Exchanges the one-time Authorization Code received on your Redirect URI.
+              properties:
+                grant_type:
+                  type: string
+                  enum:
+                    - authorization_code
+                client_id:
+                  type: string
+                  description: Your application's Client Id.
+                client_secret:
+                  type: string
+                  description: Your application's Client Secret, shown only once when the application was created.
+                code:
+                  type: string
+                  description: The one-time Authorization Code returned to your Redirect URI. It cannot be reused.
+                redirect_uri:
+                  type: string
+                  format: uri
+                  description: Must be identical to the Redirect URI registered for your application.
+              required:
+                - grant_type
+                - client_id
+                - client_secret
+                - code
+                - redirect_uri
+            - title: Refresh Token grant (Self Authorization)
+              type: object
+              description: |-
+                Exchanges a stored Refresh Token. A new Refresh Token is returned with every call — save it
+                and use it next time, otherwise you will eventually present an expired one.
+              properties:
+                grant_type:
+                  type: string
+                  enum:
+                    - refresh_token
+                client_id:
+                  type: string
+                  description: Your application's Client Id.
+                refresh_token:
+                  type: string
+                  description: |-
+                    The Refresh Token obtained from the **Generate Token** action in Vendor Center, or the
+                    one returned by your previous call to this endpoint.
+              required:
+                - grant_type
+                - client_id
+                - refresh_token
+  responses:
+    '200':
+      description: |-
+        OK. The Access Token was issued.
+
+        `refresh_token` and `refresh_expires_in` are present **only** for Self Authorization applications.
+        Absent fields are omitted from the body rather than returned as `null`.
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              access_token:
+                type: string
+                description: |-
+                  The Access Token. Send it on every authenticated request as the header
+                  `Authorization: Bearer <Access Token>`.
+              token_type:
+                type: string
+                description: Always `Bearer`.
+                example: Bearer
+              expires_in:
+                type: integer
+                description: |-
+                  Lifetime of the Access Token in seconds, counted from now. Read this value rather than
+                  assuming a fixed duration.
+                example: 86399
+              scope:
+                type: string
+                description: |-
+                  Space-delimited list of granted scopes.
+
+                  Vendor Center always grants `openid email profile offline_access`. **The presence of
+                  `offline_access` here does not mean a Refresh Token was issued** — whether you receive one
+                  depends solely on your application type.
+                example: openid email profile offline_access
+              id_token:
+                type: string
+                description: |-
+                  OpenID Connect identity token describing the authenticated user. Returned whenever the
+                  `openid` scope is granted, which is always the case for Vendor Center applications. It is
+                  not used to authenticate API calls — use `access_token` for that.
+              refresh_token:
+                type: string
+                description: |-
+                  **Self Authorization applications only.** A new Refresh Token, replacing the one you sent.
+                  Store it and use it on your next call. Web Applications never receive this field.
+              refresh_expires_in:
+                type: integer
+                description: |-
+                  **Self Authorization applications only.** Lifetime of the returned Refresh Token in
+                  seconds. Web Applications never receive this field.
+            required:
+              - access_token
+              - token_type
+              - expires_in
+          examples:
+            Authorization Code grant (Web Application):
+              description: |-
+                No `refresh_token` is present, and none will ever be. `offline_access` appears in `scope`
+                regardless.
+              value:
+                access_token: eyJhbGciOiJSUzI1NiIsInR5cCIgOiAiSldUIiwia2lkIiA6ICJleGFtcGxlIn0.<payload>.<signature>
+                token_type: Bearer
+                expires_in: 86399
+                id_token: eyJhbGciOiJSUzI1NiIsInR5cCIgOiAiSldUIiwia2lkIiA6ICJleGFtcGxlIn0.<payload>.<signature>
+                scope: openid email profile offline_access
+            Refresh Token grant (Self Authorization):
+              description: A new `refresh_token` is returned. Replace the stored one with it.
+              value:
+                access_token: eyJhbGciOiJSUzI1NiIsInR5cCIgOiAiSldUIiwia2lkIiA6ICJleGFtcGxlIn0.<payload>.<signature>
+                token_type: Bearer
+                expires_in: 86399
+                id_token: eyJhbGciOiJSUzI1NiIsInR5cCIgOiAiSldUIiwia2lkIiA6ICJleGFtcGxlIn0.<payload>.<signature>
+                scope: openid email profile offline_access
+                refresh_token: eyJhbGciOiJIUzI1NiIsInR5cCIgOiAiSldUIiwia2lkIiA6ICJleGFtcGxlIn0.<payload>.<signature>
+                refresh_expires_in: 86400
+    '400':
+      $ref: '../../components/responses/auth/oauth-error400.yaml'
+    '401':
+      $ref: '../../components/responses/auth/oauth-error401.yaml'
+    '403':
+      $ref: '../../components/responses/auth/oauth-error403.yaml'
+    '500':
+      $ref: '../../components/responses/auth/oauth-error500.yaml'
+  x-codeSamples:
+  - lang: 'curl'
+    source:
+      $ref: '../../code-samples/curl/token.txt'
+  - lang: 'python'
+    source:
+      $ref: '../../code-samples/python/token.py'
+  - lang: 'java'
+    source:
+      $ref: '../../code-samples/java/token.java'
+  - lang: 'go'
+    source:
+      $ref: '../../code-samples/go/token.go'
+  - lang: 'php'
+    source:
+      $ref: '../../code-samples/php/token.php'
+  security: []

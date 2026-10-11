@@ -80,13 +80,19 @@ describe("fixing a rejected product from the chat", () => {
     expect(value).toMatchObject({ kind: "say", text: expect.stringContaining("the shea butter cream's fda number is") });
   });
 
-  it("says plainly what Jumia's API can't change, with Vendor Center", () => {
+  it("says plainly what Jumia only allows in Vendor Center, with Vendor Center", () => {
     for (const action of [
       { kind: "ask_photos", why: "" }, { kind: "switch_category", path: "Home > Fans" }, { kind: "ask_category" }, { kind: "ask_price", why: "" }, { kind: "ask_details" },
     ] as const) {
       expect(fixPlan(action, "Neck Fan", "")).toMatchObject({ kind: "say", vendorCenter: true });
     }
     expect(fixPlan({ kind: "ask_details" }, "Neck Fan", "")).toMatchObject({ text: expect.stringContaining("fix the neck fan: <the reason>") });
+    // Never "API" to a seller (owner, 2026-10-11).
+    for (const action of [
+      { kind: "ask_photos", why: "" }, { kind: "switch_category", path: "Home > Fans" }, { kind: "ask_category" }, { kind: "ask_price", why: "" }, { kind: "ask_details" },
+    ] as const) {
+      expect((fixPlan(action, "Neck Fan", "") as { text: string }).text).not.toMatch(/\bAPI\b/);
+    }
   });
 
   it("knows a tap on the list", () => {
