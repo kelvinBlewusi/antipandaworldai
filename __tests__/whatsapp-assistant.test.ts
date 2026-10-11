@@ -482,6 +482,29 @@ describe("agent mode (the pilot, owner 2026-10-10)", () => {
     expect((db.tables.whatsapp_assistant_log as { raw: string }[])[0].raw).toMatch(/^\[agent found nothing to do: /);
   });
 
+  // Test runs of 11 Oct: "download a label" read as cannot("labels"), "link to vendor center" as cannot("vendor_center").
+  it("a \"can't\" for something the chat does, or a link, is sent back once with which list it's on", async () => {
+    db.tables.app_settings = [{ key: "assistant_agent", value: "all" }];
+    toolReplies.push(
+      [{ name: "cannot", args: { what: "vendor_center" } }],
+      [{ name: "reply", args: { text: "Here's Vendor Center:", link: "vendor_center" } }],
+    );
+    expect(await runAssistant("seller", "233", session(), "link to vendor center", "idle")).toBe("handled");
+    expect(toolTurns[1]).toContain('\\"vendor_center\\" is a link, not a key on Not possible');
+    expect(sent.at(-1)).toMatchObject({ kind: "cta", body: "Here's Vendor Center:" });
+
+    toolReplies.push([{ name: "cannot", args: { what: "labels" } }], [{ name: "capability", args: { what: "labels" } }]);
+    sent.length = 0;
+    expect(await runAssistant("seller", "233", session(), "download a label", "idle")).toBe("handled");
+    expect(toolTurns.at(-1)).toContain('\\"labels\\" is on What the chat does');
+    expect(sent.at(-1)?.body).toContain("I send its shipping label as a PDF");
+    // A real "can't" is answered straight away; a key on neither list is what PandaWorld doesn't do.
+    const calls = aiCalls;
+    toolReplies.push([{ name: "cannot", args: { what: "delete_product" } }]);
+    await runAssistant("seller", "233", session(), "delete the kettle", "idle");
+    expect(aiCalls).toBe(calls + 1);
+  });
+
   it("falls back to the front door when it fails", async () => {
     db.tables.app_settings = [{ key: "assistant_agent", value: "all" }];
     aiReplies.push('{"area":"orders"}', '{"type":"orders"}');

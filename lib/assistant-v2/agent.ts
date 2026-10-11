@@ -33,7 +33,7 @@
 import { callGeminiWithTools, type GeminiTool, type GeminiTurn, type ThinkingLevelName } from "@/lib/ai/gemini-client";
 import { withAiUsageContext } from "@/lib/ai/usage";
 import { siteGuide } from "@/lib/whatsapp/site-guide";
-import { canList, cannotList } from "@/lib/jumia/capabilities";
+import { canList, cannotAnswer, cannotList, capability } from "@/lib/jumia/capabilities";
 import { capabilities, claimsInability, parseAction, type AssistantAction } from "@/lib/whatsapp/assistant";
 import { findProducts, type ShopProduct } from "@/lib/jumia/shop";
 import { EXAMPLES, NEVER_CANT, NOT_YET_EXAMPLES, contextText, type Clarify, type FrontDoorInput, type FrontDoorUsage } from "@/lib/assistant-v2/front-door";
@@ -88,7 +88,7 @@ export function agentSystem(listingCost = 2): string {
     "The first message tells you where the seller is, what they've been shown, who they are, and their new message.",
     "", "What PandaWorld can do (all true; nothing else is: there is no team doing things by hand):", capabilities(listingCost),
     "", "Not possible from here (answer these with cannot):", cannotList(),
-    "", "What the chat does, by key (for capability, and not_yet's instead):", canList(),
+    "", "What the chat does, by key (for capability):", canList(),
     "", siteGuide(),
     "",
     "Examples (message → the tool and its arguments, as JSON):",
@@ -100,7 +100,7 @@ export function agentSystem(listingCost = 2): string {
     "- Read the message for what they want now. The open question is context: a message that answers it belongs with what the question was about (a description the bot asked for a live product is content_change); anything else is a new request.",
     "- Which product: from the products you last listed (\"the approved ones\" are those whose quality check passed, ON or OFF; \"my latest uploaded product\" is the first of a list of their newest), the products the message names, or the conversation (\"those products\" after an order: that order's products). Put their names in the tool. Only when you still can't tell, look it up (find_products), at most twice; then call the tool for what they asked.",
     "- find_products is never an answer: stock, prices, counts and lists come from the tools that read them (product_info, stock, shop, research). Never tell them a product isn't in their shop.",
-    "- product_details is Jumia's own data on one product now: a question about that product (what's in the box, its colour or material, its sizes, its barcode, why it was rejected, what its description says) is answered from it with reply, in a line or two. To show its photos: product_photos; its description to read or edit: product_text; where it is (ON/OFF, stock, price): product_info.",
+    "- product_details is Jumia's own data on one product now: a question about that product (what's in the box, its colour or material, its sizes, its barcode, why it was rejected, what its description says) is answered from it with reply, in a line or two. To show its photos: product_photos; to show its description as Jumia has it: product_text; where it is (ON/OFF, stock, price): product_info. A new description or name for a product in their shop is content_change, never edit (edit is only for drafts).",
     "- Every number and word you put in a tool's arguments must be in their message (or, for which product, the recent conversation). Never guess or invent a value.",
     "- You don't have their products' descriptions, highlights, prices, stock or sales unless product_details just gave them: never make them up; read them (product_details, or the tool that shows them).",
     "- Drafts are only the ones listed under \"Drafts in their batch\": shown with draft_text, changed with edit, by their numbers (one edit call per different change: each entry of the examples' \"edits\" is one call). A product already in their shop is read with product_text or product_info and changed with live_change, bulk or content_change, even while drafts wait.",
@@ -231,6 +231,23 @@ export function geminiAgentCall(spec: string, system: string, usage: FrontDoorUs
 const brief = (calls: ToolCall[]) => calls.map((c) => `${c.name}(${JSON.stringify(c.args).slice(0, 200)})`).join(" + ");
 
 /** What the model is told when its reply said it can't (claimsInability). */
+/**
+ * `cannot` with a key that isn't on Not possible but on What the chat does
+ * ("labels"), or a link's key ("vendor_center"): the test runs of 11 Oct
+ * after the tools for what Jumia allows. What it names can be done, so it's
+ * told which list the key is on and asked once more. A key on neither list
+ * stays what PandaWorld doesn't do (not_yet).
+ */
+export function misnamedCannot(key: string, links: Record<string, unknown>): string | null {
+  if (!key || cannotAnswer(key)) return null;
+  const c = capability(key);
+  if (c && (c.status === "chat" || c.status === "whatsapp")) {
+    return `Not sent: "${key}" is on What the chat does, not on Not possible. Call the tool that does what they ask, or capability when they ask whether you can.`;
+  }
+  if (key in links) return `Not sent: "${key}" is a link, not a key on Not possible. To send it, reply with it in link.`;
+  return null;
+}
+
 export const CANT_NOT_SENT = "Not sent: that reply says PandaWorld can't do something, or sends them to Vendor Center. Call the tool that does what they ask; cannot when it is on Not possible; capability when they ask whether you can; not_yet when PandaWorld doesn't do it (outside: true when it has nothing to do with Jumia, selling or PandaWorld).";
 
 /**
@@ -249,9 +266,10 @@ export async function agentRead(
   let finals: ToolCall[] = [];
   let calls = 0;
   let cant = false;
+  let renamed = false;
   const tokens = { prompt: 0, cached: 0 };
   for (let round = 0; ; round++) {
-    const last = round >= MAX_LOOKUP_ROUNDS || cant;
+    const last = round >= MAX_LOOKUP_ROUNDS || cant || renamed;
     const left = lim.totalMs - (Date.now() - t0);
     if (left <= 1000) {
       // Out of time after a reply that said it can't: it isn't sent (not_yet).
@@ -278,6 +296,15 @@ export async function agentRead(
           ? [{ functionResponse: { ...(only.id ? { id: only.id } : {}), name: "reply", response: { result: CANT_NOT_SENT } } }]
           : [{ text: CANT_NOT_SENT }];
         turns.push(r.turn, { role: "user", parts: answer });
+        continue;
+      }
+      // "cannot" for something the chat does, or a link: told which list it's on, asked once more.
+      const cannot = finals.length === 1 && finals[0].name === "cannot" ? finals[0] : null;
+      const misnamed = !renamed && !cant && cannot ? misnamedCannot(String(cannot.args.what ?? ""), input.links) : null;
+      if (cannot && misnamed) {
+        renamed = true;
+        log.push("(cannot with a key that isn't on Not possible: asked again)");
+        turns.push(r.turn, { role: "user", parts: [{ functionResponse: { ...(cannot.id ? { id: cannot.id } : {}), name: "cannot", response: { result: misnamed } } }] });
         continue;
       }
       break;
