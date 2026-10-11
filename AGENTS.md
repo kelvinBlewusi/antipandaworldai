@@ -2953,6 +2953,22 @@ Jumia allows nothing, the answer says what can be done instead.
   on neither list is still not_yet. The list's header went back to "(for
   capability)", and the product_details rule no longer says "edit" for a
   live product's description (`edit` is the drafts' tool).
+- **Scores (256 cases)**: agent mode 241 and 241 before that fix, 245 after
+  it (run fe158c59; it was 236/248). The front door is at 233 (it was
+  227/248). The 8 new cases: agent 8/8, front door 7/8 (it read "other
+  shops' prices" as research). Still wrong in agent mode:
+  - draft-variation-order/-typo: the size names are written out, not the category's S/M/L;
+  - help-autofills;
+  - list-five-review;
+  - live-approved-on-or-off / -ones;
+  - live-bulk-answer-0;
+  - live-describe-latest: sent to Vendor Center, then not_yet;
+  - orders-labels-cancelled;
+  - shop-name-malta: read as fix_rejected;
+  - shop-name-wig: read with product_details, then answered.
+  live-description-pasted passed on its "reply" answer: the model wrote
+  the field's own description ("New description, copied whole.") as the
+  text, the checks dropped it, and the seller is asked what to change.
 - **Not yet confirmed in practice**: an update to a rejected product being
   taken and re-checked by Jumia. The spec allows it, and two such fixes for
   the owner's shop are waiting for the owner's tap.
