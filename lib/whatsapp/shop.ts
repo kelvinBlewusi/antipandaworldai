@@ -47,7 +47,7 @@ import { getCategoryByCode } from "@/lib/jumia/categories";
 import { COUNTRY_FEES, commissionOn, feeCategoryForPath, itemFeeFor, payoutAt } from "@/lib/marketing/country-fees";
 import { calculatorPathFor, type JumiaCountryCode } from "@/lib/marketing/countries";
 import {
-  changedPrice, fetchPayouts, fetchProductSet, fetchStock, findOrderByNumber, heldByOrders, findProducts, fromRow, localUpdate, orderStatusWord, ordersCreatedSince,
+  changeable, changedPrice, fetchPayouts, fetchProductSet, fetchStock, findOrderByNumber, heldByOrders, findProducts, fromRow, localUpdate, orderStatusWord, ordersCreatedSince,
   newVariationSku, ordersWithStatus, pctPrice, refreshProducts, saveProducts, sendLiveChange, sendLiveChanges, shopProducts, summarizeOrders, syncCatalog,
   type ContentFields, type LiveChange, type ProductSet, type ShopProduct,
 } from "@/lib/jumia/shop";
@@ -123,6 +123,18 @@ export async function shopContext(userId: string, phone: string, feature: Featur
 const capitalise = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 export const shorten = (s: string, max: number) => (s.length <= max ? s : `${s.slice(0, max - 1).trimEnd()}…`);
 export const label = (p: ShopProduct) => `${p.name}${p.variation && p.variation !== "..." ? ` (${p.variation})` : ""}`;
+
+/**
+ * Why Jumia can't change a product's stock, price or ON/OFF yet: it isn't on
+ * Jumia in their country (lib/jumia/shop.ts changeable). Said instead of
+ * sending a change Jumia would refuse.
+ */
+export function notOnJumiaText(p: ShopProduct): string {
+  const name = `*${shorten(label(p), 80)}*`;
+  if (p.qcStatus === "REJECTED") return `${name} isn't on Jumia: its quality check rejected it, and Jumia only changes stock, price and ON/OFF for a product it has approved. Say *fix rejected* to fix it.`;
+  if (p.qcStatus === "PENDING" || p.qcStatus === "NOT_READY_TO_QC") return `${name} isn't on Jumia yet: it's waiting for Jumia's quality check, and Jumia only changes stock, price and ON/OFF once it's approved.`;
+  return `${name} isn't on Jumia in your country, so Jumia can't change its stock, price or ON/OFF.`;
+}
 
 export async function sendLong(phone: string, text: string): Promise<void> {
   for (const part of splitForText(text)) await sendTextIfConfigured(phone, part);
@@ -288,9 +300,15 @@ export async function proposeLiveChange(
     await sendTextIfConfigured(phone, `I couldn't find "${shorten(queries[0] ?? "", 60)}" among your ${products.length} Jumia products. Try its name as it shows on Jumia, or its SKU.`);
     return "not found";
   }
+  // Only what's on Jumia in their country can change; the rest is said, not sent.
+  const onJumia = found.filter(changeable);
+  if (onJumia.length === 0) {
+    await sendTextIfConfigured(phone, found.length === 1 ? notOnJumiaText(found[0]) : found.slice(0, 5).map(notOnJumiaText).join("\n"));
+    return `not on Jumia: ${found.map((m) => m.sellerSku).join(", ")}`;
+  }
   // "Change its sale price…" right after changing one of these: that one.
-  const preferred = opts.preferSid ? found.find((m) => m.sid === opts.preferSid) : undefined;
-  const matches = preferred ? [preferred] : found;
+  const preferred = opts.preferSid ? onJumia.find((m) => m.sid === opts.preferSid) : undefined;
+  const matches = preferred ? [preferred] : onJumia;
 
   const db = createServerClient();
   const one = matches.length === 1 ? matches[0] : null;
@@ -341,7 +359,9 @@ async function proposeGroup(
   ctx: Ctx, products: ShopProduct[], queries: string[], change: LiveChange, opts: { preferSid?: string | null; all?: boolean },
 ): Promise<string> {
   const { userId, phone } = ctx;
-  const { targets, missing, unclear } = groupTargets(products, queries, opts);
+  const grouped = groupTargets(products, queries, opts);
+  const { missing, unclear } = grouped;
+  let targets = grouped.targets;
   if (missing.length > 0 || unclear.length > 0) {
     const lines: string[] = ["I haven't changed anything yet:"];
     for (const q of missing) lines.push(`• I couldn't find "${shorten(q, 50)}" among your Jumia products.`);
@@ -353,6 +373,16 @@ async function proposeGroup(
     lines.push("", "Send it again with each product's name as it shows on Jumia, or its SKU" + (unclear.length > 0 ? ", or say \"all\" to change every one that fits." : "."));
     await sendLong(phone, lines.join("\n"));
     return `group unclear: ${[...missing, ...unclear.map((u) => u.query)].join(", ")}`;
+  }
+  const off = targets.filter((p) => !changeable(p));
+  if (off.length > 0) {
+    await sendLong(phone, [
+      off.length === targets.length ? "I haven't changed anything:" : `I'll leave ${off.length === 1 ? "this one" : `these ${off.length}`} out:`,
+      ...off.slice(0, 10).map((p) => `• ${notOnJumiaText(p)}`),
+      ...(off.length > 10 ? [`+${off.length - 10} more`] : []),
+    ].join("\n"));
+    if (off.length === targets.length) return `group not on Jumia: ${off.map((p) => p.sellerSku).join(", ")}`;
+    targets = targets.filter(changeable);
   }
   if (targets.length > MAX_GROUP) {
     await sendTextIfConfigured(phone, `That's ${targets.length} products: I change up to ${MAX_GROUP} with one tap. Name fewer at a time, or use Jumia Vendor Center's bulk tools for more.`);
@@ -405,6 +435,9 @@ export function bulkTargets(
 ): { targets: ShopProduct[]; skipped: { reason: string; count: number }[] } {
   const live = products.filter((p) => p.status !== "DELETED");
   let picked: ShopProduct[];
+  // A product not on Jumia in their country (rejected, waiting for its
+  // quality check) makes Jumia turn the whole feed down: never in a rule.
+  let notOnJumia = 0;
   switch (scope) {
     // As the stock list and the overview count them: products that are on
     // (owner, 2026-10-08: the list showed 5 out of stock, the rule changed 12).
@@ -416,7 +449,10 @@ export function bulkTargets(
     case "listed":       picked = live.filter((p) => listed.includes(p.sid)); break;
     default:             picked = live;
   }
+  notOnJumia = picked.filter((p) => !changeable(p)).length;
+  picked = picked.filter(changeable);
   const skipped = new Map<string, number>();
+  if (notOnJumia > 0) skipped.set("not on Jumia yet (rejected, or waiting for its quality check)", notOnJumia);
   const skip = (reason: string) => skipped.set(reason, (skipped.get(reason) ?? 0) + 1);
   const targets = picked.filter((p) => {
     if (change.kind === "status" && (p.status === "ACTIVE") === change.active) { skip(change.active ? "already on" : "already off"); return false; }

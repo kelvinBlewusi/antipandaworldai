@@ -728,6 +728,47 @@ describe("round 3: several products, product info, fees (owner's second test, 20
     ]);
   });
 
+  it("a batch Jumia turned down for one product it couldn't find: only that one named, the rest read back (owner, 2026-10-11)", async () => {
+    db.tables.whatsapp_connections = [{ user_id: USER, phone_number: PHONE }];
+    const old = new Date(Date.now() - 5 * 60_000).toISOString();
+    const row = (id: string, sku: string, name: string) => ({
+      id, user_id: USER, group_id: "g1", product_sid: id, seller_sku: sku, name, change: { kind: "stock", stock: 10 }, status: "sent",
+      feed_id: "feed-0001", created_at: old, updated_at: old,
+    });
+    db.tables.jumia_product_changes = [
+      row(FRIDGE, "HIS-205", "Hisense 205L Double Door Fridge"), row(SHIRT_M, "TEE-M", "Men's Cotton T-Shirt (M)"), row("ghost", "GHOST-1", "Heart Candle"),
+    ];
+    db.tables.jumia_products = [];
+    const notFound = "The product with the sid [ghost] was not found. Please check the product creation status and ensure it is created in at least one country.";
+    feed = { status: "ERROR", failed: 1, errors: [notFound], raw: { feedItems: [{ status: "FAILED", productSid: "ghost", sellerSKU: "GHOST-1", errorMessage: notFound }] } };
+    // Read back: the fridge is at 10 (it landed), the shirt still at 12.
+    stock[FRIDGE] = 10;
+    await runShopNotices(new Date());
+    expect(db.tables.jumia_product_changes.map((r) => [r.seller_sku, r.status])).toEqual([["HIS-205", "done"], ["TEE-M", "failed"], ["GHOST-1", "failed"]]);
+    expect(db.tables.jumia_product_changes[1].error).toMatch(/whole batch down/);
+    const msg = sent.find((m) => m.body.includes("didn't apply"))!.body;
+    expect(msg).toContain("⚠️ Jumia didn't apply the change (stock to 10) to 2 products.");
+    expect(msg).toContain("*Heart Candle* (stock to 10): it isn't on Jumia in your country");
+    expect(msg).not.toContain("Men's Cotton T-Shirt");
+    expect(msg).not.toContain("sid [");
+    expect(msg).toContain("1 did change. Send it again and I'll leave it out.");
+  });
+
+  it("a product not on Jumia in their country is never sent: said, or left out of a rule", async () => {
+    catalog.push({
+      id: "set-c", name: "Heart-Shaped Scented Candle", brand: { name: "Generic" }, category: { code: "1" }, createdAt: "2026-10-01T00:00:00Z",
+      variations: [{ id: "candle", sellerSku: "CANDLE-1", variation: "...", businessClients: [{ code: "jumia-gh", qc: { status: "REJECTED" } }] }],
+    });
+    expect(await proposeLiveChange(USER, PHONE, "heart candle", { kind: "stock", stock: 10 })).toBe("not on Jumia: CANDLE-1");
+    expect(writes()).toEqual([]);
+    expect(last().body).toContain("isn't on Jumia: its quality check rejected it");
+    const { bulkTargets } = await import("@/lib/whatsapp/shop");
+    const all = productsFromCatalog({ products: catalog }, "GH");
+    const rule = bulkTargets(all, "all", null, { kind: "stock", stock: 10 }, null);
+    expect(rule.targets.map((p) => p.sellerSku)).not.toContain("CANDLE-1");
+    expect(rule.skipped).toContainEqual({ reason: "not on Jumia yet (rejected, or waiting for its quality check)", count: 1 });
+  });
+
   it("\"is the drone live?\": on or off, quality check, price, stock, read fresh", async () => {
     await answerProductInfo(USER, PHONE, "blender");
     expect(last().body).toBe([

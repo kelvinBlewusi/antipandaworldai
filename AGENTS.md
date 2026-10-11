@@ -2718,6 +2718,45 @@ these three were approved, plus some live changes made immediate.
       (400s), AI Studio answers 429 (per-minute quota) for the rest of the
       run.
 
+### A batch Jumia turned down (owner's WhatsApp, 2026-10-11)
+
+"RESTOCK everything in the shop to 10 pcs" became 267 products in 2 feeds.
+Jumia failed both:
+
+- **The cause.** 19 of the 267 aren't on Jumia in Ghana. They have no
+  status there: 11 rejected by Jumia's quality check, 2 waiting for it, and
+  6 never created in that country. Jumia answered each one "The product with
+  the sid [...] was not found. … ensure it is created in at least one
+  country" and marked both feeds failed. `bulkTargets` had picked every
+  product that wasn't DELETED. On 9 Oct the same change to all 278 products
+  went through, because none of them were missing then.
+- **The alert was wrong too.** When a feed failed, every product in it was
+  marked refused with the feed's first error. 248 good products were each
+  shown someone else's "sid not found" line. The owner's account isn't
+  charged, so no credits moved.
+- **Fixes:**
+  - `changeable` (lib/jumia/shop.ts) means ON or OFF in their country.
+    `bulkTargets` leaves the rest out and says so ("not on Jumia yet
+    (rejected, or waiting for its quality check)").
+  - A single change to such a product isn't sent. `notOnJumiaText` says why:
+    rejected → *fix rejected*, or waiting for the quality check.
+  - Several named products (`proposeGroup`): those not on Jumia are left
+    out and named.
+  - `feedOutcomes` (lib/whatsapp/shop-notices.ts) decides each product in a
+    feed:
+    - a product Jumia names is refused with its own reason;
+    - in a feed Jumia turned down (ERROR, or finished with failures), a
+      stock change it didn't name is read back from Jumia (`fetchStock`) and
+      counts as applied if it's at its new number;
+    - otherwise it is refused with `BATCH_REFUSED`.
+  - `refusedText` names only the products Jumia couldn't change. It says the
+    rest of the batch was turned down because of them, how many did change,
+    and "Send it again and I'll leave them out" (when they were all
+    not-found).
+  - `explainRefusal` says "not found" in plain words.
+- Tests in jumia-shop.test.ts: the turned-down batch with a read-back, and a
+  product with no status.
+
 ### What sellers can and can't ask of Jumia (owner, 2026-10-09)
 
 "The system understands what is capable and doable and what is not and
