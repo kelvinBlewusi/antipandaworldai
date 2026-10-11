@@ -29,6 +29,8 @@ interface Tier {
   id: string;
   name: string;
   credits: number;
+  /** Free credits included in `credits`. */
+  bonus?: number;
   price: string;
   reach: string;
   popular?: boolean;
@@ -45,6 +47,7 @@ const TIERS: Tier[] = CREDIT_PACKS.map((p) => {
     id: p.id,
     name: p.id.charAt(0).toUpperCase() + p.id.slice(1),
     credits: p.credits,
+    bonus: p.bonus,
     price: `GHS ${p.amountGhs}`,
     // Listings only, as "50+" (owner's call, 2026-10-01).
     reach: `${listings}+ listings`,
@@ -163,6 +166,11 @@ export function BuyCreditsModal({
                 <span className="flex items-baseline justify-between gap-3">
                   <span className="flex items-center gap-2 text-sm font-semibold text-zinc-900">
                     {t.credits} credits
+                    {t.bonus ? (
+                      <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-700">
+                        +{t.bonus} free
+                      </span>
+                    ) : null}
                     {t.popular && (
                       <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-700">
                         Popular
