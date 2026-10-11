@@ -154,6 +154,15 @@ describe("rules for many products", () => {
     // "Those", "the last 10" (owner's web chat, 2026-10-08): only the products just listed.
     expect(bulkTargets(all, "listed", null, { kind: "stock", stock: 20 }, null, [PERFUME_50, KETTLE]).targets.map((p) => p.sellerSku)).toEqual(["LAT-50", "NAS-K"]);
     expect(bulkTargets(all, "listed", null, { kind: "stock", stock: 20 }, null).targets).toEqual([]);
+    // "The approved ones" of those just listed (test runs of 11 Oct): Jumia's quality check, ON or OFF.
+    const withRejected = [...all, { ...all[3], sid: "rej", sellerSku: "REJ", qcStatus: "REJECTED", status: "INACTIVE" }];
+    const listed = [PERFUME_50, KETTLE, BOOT, "rej"];
+    const pick = (only: "approved" | "on" | "off") => bulkTargets(withRejected, "listed", null, { kind: "stock", stock: 12 }, null, listed, only);
+    expect(pick("approved").targets.map((p) => p.sellerSku)).toEqual(["LAT-50", "NAS-K", "WEL-B"]);
+    expect(pick("approved").skipped).toEqual([]);
+    expect(pick("on").targets.map((p) => p.sellerSku)).toEqual(["LAT-50", "NAS-K"]);
+    // OFF: the boot, and the rejected one (OFF, and on Jumia in their country).
+    expect(pick("off").targets.map((p) => p.sellerSku)).toEqual(["WEL-B", "REJ"]);
     // Below Jumia's lowest price: left out, said.
     const cut = bulkTargets(all, "all", null, { kind: "price_pct", pct: -50 }, 70);
     expect(cut.targets.map((p) => p.sellerSku)).toEqual(["LAT-50", "LAT-100"]);
@@ -201,6 +210,14 @@ describe("rules for many products", () => {
     stock[PERFUME_50] = 5;
     expect(await proposeBulkChange(USER, PHONE, "out_of_stock", null, { kind: "status", active: false })).toBe("bulk none: out_of_stock");
     expect(last().body).toContain("Nothing to change");
+  });
+
+  it("only some of the products just listed: the approved ones, or the ones ON or OFF", async () => {
+    expect(await proposeBulkChange(USER, PHONE, "listed", null, { kind: "stock", stock: 12 }, [PERFUME_50, KETTLE, BOOT], "off")).toBe("offered bulk stock for 1 (listed)");
+    expect(last().body).toContain("Wellington Rain Boot");
+    expect(last().body).not.toContain("Kettle");
+    expect(await proposeBulkChange(USER, PHONE, "listed", null, { kind: "stock", stock: 12 }, [BOOT], "on")).toBe("bulk none: listed");
+    expect(last().body).toBe("Nothing to change: I found no products I just listed that are ON.");
   });
 });
 

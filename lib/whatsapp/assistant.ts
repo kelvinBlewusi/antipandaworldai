@@ -67,7 +67,7 @@ import {
   BULK_MAX, BULK_PARTS_MAX, MAX_GROUP, answerFees, answerListings, answerOrderStatus, answerPayouts, answerProductInfo, answerProductText, answerProducts,
   answerSales, answerStock, htmlToText, sendLong,
   answerProductPhotos, productDetailsLookup, proposeAddSize, proposeBulkChange, proposeContentChange, proposeLiveChange, shorten, whereLine,
-  type AddSizeRequest, type BulkScope, type ContentRequest, type WhichProduct,
+  type AddSizeRequest, type BulkOnly, type BulkScope, type ContentRequest, type WhichProduct,
 } from "@/lib/whatsapp/shop";
 import { fixRejected } from "@/lib/whatsapp/fix-rejected";
 import {
@@ -84,7 +84,7 @@ import { isWebAddress } from "@/lib/whatsapp/channel";
 import { chatClearedAt } from "@/lib/whatsapp/chat-clear";
 import { handleOrderMessage } from "@/lib/whatsapp/orders";
 import { resetSession, updateSession, type AssistantPending, type LiveValueAsk, type WhatsAppSession } from "@/lib/whatsapp/session";
-import { parseVariations, saveVariations, sizeNamedIn, variationOptions, VARIATION_FIELD } from "@/lib/whatsapp/variation-question";
+import { matchOption, parseVariations, saveVariations, sizeNamedIn, variationOptions, VARIATION_FIELD } from "@/lib/whatsapp/variation-question";
 import { carryPriceToVariants, carrySaleToVariants, carryStockToVariants, chatPrice, shopCurrencyForUser } from "@/lib/whatsapp/listing-edits";
 import type { ListingRow } from "@/lib/supabase/types";
 import {
@@ -229,7 +229,7 @@ export type AssistantAction =
   | { type: "payout_detail"; mode: "history" | "breakdown"; statement: string | null }
   | { type: "report"; kind: ReportKind; period: Period }
   /** One change to every product a rule picks ("10% off all perfumes"). */
-  | { type: "bulk"; scope: BulkScope; words: string | null; change: LiveChange }
+  | { type: "bulk"; scope: BulkScope; words: string | null; change: LiveChange; only?: BulkOnly }
   /** A live product's name, description, highlights or brand. */
   | { type: "content_change"; product: string; request: ContentRequest }
   | { type: "brand_check"; brand: string; product: string | null }
@@ -554,7 +554,8 @@ export function verifyChanges(
         // category's sizes for "Sizes: Large, Medium, Small" (owner's web
         // chat, 2026-10-07).
         const said = wordInMessage(w, message) || (isOption(w) != null && sizeNamedIn(w, message));
-        if (said || isCurrent(w)) backed.push(w);
+        // In the category's own spelling when it has one ("Small" is its "S").
+        if (said || isCurrent(w)) backed.push(isOption(w) ?? (known.options.length > 0 ? matchOption(known.options, w) : null) ?? w);
         fromMessage ||= said;
         continue;
       }
@@ -572,7 +573,11 @@ export function verifyChanges(
       if (said === "" || !(inMessage || isCurrent(said))) continue;
       fromMessage ||= inMessage;
       if (known.options.length === 0) { backed.push(said); continue; }
-      const match = isOption(option) ?? (isCurrent(option) ? option : null);
+      // The AI's option, or their words, as the category spells it: "Small" is
+      // "S" where the options are XS, S, M… (test runs of 11 Oct: "Small,
+      // medium and Large" was read right and then dropped for the spelling).
+      const match = isOption(option) ?? (isCurrent(option) ? option : null)
+        ?? matchOption(known.options, option) ?? matchOption(known.options, said);
       if (!match) continue;
       const entry = read.get(said.toLowerCase()) ?? { said, options: [] };
       if (!entry.options.includes(match)) entry.options.push(match);
@@ -768,6 +773,20 @@ const FILLER = new Set([
   "item", "listings", "listing", "ones", "one", "shop", "store", "jumia", "on", "in", "all", "every", "everything", "other", "others",
   "rest", "apart", "from", "except", "each", "both", "stuff", "things", "thing", "remaining",
 ]);
+/** A draft's own fields, as the edit tool names them: never a product's name. */
+const DRAFT_FIELDS = new Set([
+  "draft", "drafts", "variation", "variations", "variant", "variants", "size", "sizes", "price", "cost", "quantity", "qty", "stock", "pieces",
+  "colour", "colours", "color", "colors", "brand", "name", "title", "description", "highlights", "sale", "details",
+]);
+/**
+ * Words that name no product, only filler and the draft's fields: "the
+ * variation" (test runs of 11 Oct: the AI put it as which draft, against
+ * the tool's own "leave it out when there is one draft", and the change was
+ * turned down as naming another product).
+ */
+export function namesOnlyFields(words: string): boolean {
+  return words.toLowerCase().split(/[^a-z0-9]+/).every((w) => w.length < 2 || FILLER.has(w) || DRAFT_FIELDS.has(w));
+}
 const BULK_WORDS = /\b(all|every|everything|other|others|rest|remaining)\b/i;
 const NAME_GAPS = new RegExp("[^\\p{L}\\p{N}]+", "gu");
 const nameKey = (t: string) => t.toLowerCase().replace(NAME_GAPS, " ").trim();
@@ -881,6 +900,7 @@ const RULE_WORDS = /\b(all|every|everything|whole|entire|each)\b|%|\bpercent\b/i
 /** Words for products the bot just listed: "those", "them", "the last 10". */
 const LISTED_WORDS = /\b(those|these|them|they|the ones?|above|listed|the list|all of them|each of them|(?:last|lat|latest|first|top)\s+\d{1,3})\b/i;
 const BULK_SCOPES = new Set<BulkScope>(["all", "out_of_stock", "low_stock", "inactive", "active", "matching"]);
+const BULK_ONLY = ["approved", "on", "off"] as const satisfies readonly BulkOnly[];
 /** What a scope must be backed by in the message (the AI's word alone isn't enough). */
 const SCOPE_WORDS_RE: Partial<Record<BulkScope, RegExp>> = {
   out_of_stock: /\b(out of stock|sold out|no stock|zero stock|0 stock|finished)\b/i,
@@ -915,7 +935,11 @@ export function bulkAction(
     // listed (session.lastListed), only while it's fresh. Never widened to
     // the whole shop.
     if (!opts.listed) return ask("Which products? Ask me to list them first (e.g. \"my last 10 products\" or \"what's out of stock\"), then say what to change on them.");
-    if (!LISTED_WORDS.test(message) && !RULE_WORDS.test(message) && !opts.many) return { type: "unclear" };
+    // Their own words for the group, copied ("the approved ones"), backs it
+    // in any wording (test runs of 11 Oct: "the approved ones" isn't "the
+    // ones"). It can only ever be the products just shown, and the tap lists them.
+    const quoted = typeof parsed.said === "string" && parsed.said.trim().length >= 3 && saidInMessage(parsed.said, message);
+    if (!quoted && !LISTED_WORDS.test(message) && !RULE_WORDS.test(message) && !opts.many) return { type: "unclear" };
     scope = "listed";
   } else {
     if (!RULE_WORDS.test(rule) && !opts.many) return { type: "unclear" };
@@ -978,7 +1002,9 @@ export function bulkAction(
     change = { kind: "status", active: parsed.active };
   }
   if (!change) return ask("What should change on them? e.g. \"raise all prices by 5%\", \"turn off everything out of stock\", \"10% off all perfumes this weekend\".");
-  return { type: "bulk", scope, words: scope === "matching" ? words : null, change };
+  // Only some of them: narrows the group, never widens it, so the AI's reading stands.
+  const only = BULK_ONLY.find((o) => o === parsed.only);
+  return { type: "bulk", scope, words: scope === "matching" ? words : null, change, ...(only ? { only } : {}) };
 }
 
 const CHANGE_WORDS = /\b(change|update|edit|modify|new|another|remove|delete|take (?:out|off)|drop|replace|rename|redraft|re-draft|correct)\b/i;
@@ -1371,7 +1397,7 @@ function parseActionRaw(
         let seqs = seqsOf(e.products);
         // The draft must be the product they named: "set the gold medal to
         // 25" once changed a draft of gold-tone earrings (live, 2026-10-07).
-        let said = typeof e.said === "string" && !saidIsValues(e.said, e.changes) ? e.said.trim() : "";
+        let said = typeof e.said === "string" && !saidIsValues(e.said, e.changes) && !namesOnlyFields(e.said) ? e.said.trim() : "";
         // "the 150 is product 3 price": a draft named by its number is that
         // draft, never a live product (owner's web chat, 2026-10-08, where
         // it went to the live products on Jumia).
@@ -2212,7 +2238,7 @@ async function carryOut(
     case "report":
       return answerReport(userId, phone, action.kind, action.period);
     case "bulk":
-      return proposeBulkChange(userId, phone, action.scope, action.words, action.change, action.scope === "listed" ? session.lastListed?.sids ?? [] : []);
+      return proposeBulkChange(userId, phone, action.scope, action.words, action.change, action.scope === "listed" ? session.lastListed?.sids ?? [] : [], action.only ?? null);
     case "content_change":
       return proposeContentChange(userId, phone, action.product, action.request, whichOf(userId, phone, action));
     case "brand_check":

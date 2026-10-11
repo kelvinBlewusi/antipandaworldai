@@ -36,7 +36,7 @@ import { sendTextIfConfigured } from "@/lib/whatsapp/client";
 import { ownerWhatsApp } from "@/lib/evals/warning-signs";
 import { ASSISTANT_CASES, type EvalCase, type Shape } from "@/lib/evals/assistant-cases";
 import { frontDoor, type FrontDoorInput } from "@/lib/assistant-v2/front-door";
-import { agentRead, agentSystem, catalogLookups, geminiAgentCall } from "@/lib/assistant-v2/agent";
+import { agentRead, agentSystem, catalogLookups, geminiAgentCall, type AgentLookups } from "@/lib/assistant-v2/agent";
 import { findProducts, fromRow } from "@/lib/jumia/shop";
 import type { ListingRow } from "@/lib/supabase/types";
 
@@ -151,18 +151,38 @@ export async function understandFrontDoor(c: EvalCase, models: { router: string;
  * chat does with them, not the facts.
  */
 export async function understandAgent(c: EvalCase, model: string) {
-  const shop = (c.catalog ?? []).map((name, i) => fromRow({ product_sid: `p${i + 1}`, seller_sku: `SKU-${i + 1}`, name }));
-  const input: FrontDoorInput = {
+  return agentRead(agentInput(c), geminiAgentCall(model, agentSystem(2), { feature: "assistant_eval" }), caseLookups(c));
+}
+
+/** What agent mode is given for the case: its stage, conversation, drafts and the products just listed. */
+export function agentInput(c: EvalCase): FrontDoorInput {
+  return {
     stage: c.stage, message: c.msg, conversation: c.ctx ?? [], drafts: facts(c), listed: c.listed ?? null,
     waitingFor: c.waitingFor, seller: SELLER, links: assistantLinks(), currency: "GHS", web: c.web ?? true, shopNames: c.catalog, listingCost: 2,
   };
+}
+
+/** The case's lookups, from its catalog. */
+export function caseLookups(c: EvalCase): AgentLookups {
+  const shop = (c.catalog ?? []).map((name, i) => fromRow({ product_sid: `p${i + 1}`, seller_sku: `SKU-${i + 1}`, name }));
   const productDetails = async (words: string) => {
     const hits = findProducts(shop, words, 5);
     if (hits.length !== 1) return hits.map((p) => `- ${p.name} (SKU ${p.sellerSku})`);
     const p = hits[0];
     return [`Name: ${p.name}\nSKU ${p.sellerSku} · ON · approved · price GHS 100 · stock 5\nPhotos: 3 (the main one first)\nDetails: color=Black; material=Plastic; what_is_in_the_box=1 x ${p.name}`];
   };
-  return agentRead(input, geminiAgentCall(model, agentSystem(2), { feature: "assistant_eval" }), { ...catalogLookups(shop), productDetails });
+  return { ...catalogLookups(shop), productDetails };
+}
+
+/** Whether agent mode's reading passes the case, as a run scores it. Pure. */
+export function scoreAgent(c: EvalCase, read: { actions: unknown[]; clarify: unknown }): { pass: boolean; bare: boolean; asked: boolean } {
+  const asked = read.clarify != null;
+  const reply = c.ok.some((shape) => shape.type === "reply" && Object.keys(shape).length === 1);
+  return {
+    pass: asked ? reply : read.actions.every((a) => passes(a, c)),
+    bare: asked ? reply : read.actions.some((a) => passes(a, c)),
+    asked,
+  };
 }
 
 const summary = (a: unknown) => JSON.stringify(a).slice(0, 400);
@@ -175,10 +195,7 @@ export async function runCase(c: EvalCase, model: string, opts: { pipeline?: Pip
     try {
       if (opts.pipeline === "agent") {
         const { actions, clarify, raw } = await understandAgent(c, model);
-        const asked = clarify != null;
-        const reply = c.ok.some((shape) => shape.type === "reply" && Object.keys(shape).length === 1);
-        const pass = asked ? reply : actions.every((a) => passes(a, c));
-        const bare = asked ? reply : actions.some((a) => passes(a, c));
+        const { pass, bare, asked } = scoreAgent(c, { actions, clarify });
         return { id: c.id, area: c.area, pass, bare, asked, got: summary(clarify ?? (actions.length === 1 ? actions[0] : actions)), raw: raw.slice(0, 600), ms: Date.now() - t0 };
       }
       const { area, action, raw } = await understandFrontDoor(c, { router: opts.router || model, reader: model });
