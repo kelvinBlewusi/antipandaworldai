@@ -38,6 +38,29 @@ beforeEach(() => {
   billingOn = true;
   sent.length = 0;
   balance(20);
+  // Jumia connected, as for any seller who can buy credits.
+  db.tables.jumia_connections = [{ user_id: "seller", status: "active", access_token: "tok", auth_type: "self", refresh_token: "r", token_expires_at: null }];
+});
+
+describe("at 0 credits before Jumia is connected (2026-10-11: \"How to pay for credit\" and no way to)", () => {
+  it("the one reply says to connect Jumia first, with Settings", async () => {
+    db.tables.jumia_connections = [];
+    balance(0);
+    expect(await creditGate("seller", PHONE, "How to pay for credit")).toBe("stop");
+    expect(sent).toHaveLength(1);
+    expect(sent[0].body).toContain("To buy credits, connect your Jumia store first (it's free)");
+    expect(sent[0].body).toContain("Vendor Center → Settings → Applications");
+    expect(sent[0].button).toBe("Settings");
+  });
+
+  it("connecting Jumia in the chat carries on at 0: it's free, and comes before buying", async () => {
+    db.tables.jumia_connections = [];
+    balance(0);
+    expect(await creditGate("seller", PHONE, "my client id", { connecting: true })).toBe("go");
+    expect(sent).toHaveLength(0);
+    // The web chat connects Jumia on its own page: the gate stays.
+    expect(await creditGate("seller", "web:seller", "my client id", { connecting: true })).toBe("stop");
+  });
 });
 
 describe("at 0 credits", () => {
