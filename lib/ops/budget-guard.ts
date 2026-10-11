@@ -11,16 +11,17 @@
  *     A normal day is under $1 (2026-10-11: $0.15 to $0.55).
  *   - tests: the test set's runs today over `ai_test_budget_usd`
  *     (DEFAULT_TEST_BUDGET_USD). One full run is about $1; 2026-10-11's
- *     25 runs (comparing models) cost $22.
+ *     25 runs (comparing models) cost $22. Past it, a new run waits for the
+ *     next day (testBudgetToday).
  *
- * Nothing is stopped here: the ceiling does that. These only say it's coming.
+ * Sellers' chat isn't stopped here: the turns ceiling does that.
  */
 
 import { createServerClient } from "@/lib/supabase/server";
 import { DEFAULT_DAILY_CEILING } from "@/lib/whatsapp/assistant-limits";
 
 export const DEFAULT_DAILY_BUDGET_USD = 5;
-export const DEFAULT_TEST_BUDGET_USD = 10;
+export const DEFAULT_TEST_BUDGET_USD = 3;
 /** The share of the ceiling that warns. */
 export const TURNS_WARN_AT = 0.8;
 
@@ -35,12 +36,17 @@ async function setting(key: string): Promise<unknown> {
 
 const positive = (v: unknown, fallback: number) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : fallback);
 
-/** Today's logged AI cost (UTC), sellers' and the test set's apart. Paged: Supabase returns 1,000 rows at most. */
-export async function spendSince(since: string): Promise<{ sellers: number; tests: number }> {
+/**
+ * Logged AI cost since `since`, sellers' and the test set's apart (`onlyTests`:
+ * the test set's alone, fewer rows to read). Paged: Supabase returns 1,000
+ * rows at most.
+ */
+export async function spendSince(since: string, onlyTests = false): Promise<{ sellers: number; tests: number }> {
   const db = createServerClient();
   const out = { sellers: 0, tests: 0 };
   for (let page = 0; page < 100; page++) {
-    const { data, error } = await db.from("ai_usage").select("feature, cost_usd").gte("created_at", since)
+    const q = db.from("ai_usage").select("feature, cost_usd").gte("created_at", since);
+    const { data, error } = await (onlyTests ? q.eq("feature", "assistant_eval") : q)
       .order("created_at", { ascending: true }).range(page * PAGE, page * PAGE + PAGE - 1);
     if (error) throw new Error(`Couldn't read ai_usage: ${error.message}`);
     const rows = (data ?? []) as { feature: string; cost_usd: number | null }[];
@@ -51,6 +57,17 @@ export async function spendSince(since: string): Promise<{ sellers: number; test
 }
 
 const usd = (n: number) => `$${n.toFixed(2)}`;
+
+/**
+ * The test set's spend today against its budget. Past it, a queued test run
+ * waits for the next UTC day (lib/evals/assistant-eval.ts workOnRuns): owner,
+ * 2026-10-11, the test runs were ~90% of the month's Google bill.
+ */
+export async function testBudgetToday(now = new Date()): Promise<{ spent: number; budget: number }> {
+  const midnight = `${now.toISOString().slice(0, 10)}T00:00:00.000Z`;
+  const [budget, spend] = await Promise.all([setting("ai_test_budget_usd"), spendSince(midnight, true)]);
+  return { spent: spend.tests, budget: positive(budget, DEFAULT_TEST_BUDGET_USD) };
+}
 
 export async function budgetWarnings(now = new Date()): Promise<BudgetWarning[]> {
   const db = createServerClient();
@@ -84,7 +101,7 @@ export async function budgetWarnings(now = new Date()): Promise<BudgetWarning[]>
     out.push({
       key: "tests",
       text: `The chat's test runs cost ${usd(spend.tests)} today, over the ${usd(tests)} budget for tests ` +
-        "(a full run is about $1). Check /admin/assistant-tests for runs queued again and again.",
+        "(a full run is about $1). Queued runs wait until tomorrow. Check /admin/assistant-tests for runs queued again and again.",
     });
   }
   return out;
