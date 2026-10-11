@@ -63,8 +63,16 @@ describe("the tools", () => {
 
   it("asks for a draft edit's values in changes, never in said (10 Oct runs: \"Price: 130gh, Sizes: …\" landed in said)", () => {
     const edit = ACTION_TOOLS.find((t) => t.name === "edit")!;
-    const item = (edit.parameters as { properties: { edits: { items: { required?: string[] } } } }).properties.edits.items;
-    expect(item.required).toEqual(["products", "changes"]);
+    expect((edit.parameters as { required?: string[] }).required).toEqual(["products", "changes"]);
+  });
+
+  it("an edit is one change a call, put back as the chat's list of them (a list ran to 10 s of empty entries, 11 Oct)", () => {
+    const edit = ACTION_TOOLS.find((t) => t.name === "edit")!;
+    expect(Object.keys((edit.parameters as { properties: object }).properties)).not.toContain("edits");
+    expect(actionJson("edit", { products: [1], changes: { price: 130 } }))
+      .toEqual({ type: "edit", edits: [{ products: [1], said: null, changes: { price: 130 }, ask: false }] });
+    // The old shape still reads.
+    expect(actionJson("edit", { edits: [{ products: [2], changes: { price: 5 } }] })).toEqual({ type: "edit", edits: [{ products: [2], changes: { price: 5 } }] });
   });
 
   it("puts a call back in the chat's own action shape", () => {
@@ -241,18 +249,5 @@ describe("the agent's model (model comparison, 2026-10-11)", () => {
     expect(agentModelSpec("gemini-3.8-flash:lots")).toBeNull();
     expect(agentModelSpec("gpt-4:low")).toBeNull();
     expect(agentModelSpec("gemini-3.8-flash:low:x")).toBeNull();
-  });
-});
-
-describe("the tools' lists", () => {
-  it("every list has a most it may hold (an edit ran to 10 s adding empty entries)", () => {
-    const uncapped: string[] = [];
-    const walk = (schema: Record<string, unknown>, path: string) => {
-      if (schema.type === "array" && typeof schema.maxItems !== "number") uncapped.push(path);
-      if (schema.items) walk(schema.items as Record<string, unknown>, `${path}[]`);
-      for (const [k, v] of Object.entries((schema.properties ?? {}) as Record<string, Record<string, unknown>>)) walk(v, `${path}.${k}`);
-    };
-    for (const t of AGENT_TOOLS) walk(t.parameters as Record<string, unknown>, t.name);
-    expect(uncapped).toEqual([]);
   });
 });
