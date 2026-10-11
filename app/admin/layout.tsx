@@ -31,6 +31,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
             <Link href="/admin/assistant-tests" className="hover:text-zinc-900">Assistant tests</Link>
             <Link href="/admin/jumia-api" className="hover:text-zinc-900">Jumia API</Link>
             <Link href="/admin/wishes" className="hover:text-zinc-900">Wish list</Link>
+            <Link href="/admin/warning-signs" className="hover:text-zinc-900">Warning signs</Link>
             <Link href="/admin/errors" className="hover:text-zinc-900">Errors</Link>
             <Link href="/admin/blocked-categories" className="hover:text-zinc-900">Blocked categories</Link>
             <Link href="/admin/auto-fix" className="hover:text-zinc-900">Auto-fix</Link>

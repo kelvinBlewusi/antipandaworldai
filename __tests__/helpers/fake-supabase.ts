@@ -22,7 +22,7 @@
 
 export interface FakeRow { [k: string]: unknown }
 
-type Filter = { col: string; val: unknown; op: "eq" | "is" | "not-is-null" | "in" | "lt" | "gt" | "like" | "ilike" };
+type Filter = { col: string; val: unknown; op: "eq" | "is" | "not-is-null" | "in" | "lt" | "gt" | "lte" | "gte" | "like" | "ilike" };
 
 /** Postgres LIKE: % is any run, _ is any one character. */
 function likeToRegExp(pattern: string, flags = "s"): RegExp {
@@ -50,10 +50,10 @@ export class FakeDb {
       if (f.op === "in") return (f.val as unknown[]).includes(row[f.col]);
       if (f.op === "like") return typeof row[f.col] === "string" && likeToRegExp(f.val as string).test(row[f.col] as string);
       if (f.op === "ilike") return typeof row[f.col] === "string" && likeToRegExp(f.val as string, "si").test(row[f.col] as string);
-      if (f.op === "lt" || f.op === "gt") {
+      if (f.op === "lt" || f.op === "gt" || f.op === "lte" || f.op === "gte") {
         const v = row[f.col];
         const [a, b] = typeof v === "number" && typeof f.val === "number" ? [v, f.val] : [String(v ?? ""), String(f.val)];
-        return f.op === "lt" ? a < b : a > b;
+        return f.op === "lt" ? a < b : f.op === "gt" ? a > b : f.op === "lte" ? a <= b : a >= b;
       }
       return row[f.col] === f.val;
     });
@@ -70,6 +70,8 @@ export class FakeDb {
       in(col: string, val: unknown[]) { return selectBuilder([...filters, { col, val, op: "in" }]); },
       lt(col: string, val: unknown) { return selectBuilder([...filters, { col, val, op: "lt" }]); },
       gt(col: string, val: unknown) { return selectBuilder([...filters, { col, val, op: "gt" }]); },
+      lte(col: string, val: unknown) { return selectBuilder([...filters, { col, val, op: "lte" }]); },
+      gte(col: string, val: unknown) { return selectBuilder([...filters, { col, val, op: "gte" }]); },
       like(col: string, val: string) { return selectBuilder([...filters, { col, val, op: "like" }]); },
       ilike(col: string, val: string) { return selectBuilder([...filters, { col, val, op: "ilike" }]); },
       not(col: string, _op: string, _val: unknown) {
@@ -77,6 +79,15 @@ export class FakeDb {
       },
       order() { return selectBuilder(filters); },
       limit() { return selectBuilder(filters); },
+      /** Rows from..to (inclusive) of the matches, as Supabase pages them. */
+      range(from: number, to: number) {
+        return {
+          then(resolve: (v: { data: FakeRow[]; error: null }) => unknown) {
+            return Promise.resolve({ data: rows().filter((r) => db.match(r, filters)).slice(from, to + 1).map((r) => ({ ...r })), error: null })
+              .then(resolve);
+          },
+        };
+      },
       async maybeSingle() {
         const hit = rows().find((r) => db.match(r, filters));
         return { data: hit ? { ...hit } : null, error: null };
