@@ -1,0 +1,14 @@
+description: |-
+  Unauthorized. The application could not be authenticated.
+
+  Check the `client_id` and `client_secret`. The Client Secret is shown only once, when the application
+  is created — if it was not saved, a new application must be created.
+content:
+  application/json:
+    schema:
+      $ref: '../../schemas/oauth-error.yaml'
+    examples:
+      Unknown or wrong credentials:
+        value:
+          error: invalid_client
+          error_description: Client authentication failed

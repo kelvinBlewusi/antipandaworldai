@@ -1,0 +1,19 @@
+type: object
+title: codeMessageError
+description: |-
+  Returned by the **Catalog** and **Consignment** endpoints.
+
+  The `code` is an internal error code, not the HTTP status. Its vocabulary differs by service —
+  Catalog Stock returns numeric codes such as `1001`, Consignment returns symbolic codes such as
+  `ERROR_DEFAULT_MESSAGE`, and Products, Brands, Categories and Attribute Sets return the values of
+  the Product Creation error table.
+properties:
+  code:
+    type: string
+    description: Internal error code. Not the HTTP status code.
+  message:
+    type: string
+    description: Human-readable description of what went wrong.
+required:
+  - code
+  - message

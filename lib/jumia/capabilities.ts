@@ -67,12 +67,14 @@ export const CAPABILITIES: Capability[] = [
   { id: "brand_check", area: "listing", what: "Whether a brand is on Jumia and allowed in a category", requests: ["GET /catalog/brands"], status: "chat", action: "brand_check", checks: ["brands"], yes: "Yes: ask e.g. \"is Lattafa a brand on Jumia?\" and I'll check whether the brand is on Jumia and allowed." },
   { id: "category_info", area: "listing", what: "What a kind of product needs on Jumia (category, details, variation options)", requests: ["GET /catalog/categories", "GET /catalog/attribute-sets/{id}"], status: "chat", action: "category_info", checks: ["categories", "attribute_set"], yes: "Yes: ask e.g. \"what does Jumia need to list a perfume?\" and I'll tell you its category, the details Jumia asks for and its variation options." },
   { id: "submission_result", area: "listing", what: "Whether each submitted product was accepted, and Jumia's quality check", requests: ["GET /feeds/{id}", "GET /catalog/products"], status: "chat", checks: ["feed", "products"], yes: "Yes: after you send products to Jumia, I tell you whether each one was accepted, and what Jumia's quality check decides." },
-  { id: "translations", area: "listing", what: "Listing products on Jumia with French or Arabic names and descriptions (Ivory Coast, Senegal, Morocco, Egypt); the chat itself answers in any language", requests: ["POST /feeds/products/create"], status: "not_built", answer: "Listings go to Jumia in English for now. French and Arabic names are coming when we have sellers in those countries." },
+  { id: "translations", area: "listing", what: "Listing products on Jumia with French or Arabic names and descriptions (Ivory Coast, Senegal, Morocco, Egypt); the chat itself answers in any language", requests: ["POST /feeds/products/create"], status: "not_built", answer: "Listings go to Jumia in English for now. French and Arabic names are coming when we have sellers in those countries. I can list it in English now, and talk with you in your language." },
 
   // ── Reading their products ──
   { id: "overview", area: "products", what: "How many products are on, off, out of stock, waiting, rejected or deleted", requests: ["GET /catalog/products", "GET /catalog/stock"], status: "chat", action: "shop", checks: ["products", "stock"], yes: "Yes: say *shop* and I'll show how many of your products are ON, OFF, out of stock, waiting, rejected or deleted." },
   { id: "product_info", area: "products", what: "Where one product is: on or off, shown to buyers, quality check, price, sale, stock", requests: ["GET /catalog/products", "GET /catalog/stock"], status: "chat", action: "product_info", checks: ["products", "stock"], yes: "Yes: ask e.g. \"is the kettle live?\" and I'll tell you whether it's ON or OFF, its quality check, price, sale and stock." },
   { id: "product_text", area: "products", what: "A product's name, description and highlights as Jumia has them", requests: ["GET /catalog/products"], status: "chat", action: "product_text", checks: ["product_set"], yes: "Yes: ask e.g. \"show me the kettle's description\" and I'll show its name, description and highlights as Jumia has them." },
+  { id: "product_photos", area: "products", what: "A product's photos, whatever its status (ON, OFF, rejected, waiting for the quality check)", requests: ["GET /catalog/products"], status: "chat", action: "product_photos", checks: ["product_set"], yes: "Yes: say e.g. \"show me the kettle's photos\" and I'll send every photo it has on Jumia, the main one first, whether it's ON, OFF, rejected or waiting for its quality check." },
+  { id: "product_details", area: "products", what: "Anything about one product as Jumia has it now: its details, sizes, barcode, description, and why it was rejected", requests: ["GET /catalog/products"], status: "chat", checks: ["product_set"], yes: "Yes: ask me anything about one of your products, e.g. \"what's in the box for the kettle?\", \"what colour is the gown listed as?\" or \"why was the neck fan rejected?\", and I'll read it from Jumia." },
   { id: "stock", area: "products", what: "Stock of a product, and what's out of stock or low; what orders not shipped yet hold", requests: ["GET /catalog/stock", "GET /orders", "GET /orders/items"], status: "chat", action: "stock", checks: ["stock", "orders", "order_items"], yes: "Yes: ask e.g. \"how many kettles are left?\", \"what's out of stock?\" or \"what's running low?\"." },
   { id: "rejected", area: "products", what: "Products rejected by Jumia's quality check, with Jumia's reason and comment when it gives them", requests: ["GET /catalog/products"], status: "chat", action: "shop", checks: ["products"], yes: "Yes: ask \"which products were rejected?\" and I'll list them, with Jumia's reason when it gives one." },
   { id: "fix_rejected", area: "products", what: "Fix a product Jumia's quality check rejected: PandaWorld's own listings redrafted and sent again; others' name, description, brand or details changed for Jumia to check again", requests: ["GET /catalog/products", "GET /catalog/attribute-sets/{id}", "POST /feeds/products/update", "POST /feeds/products/create"], status: "chat", needs: ["Standard pack", CONFIRM, "credits"], action: "fix_rejected", checks: ["products", "product_set"], yes: "Yes: say \"fix my rejected products\" and pick one, or name it (\"fix the kettle\"). I redraft it or change what Jumia rejected, show it to you, and send it back for Jumia to check." },
@@ -85,13 +87,13 @@ export const CAPABILITIES: Capability[] = [
   { id: "live_bulk", area: "live", what: "One change to many products by a rule (all, out of stock, off, matching words), 200 per tap", requests: ["POST /feeds/products/stock", "POST /feeds/products/price", "POST /feeds/products/status"], status: "chat", needs: ["Standard pack", CONFIRM, "credits per tap"], action: "bulk", yes: "Yes: e.g. \"raise all my prices by 5%\", \"10% off all perfumes this weekend\" or \"turn off everything out of stock\". I show you the products and the change for one tap." },
   { id: "live_content", area: "live", what: "Change a product's name, description, highlights or brand, their text or written by AI", requests: ["GET /catalog/products", "POST /feeds/products/update"], status: "chat", needs: ["Standard pack", CONFIRM, "credits"], action: "content_change", checks: ["product_set"], yes: "Yes: e.g. \"change the kettle's name to …\", or \"rewrite the kettle's description\" and I write it for you. You see it before one tap, and Jumia checks it again." },
   { id: "live_details", area: "live", what: "Change a product's details (colour, material, weight, model…), its barcode or a size's name", requests: ["GET /catalog/products", "GET /catalog/attribute-sets/{id}", "POST /feeds/products/update"], status: "chat", needs: ["Standard pack", CONFIRM, "credits"], action: "content_change", checks: ["product_set", "attribute_set"], yes: "Yes: e.g. \"the kettle's colour is white and it's plastic\", its barcode, or \"rename size M of the gown to Medium\". You see it before one tap, and Jumia checks it again." },
-  { id: "delete_product", area: "live", what: "Delete a product", requests: [], status: "vendor_center", link: "vendor_center", answer: "Jumia's API can't delete products, so I can't do it from here. I can turn it off so buyers don't see it; to delete it for good, use Vendor Center." },
+  { id: "delete_product", area: "live", what: "Delete a product", requests: [], status: "vendor_center", link: "vendor_center", answer: "Jumia only lets a product be deleted in Vendor Center, so I can't do it from here. I can turn it OFF so buyers don't see it; to delete it for good, use Vendor Center." },
   { id: "extra_photos", area: "live", what: "Add more photos to a live product, after its main one", requests: ["GET /catalog/products", "POST /feeds/products/update"], status: "chat", needs: ["Standard pack", "sent to Jumia once they tap Done", "credits", "at most 8 photos in all"], action: "add_photos", checks: ["product_set"], yes: "Yes: say \"add photos to the kettle\", send the photos, then tap Done and they go to Jumia after its main photo." },
-  { id: "main_photo", area: "live", what: "Change, swap or remove a live product's main photo or photos it has", requests: [], status: "vendor_center", link: "vendor_center", answer: "Jumia doesn't let its API change a live product's main photo or remove its photos, so that's done in Vendor Center. I can add more photos after its main one here: say \"add photos to\" and the product." },
-  { id: "main_category", area: "live", what: "Move a live product to another category", requests: [], status: "vendor_center", link: "vendor_center", answer: "Jumia doesn't let its API move a live product to another category. Change it in Vendor Center, or list it again here in the right category." },
-  { id: "parent_sku", area: "live", what: "Change a product's parent SKU or how its sizes are grouped", requests: [], status: "vendor_center", link: "vendor_center", answer: "Jumia doesn't let its API change a product's parent SKU or how its variations are grouped. That's done in Vendor Center." },
-  { id: "before_qc", area: "live", what: "Change stock, price or on/off before Jumia's quality check approves the product", requests: [], status: "impossible", answer: "Jumia only takes stock, price and on/off changes for a product its quality check has approved at least once. I'll tell you when it's approved; then I can change it." },
-  { id: "locked_details", area: "live", what: "Change a product's colour (or another detail Jumia locks) after its quality check approved it", requests: [], status: "impossible", answer: "Jumia doesn't let some details, like colour, change once its quality check has approved the product. To sell another colour, list it as a new product, or ask Jumia's seller support to correct this one." },
+  { id: "main_photo", area: "live", what: "Change, swap or remove a live product's main photo or photos it has", requests: [], status: "vendor_center", link: "vendor_center", answer: "Jumia only lets a product's main photo be changed, or its photos removed, in Vendor Center. I can add more photos after its main one here: say \"add photos to\" and the product." },
+  { id: "main_category", area: "live", what: "Move a live product to another category", requests: [], status: "vendor_center", link: "vendor_center", answer: "Jumia only lets a product move to another category in Vendor Center. Change it there, or I can list it again here in the right category." },
+  { id: "parent_sku", area: "live", what: "Change a product's parent SKU or how its sizes are grouped", requests: [], status: "vendor_center", link: "vendor_center", answer: "Jumia only lets a product's parent SKU, or how its sizes are grouped, be changed in Vendor Center. Here I can add a size to it, rename one of its sizes, or change its name, description and details." },
+  { id: "before_qc", area: "live", what: "Change stock, price or on/off before Jumia's quality check approves the product", requests: [], status: "impossible", answer: "Jumia only takes stock, price and on/off changes for a product its quality check has approved at least once. I'll tell you when it's approved; then I can change it. Its name, description and other details I can change now." },
+  { id: "locked_details", area: "live", what: "Change a product's colour (or another detail Jumia locks) after its quality check approved it", requests: [], status: "impossible", answer: "Jumia doesn't let some details, like colour, change once its quality check has approved the product. To sell another colour, I can list it as a new product here from its photos; to correct this one, ask Jumia's seller support." },
   { id: "add_size", area: "live", what: "Add a new size or colour to a product that's already live, with its stock and price", requests: ["GET /catalog/products", "GET /catalog/attribute-sets/{id}", "POST /feeds/products/create"], status: "chat", needs: ["Standard pack", CONFIRM, "credits", "Jumia's quality check looks at it like a new product"], action: "add_size", checks: ["product_set", "attribute_set"], yes: "Yes: e.g. \"add size XL to the gown, 4 pieces at 150\". You see it before one tap; Jumia's quality check looks at it like a new product." },
 
   // ── Orders ──
@@ -105,22 +107,54 @@ export const CAPABILITIES: Capability[] = [
   { id: "order_alerts", area: "orders", what: "A message for every new order, and when one is delivered, returned or fails", requests: ["GET /orders"], status: "whatsapp", needs: ["Pro pack"], checks: ["orders"], yes: "Yes, on WhatsApp (Pro pack and up): a message for every new Jumia order, and when one is delivered, returned or fails delivery." },
   { id: "buyer_contact", area: "orders", what: "A buyer's phone number or email, or messaging a buyer", requests: [], status: "impossible", answer: "Jumia doesn't share buyers' phone numbers or emails, and there's no way to message a buyer through it. I can show the buyer's name, city and address on an order; Jumia's delivery team contacts them." },
   { id: "mark_delivered", area: "orders", what: "Mark an order shipped or delivered", requests: [], status: "impossible", answer: "Jumia's couriers mark orders shipped and delivered; sellers can't. I can pack an order and mark it ready to ship, and tell you where it is." },
-  { id: "returns", area: "orders", what: "Accept or refuse a return, or get a return's pickup code", requests: [], status: "vendor_center", link: "vendor_center", answer: "Returns aren't in Jumia's API: accepting, refusing and pickup codes are in Vendor Center. I can show you which orders were returned." },
-  { id: "fbj_labels", area: "orders", what: "Labels or packing for orders Fulfilled by Jumia", requests: [], status: "impossible", answer: "Jumia packs and ships orders it fulfils from its warehouse itself, so there's no label or packing for you to do on those." },
+  { id: "returns", area: "orders", what: "Accept or refuse a return, or get a return's pickup code", requests: [], status: "vendor_center", link: "vendor_center", answer: "Returns are handled in Vendor Center: accepting, refusing and pickup codes are there. I can show you which orders were returned." },
+  { id: "fbj_labels", area: "orders", what: "Labels or packing for orders Fulfilled by Jumia", requests: [], status: "impossible", answer: "Jumia packs and ships orders it fulfils from its warehouse itself, so there's no label or packing for you to do on those. I can show how many of each product are in Jumia's warehouse, or send it more stock." },
 
   // ── Money ──
   { id: "payouts", area: "money", what: "What Jumia paid and still owes, every statement of 90 days, one statement in detail", requests: ["GET /payout-statement"], status: "chat", action: "payouts", checks: ["payouts"], yes: "Yes: ask \"has Jumia paid me?\", \"my payout history\" or \"what fees did Jumia take on my last statement?\"." },
   { id: "fees", area: "money", what: "What Jumia takes when a product sells (from Jumia's published commission rates)", requests: ["GET /catalog/products"], status: "chat", action: "fees", yes: "Yes: ask e.g. \"how much will I receive if the kettle sells at 150?\" and I'll show Jumia's commission, its shipping contribution and what you receive." },
-  { id: "bank_account", area: "money", what: "Change their bank details or payout schedule", requests: [], status: "vendor_center", link: "vendor_center", answer: "Bank details and payouts settings aren't in Jumia's API; they're in Vendor Center (or with your Jumia account manager)." },
+  { id: "bank_account", area: "money", what: "Change their bank details or payout schedule", requests: [], status: "vendor_center", link: "vendor_center", answer: "Bank details and payout settings are only in Vendor Center (or with your Jumia account manager). I can show your payouts here: what's been paid, what's coming, and the orders in each." },
 
   // ── Jumia's warehouse ──
   { id: "warehouse_stock", area: "warehouse", what: "What Jumia's warehouse holds of a product", requests: ["GET /consignment-stock"], status: "chat", action: "warehouse_stock", yes: "Yes: ask e.g. \"how many kettles are in Jumia's warehouse?\"." },
   { id: "warehouse_order", area: "warehouse", what: "Send stock into Jumia's warehouse, and say it has shipped", requests: ["POST /consignment-order", "PATCH /consignment-order/{purchaseOrderNumber}"], status: "chat", needs: [CONFIRM], action: "warehouse_order", yes: "Yes: e.g. \"send 50 kettles to Jumia's warehouse on 20 Oct\". I show you the delivery order for one tap, and when it ships, tell me its tracking number." },
 
   // ── The shop itself ──
-  { id: "holiday_mode", area: "connect", what: "Holiday mode, or the shop's settings and profile", requests: [], status: "vendor_center", link: "vendor_center", answer: "Holiday mode and shop settings aren't in Jumia's API, so I can't change them. They're in Vendor Center. I can turn products off for you if that helps." },
-  { id: "seller_score", area: "connect", what: "Their seller score, ratings and reviews, product views or visits", requests: [], status: "vendor_center", link: "vendor_center", answer: "Jumia doesn't give seller scores, reviews or product views through its API; see them in Vendor Center. From what it does give, I can run a shop health report or show best sellers and slow movers." },
-  { id: "campaigns", area: "connect", what: "Join a campaign or flash sale, vouchers, or sponsored ads", requests: [], status: "vendor_center", link: "vendor_center", answer: "Campaigns, flash sales, vouchers and ads aren't in Jumia's API; join them in Vendor Center. I can put products on sale with dates here." },
+  { id: "holiday_mode", area: "connect", what: "Holiday mode, or the shop's settings and profile", requests: [], status: "vendor_center", link: "vendor_center", answer: "Holiday mode and shop settings are only in Vendor Center, so I can't change them from here. I can turn products OFF for you if that helps." },
+  { id: "seller_score", area: "connect", what: "Their seller score, ratings and reviews, product views or visits", requests: [], status: "vendor_center", link: "vendor_center", answer: "Jumia shows seller scores, reviews and product views only in Vendor Center. From what I can see here, I can run a shop health report or show best sellers and slow movers." },
+  { id: "campaigns", area: "connect", what: "Join a campaign or flash sale, vouchers, or sponsored ads", requests: [], status: "vendor_center", link: "vendor_center", answer: "Campaigns, flash sales, vouchers and ads are joined in Vendor Center. I can put products on sale with dates here." },
+];
+
+/**
+ * Jumia's documented requests PandaWorld doesn't use, and why. Every request
+ * in Jumia's spec (docs/jumia-api, kept from vendorcenter.jumia.com/api-docs)
+ * is either behind a capability above or here: __tests__/jumia-spec.test.ts
+ * fails when Jumia documents one we haven't placed.
+ */
+export const UNUSED_REQUESTS: Record<string, string> = {
+  "GET /login":    "The sign-in that sends a seller to Jumia and back; sellers connect with Self Authorization (POST /token) instead.",
+  "GET /callback": "That sign-in's return step.",
+  "GET /catalog/stock/salesorderitem/{orderItemSid}": "Stock held by one order item; the stock answer counts what unshipped orders hold from GET /orders and GET /orders/items.",
+};
+
+/**
+ * What a change to a product on Jumia can touch: the "Allow Update" table of
+ * POST /feeds/products/update in Jumia's spec, row for row, and how
+ * PandaWorld does each row. A product's name, description and highlights
+ * change through the same request. The test checks this against the spec.
+ */
+export const UPDATE_TABLE: { section: string; allowed: boolean; ours: string }[] = [
+  { section: "Additional Category",       allowed: true,  ours: "Not offered yet." },
+  { section: "Brand",                     allowed: true,  ours: "content_change brand (checked against Jumia's brands)." },
+  { section: "Config Attributes List",    allowed: true,  ours: "content_change details (checked against the category)." },
+  { section: "Images (Main Image)",       allowed: false, ours: "main_photo: Vendor Center. More photos after it: add_photos." },
+  { section: "Main Category",             allowed: false, ours: "main_category: Vendor Center, or list it again." },
+  { section: "Parent SKU",                allowed: false, ours: "parent_sku: Vendor Center." },
+  { section: "GTIN Barcode",              allowed: true,  ours: "content_change barcode." },
+  { section: "Global Price / Sale Price", allowed: false, ours: "Its own request (POST /feeds/products/price): live_change price or sale." },
+  { section: "Initial Stock",             allowed: false, ours: "Its own request (POST /feeds/products/stock): live_change stock." },
+  { section: "Simple Attribute List",     allowed: true,  ours: "content_change details and highlights." },
+  { section: "Variation",                 allowed: true,  ours: "content_change size (a size's name); add_size for a new one." },
 ];
 
 const byId = new Map(CAPABILITIES.map((c) => [c.id, c]));
@@ -151,6 +185,18 @@ export function canList(): string {
  * `wish`: not built yet, so the request is noted (assistant_wishes). Null
  * for an id that isn't one.
  */
+/**
+ * The nearest thing the chat does, for something it can't (owner,
+ * 2026-10-11: "if our system has no way to do the thing, how do we show it
+ * the way to do what is possible"): a key from canList(), as its own words
+ * that do it. Null for a key that isn't one the chat does.
+ */
+export function insteadLine(id: string): string | null {
+  const c = byId.get(id);
+  if (!c || (c.status !== "chat" && c.status !== "whatsapp") || !c.yes) return null;
+  return `What I can do instead: ${c.yes.replace(/^Yes[:,]\s*/, "")}`;
+}
+
 export function capabilityAnswer(id: string): { text: string; link: Capability["link"] | null; wish: boolean } | null {
   const c = byId.get(id);
   const text = c ? c.yes ?? c.answer : undefined;

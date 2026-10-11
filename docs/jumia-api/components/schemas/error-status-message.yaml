@@ -1,0 +1,17 @@
+type: object
+title: statusMessageError
+description: |-
+  Returned by the **Orders** and **Payments** endpoints (VCS), including authentication failures.
+
+  Built by `ExceptionJsonResponseModel`.
+properties:
+  message:
+    type: string
+    description: Human-readable description of what went wrong.
+  status:
+    type: integer
+    format: int32
+    description: HTTP status code, repeated in the body.
+required:
+  - message
+  - status

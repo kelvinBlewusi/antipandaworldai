@@ -1,0 +1,22 @@
+description: |-
+  Not Found. The URL or resource doesn't exist.
+
+  The body shape depends on which handler catches the failure. Both shapes below are real;
+  neither is wrapped in a `data` array.
+content:
+  application/json:
+    schema:
+      oneOf:
+        - $ref: '../../schemas/error-status-message.yaml'
+        - $ref: '../../schemas/error-timestamp-message.yaml'
+    examples:
+        Orders and Payments - most failures:
+          value:
+            message: 'The requested resource was not found.'
+            status: 404
+        Orders and Payments - invalid argument, access denied or unhandled error:
+          value:
+            timestamp: '2026-08-11T11:09:52.606+00:00'
+            status: 404
+            error: Not Found
+            message: 'The requested resource was not found.'

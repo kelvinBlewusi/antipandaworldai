@@ -56,7 +56,7 @@ describe("the tools", () => {
   it("has every action once, with the lookups apart", () => {
     const names = AGENT_TOOLS.map((t) => t.name);
     expect(new Set(names).size).toBe(names.length);
-    expect(LOOKUP_TOOLS.map((t) => t.name)).toEqual(["find_products"]);
+    expect(LOOKUP_TOOLS.map((t) => t.name)).toEqual(["find_products", "product_details"]);
     for (const t of ACTION_TOOLS) expect(t.parameters).toMatchObject({ type: "object" });
     expect(names).toEqual(expect.arrayContaining(["live_change", "bulk", "content_change", "fix_rejected", "add_size", "add_photos", "draft_text", "clarify", "reply", "cannot"]));
   });

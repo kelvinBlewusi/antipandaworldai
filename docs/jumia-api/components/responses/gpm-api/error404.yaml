@@ -1,0 +1,27 @@
+description: |-
+  Not Found. The URL or resource doesn't exist.
+
+  The body shape differs by the service backing the endpoint. Each example below is labelled
+  with the endpoint group that returns it. None are wrapped in a `data` array.
+content:
+  application/json:
+    schema:
+      oneOf:
+        - $ref: '../../schemas/error-code-message.yaml'
+        - $ref: '../../schemas/error-timestamp-message.yaml'
+        - $ref: '../../schemas/error-status-message.yaml'
+    examples:
+        Catalog and Consignment:
+          value:
+            code: 'ERROR_DEFAULT_MESSAGE'
+            message: 'The requested resource was not found.'
+        Shops and Feeds:
+          value:
+            timestamp: '2026-08-11T11:09:52.606+00:00'
+            status: 404
+            error: Not Found
+            path: /api/vendor/shops
+        Payments:
+          value:
+            message: 'The requested resource was not found.'
+            status: 404

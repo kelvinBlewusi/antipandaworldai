@@ -365,7 +365,7 @@ describe("answers", () => {
     for (const r of db.tables.jumia_products as { qc_reason: string | null }[]) r.qc_reason = null;
     await answerProducts(USER, PHONE, "rejected");
     expect(last().body).toContain("• Nasco Blender 1.5L\n");
-    expect(last().body).toContain("Jumia didn't send the reasons through its API. Say \"fix the <name>\" and I'll work out what I can, or check the reason in Vendor Center.");
+    expect(last().body).toContain("Jumia didn't send the reasons with the products. Say \"fix the <name>\" and I'll work out what I can, or check the reason in Vendor Center.");
     await answerProducts(USER, PHONE, "inactive");
     expect(last().body).toContain("• Men's Cotton T-Shirt (L)");
   });

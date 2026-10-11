@@ -1,0 +1,13 @@
+description: |-
+  Internal Server Error. The identity provider failed to process the request.
+
+  Retry with backoff. If it persists, contact your account manager with the timestamp of the request.
+content:
+  application/json:
+    schema:
+      $ref: '../../schemas/oauth-error.yaml'
+    examples:
+      Server error:
+        value:
+          error: server_error
+          error_description: Unable to process the request

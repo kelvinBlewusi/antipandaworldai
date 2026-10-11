@@ -23,7 +23,10 @@ jest.mock("@/lib/billing/features", () => ({
   featureMinPackName: () => "Pro",
 }));
 let rewritten = "{}";
-jest.mock("@/lib/ai/gemini-client", () => ({ callGeminiBackend: async () => ({ text: rewritten }) }));
+const aiPrompts: string[] = [];
+jest.mock("@/lib/ai/gemini-client", () => ({
+  callGeminiBackend: async (_model: string, parts: { text?: string }[]) => { aiPrompts.push(parts.map((p) => p.text ?? "").join("\n")); return { text: rewritten }; },
+}));
 
 type Sent = { kind: string; body: string; ids?: string[] };
 const sent: Sent[] = [];
@@ -35,14 +38,17 @@ jest.mock("@/lib/whatsapp/client", () => ({
   sendRichIfConfigured: async (_to: string, body: string, rich: { blocks: unknown[] }) => { sent.push({ kind: "text", body }); richSent.push(rich); },
   sendButtonsIfConfigured: async (_to: string, body: string, b: { id: string }[]) => { sent.push({ kind: "buttons", body, ids: b.map((x) => x.id) }); },
   sendListIfConfigured: async (_to: string, body: string) => { sent.push({ kind: "list", body }); },
+  sendImagesIfConfigured: async (_to: string, links: string[], caption?: string) => { sent.push({ kind: "images", body: caption ?? "", ids: links }); },
   sendCtaUrlIfConfigured: async (_to: string, body: string) => { sent.push({ kind: "cta", body }); },
   sendButtonsWithDocumentIfConfigured: async () => {},
   sendTemplateIfConfigured: async () => {},
 }));
 
-import { changedPrice, contentItems, pctPrice, productsFromCatalog, type ShopProduct } from "@/lib/jumia/shop";
+import { changedPrice, contentItems, findProducts, pctPrice, productsFromCatalog, saveProducts, type ShopProduct } from "@/lib/jumia/shop";
+import { answerProductPhotos, productDetailsLookup, productFactsText, whereLine } from "@/lib/whatsapp/shop";
 import { answerProductText, answerProducts, answerStock, bulkTargets, handleShopTap, htmlToText, proposeBulkChange, proposeContentChange } from "@/lib/whatsapp/shop";
 import { runApiChecks } from "@/lib/jumia/api-checks";
+import { fixRejected } from "@/lib/whatsapp/fix-rejected";
 import {
   answerBrand, answerLinkedShops, answerPayoutDetail, answerReport, answerWarehouseStock, daysLeft, handleWarehouseTap, proposeWarehouseOrder,
   proposeWarehouseShipped, salesByProduct, statementLines,
@@ -84,6 +90,7 @@ beforeEach(() => {
   sent.length = 0;
   calls.length = 0;
   rewritten = "{}";
+  aiPrompts.length = 0;
   _resetPriceMinimumCache();
   _resetBillingModeCache();
   catalog = [
@@ -229,12 +236,64 @@ describe("a live product's content", () => {
     expect(last().body).toContain("*New description:*\nA sturdy rain boot.\n• Waterproof");
   });
 
+  it("a rejected product is fixed the way the seller says, when Jumia sent no reason (owner, 2026-10-11)", async () => {
+    const boot = catalog[2] as { variations: { businessClients: { qc: Record<string, unknown> }[] }[] };
+    boot.variations[0].businessClients[0].qc = { status: "REJECTED" };
+    rewritten = '{"description":"<p>A tall rubber rain boot for farm and garden.</p>"}';
+    expect(await fixRejected(USER, PHONE, "wellington boot", null, "fix the wellington boot, the description is too short, say it's for farm and garden"))
+      .toBe("fix: rewrite (offered content (description) for WEL-B)");
+    expect(sent.find((m) => m.body.includes("I've rewritten its description to fix it, as you asked"))).toBeTruthy();
+    expect(aiPrompts.join("\n")).toContain("say it's for farm and garden");
+    expect(last().body).toContain("A tall rubber rain boot for farm and garden.");
+    // Saying nothing of what to change still asks for Jumia's reason.
+    expect(await fixRejected(USER, PHONE, "wellington boot", null, "fix the wellington boot")).toBe("fix: ask_details");
+    expect(writes()).toHaveLength(0);
+  });
+
   it("a brand Jumia doesn't have isn't sent; one it has is, with its code", async () => {
     db.tables.jumia_brands = [{ code: 2002, name: "Nasco" }];
     expect(await proposeContentChange(USER, PHONE, "kettle", { brand: "Nascoo" })).toBe("brand unknown");
     expect(last().body).toContain("isn't a brand on Jumia");
     expect(await proposeContentChange(USER, PHONE, "kettle", { brand: "nasco" })).toBe("offered content (brand) for NAS-K");
     expect(last().body).toContain("brand → Nasco");
+  });
+
+  // Owner's chat, 10 Oct: "show me the pictures for that product here" got its text.
+  it("its photos are shown, the main one first, whatever its status", async () => {
+    expect(await answerProductPhotos(USER, PHONE, "wellington boot")).toBe("photos of WEL-B (2)");
+    expect(last()).toEqual({ kind: "images", body: expect.stringContaining("*Wellington Rain Boot* (SKU WEL-B): 2 photos, the main one first."), ids: ["https://img/b-1.jpg", "https://img/b-2.jpg"] });
+    expect(last().body).toContain("OFF · approved");
+    expect(writes()).toHaveLength(0);
+  });
+
+  it("several products that fit are asked as a list to tap, keeping what was asked", async () => {
+    catalog.push(set("k2", "Nasco Electric Kettle 2L", [{ id: "bbbbbbbb-0000-4000-8000-000000000002", sku: "NAS-K2", price: 120 }]));
+    const asked: string[][] = [];
+    const which = async (sets: ShopProduct[]) => { asked.push(sets.map((s) => s.sellerSku)); return `asked which of ${sets.length}`; };
+    expect(await answerProductPhotos(USER, PHONE, "nasco kettle", which)).toBe("asked which of 2");
+    expect(await proposeContentChange(USER, PHONE, "nasco kettle", { rewrite: ["description"] }, which)).toBe("asked which of 2");
+    expect(asked).toEqual([["NAS-K", "NAS-K2"], ["NAS-K", "NAS-K2"]]);
+    // By its SKU, as typed: just that one.
+    expect(findProducts(products(), "SKU NAS-K2").map((p) => p.sellerSku)).toEqual(["NAS-K2"]);
+  });
+
+  it("everything Jumia has on one product, for the agent to answer any question about it", async () => {
+    const kettle = products().filter((p) => p.sellerSku === "NAS-K");
+    expect(whereLine(kettle[0])).toBe("ON · approved · price GHS 99.5 · stock 3");
+    await saveProducts(USER, products());
+    const [facts] = await productDetailsLookup(USER)("kettle");
+    expect(facts).toContain("Name: Nasco Electric Kettle 1.7L");
+    expect(facts).toContain("Brand: Lattafa · Category: Eau de Parfum");
+    expect(facts).toContain("SKU NAS-K · ON · approved · price GHS 99.5");
+    expect(facts).toContain("Photos: 2 (the main one first)");
+    expect(facts).toContain("Highlights: • Old point");
+    expect(facts).toContain("Details: color=Brown");
+    // Several fit: their names, to ask which.
+    const several = await productDetailsLookup(USER)("lattafa");
+    expect(several[0]).toContain("These 3 products fit");
+    expect(several.join("\n")).toContain("- Lattafa Eau de Parfum (SKU LAT-100)\n- Nasco Electric Kettle 1.7L (SKU NAS-K)\n- Wellington Rain Boot (SKU WEL-B)");
+    expect(await productDetailsLookup(USER)("nothing like it")).toEqual([]);
+    expect(productFactsText).toBeInstanceOf(Function);
   });
 
   it("its text is shown as Jumia has it, to read or edit (owner's web chat, 2026-10-08: the AI wrote one itself)", async () => {

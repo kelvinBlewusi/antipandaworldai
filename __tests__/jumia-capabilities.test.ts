@@ -54,10 +54,26 @@ describe("the list of what's possible", () => {
     expect(capabilityAnswer("made_up")).toBeNull();
   });
 
+  // Owner, 2026-10-11: "don't say 'Jumia API'": what Jumia only allows in
+  // Vendor Center is said that way. PandaWorld's own "API key" is fine.
+  it("never says \"API\" to a seller", () => {
+    const said = CAPABILITIES.flatMap((c) => [c.yes, c.answer]).filter((t): t is string => !!t);
+    expect(said.length).toBeGreaterThan(40);
+    for (const t of said) expect({ t, api: /\bAPI\b(?! key)/.test(t) }).toEqual({ t, api: false });
+  });
+
+  // Owner, 2026-10-11: "if our system has no way to do the thing, how do we
+  // show it the way to do what is possible": every "can't" says what can.
+  it("every answer that says it can't here offers the nearest thing that can be done", () => {
+    for (const c of CAPABILITIES.filter((x) => x.status === "vendor_center" || x.status === "impossible" || x.status === "not_built")) {
+      expect({ id: c.id, offers: /\bI(?: can|'ll)\b/.test(c.answer ?? "") }).toEqual({ id: c.id, offers: true });
+    }
+  });
+
   it("the AI is told only what isn't possible, by key, and gets back the fixed answer", () => {
     expect(cannotList()).toContain("- delete_product: Delete a product");
     expect(cannotList()).not.toContain("live_stock");
-    expect(cannotAnswer("delete_product")).toEqual({ text: expect.stringContaining("Jumia's API can't delete products"), link: "vendor_center" });
+    expect(cannotAnswer("delete_product")).toEqual({ text: expect.stringContaining("Jumia only lets a product be deleted in Vendor Center"), link: "vendor_center" });
     expect(cannotAnswer("live_stock")).toBeNull();
     expect(cannotAnswer("made_up")).toBeNull();
   });
@@ -65,7 +81,7 @@ describe("the list of what's possible", () => {
   it("\"cannot\" becomes that answer with its button, never the AI's own words", () => {
     const links = assistantLinks();
     expect(parseAction('{"type":"cannot","what":"delete_product"}', "delete the kettle from my shop", [], links))
-      .toEqual({ type: "reply", text: expect.stringContaining("I can turn it off"), link: "vendor_center" });
+      .toEqual({ type: "reply", text: expect.stringContaining("I can turn it OFF"), link: "vendor_center" });
     expect(parseAction('{"type":"cannot","what":"buyer_contact"}', "give me the buyer's phone number", [], links))
       .toMatchObject({ type: "reply", text: expect.stringContaining("doesn't share buyers' phone numbers"), link: null });
     // A key not on the list: something PandaWorld doesn't do (noted). One the

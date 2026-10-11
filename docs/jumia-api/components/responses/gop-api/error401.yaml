@@ -1,0 +1,22 @@
+description: |-
+  Unauthorized. The client could not be correctly authenticated.
+
+  The body shape depends on which handler catches the failure. Both shapes below are real;
+  neither is wrapped in a `data` array.
+content:
+  application/json:
+    schema:
+      oneOf:
+        - $ref: '../../schemas/error-status-message.yaml'
+        - $ref: '../../schemas/error-timestamp-message.yaml'
+    examples:
+        Orders and Payments - most failures:
+          value:
+            message: 'Authorization type is invalid'
+            status: 401
+        Orders and Payments - invalid argument, access denied or unhandled error:
+          value:
+            timestamp: '2026-08-11T11:09:52.606+00:00'
+            status: 401
+            error: Unauthorized
+            message: 'Authorization type is invalid'

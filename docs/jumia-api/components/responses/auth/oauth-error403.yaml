@@ -1,0 +1,15 @@
+description: |-
+  Forbidden. The application authenticated, but is not permitted to perform this request.
+content:
+  application/json:
+    schema:
+      $ref: '../../schemas/oauth-error.yaml'
+    examples:
+      Scope not permitted for this application:
+        value:
+          error: invalid_scope
+          error_description: The requested scope is not allowed for this client
+      Access denied:
+        value:
+          error: access_denied
+          error_description: The request was denied

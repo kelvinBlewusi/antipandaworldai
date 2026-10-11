@@ -39,28 +39,48 @@ function shortName(name: string): string {
   return words.slice(0, 4).join(" ").toLowerCase();
 }
 
-/** The fields Jumia's reason is about ("Wrong Title" → name). Both name and description when it doesn't say. */
-export function fieldsFor(reason: string): ("name" | "description" | "highlights")[] {
-  const r = reason.toLowerCase();
-  const out: ("name" | "description" | "highlights")[] = [];
+type TextField = "name" | "description" | "highlights";
+
+/** The text fields some words name ("the title is too long" → name), none when they name none. */
+export function namedFields(words: string): TextField[] {
+  const r = words.toLowerCase();
+  const out: TextField[] = [];
   if (/\b(title|name)\b/.test(r)) out.push("name");
   if (/\bdescription\b/.test(r) && !/short description/.test(r)) out.push("description");
   if (/highlight|short description|key features/.test(r)) out.push("highlights");
+  return out;
+}
+
+/** The fields Jumia's reason is about ("Wrong Title" → name). Both name and description when it doesn't say. */
+export function fieldsFor(reason: string): TextField[] {
+  const out = namedFields(reason);
   return out.length > 0 ? out : ["name", "description"];
 }
 
-/** The plan for one rejected product, from what decideQcAction said. Pure. */
-export function fixPlan(action: QcAction, name: string, reason: string, pickerUrl?: string): FixPlan {
+/**
+ * The plan for one rejected product, from what decideQcAction said. Pure.
+ * `said` is the seller's own message (owner, 2026-10-11: the fix should come
+ * from "the rejection reason and the seller's intent and command"): the
+ * fields it names are rewritten too, and its words go to the writer with
+ * Jumia's reason.
+ */
+export function fixPlan(action: QcAction, name: string, reason: string, pickerUrl?: string, said?: string | null): FixPlan {
   const short = shortName(name);
   const findIt = pickerUrl ? ` Find the right category here and copy it: ${pickerUrl}` : "";
+  const theirs = said?.trim() ? said.trim().slice(0, 400) : "";
   switch (action.kind) {
     case "redraft": {
-      const fields = fieldsFor(reason);
-      const what = fields.map((f) => (f === "highlights" ? "highlights" : f)).join(" and ");
+      const named = Array.from(new Set([...namedFields(reason), ...namedFields(theirs)]));
+      const fields = named.length > 0 ? named : fieldsFor(reason);
+      const what = fields.join(" and ");
       return {
         kind: "rewrite", fields,
-        instructions: `Fix what Jumia's quality check rejected it for${reason ? `: ${reason}` : ""}. Keep every fact that is there and add none.`,
-        intro: `🔧 *${shorten(name, 60)}*: ${action.why} I've rewritten its ${what} to fix it.`,
+        instructions: [
+          reason ? `Fix what Jumia's quality check rejected it for: ${reason}.` : "Fix it so Jumia's quality check approves it.",
+          ...(theirs ? [`What the seller asked for: "${theirs}". Do that too, unless it goes against Jumia's reason.`] : []),
+          "Keep every fact that is there and add none the seller didn't give.",
+        ].join(" "),
+        intro: `🔧 *${shorten(name, 60)}*: ${action.why} I've rewritten its ${what} to fix it${theirs ? ", as you asked" : ""}.`,
       };
     }
     case "ask_brand":
@@ -74,15 +94,15 @@ export function fixPlan(action: QcAction, name: string, reason: string, pickerUr
             : `Send it like "add <it> to the ${short}'s description" and I'll add it.`),
       };
     case "ask_price":
-      return { kind: "say", vendorCenter: true, text: `🔍 *${shorten(name, 60)}*: Jumia's quality check flagged the price${action.why}. Jumia only takes a price change through its API once a product has been approved, so change the price in Vendor Center (${REJECTED_PATH}) and send it for checking again there.` };
+      return { kind: "say", vendorCenter: true, text: `🔍 *${shorten(name, 60)}*: Jumia's quality check flagged the price${action.why}. Before a product is approved, Jumia only lets its price be changed in Vendor Center, so change the price there (${REJECTED_PATH}) and send it for checking again there.` };
     case "ask_photos":
-      return { kind: "say", vendorCenter: true, text: `📷 *${shorten(name, 60)}*: Jumia's quality check rejected the photos${action.why}. Jumia doesn't let its API change a product's main photo, so change them in Vendor Center (${REJECTED_PATH}), or list it again here with new photos (clear, well lit, plain background).` };
+      return { kind: "say", vendorCenter: true, text: `📷 *${shorten(name, 60)}*: Jumia's quality check rejected the photos${action.why}. Jumia only lets a product's main photo be changed in Vendor Center, so change them there (${REJECTED_PATH}), or list it again here with new photos (clear, well lit, plain background).` };
     case "switch_category":
-      return { kind: "say", vendorCenter: true, text: `🗂️ *${shorten(name, 60)}*: Jumia's quality check says it belongs in "${action.path}". Jumia doesn't let its API move a product to another category, so change it in Vendor Center (${REJECTED_PATH}), or list it again here and I'll put it there.${findIt}` };
+      return { kind: "say", vendorCenter: true, text: `🗂️ *${shorten(name, 60)}*: Jumia's quality check says it belongs in "${action.path}". Jumia only lets a product move to another category in Vendor Center, so change it there (${REJECTED_PATH}), or list it again here and I'll put it there.${findIt}` };
     case "ask_category":
-      return { kind: "say", vendorCenter: true, text: `🗂️ *${shorten(name, 60)}*: Jumia's quality check says the category is wrong, without saying which is right. Jumia doesn't let its API move a product to another category, so change it in Vendor Center (${REJECTED_PATH}), or list it again here in the right one.${findIt}` };
+      return { kind: "say", vendorCenter: true, text: `🗂️ *${shorten(name, 60)}*: Jumia's quality check says the category is wrong, without saying which is right. Jumia only lets a product move to another category in Vendor Center, so change it there (${REJECTED_PATH}), or list it again here in the right one.${findIt}` };
     case "ask_details":
-      return { kind: "say", vendorCenter: true, text: `🔍 *${shorten(name, 60)}*: Jumia's API didn't send why it was rejected. Open it in Vendor Center (${REJECTED_PATH}), copy Jumia's reason, and send it here as "fix the ${short}: <the reason>". I'll work out the fix.` };
+      return { kind: "say", vendorCenter: true, text: `🔍 *${shorten(name, 60)}*: Jumia didn't send why it was rejected with the product. Open it in Vendor Center (${REJECTED_PATH}), copy Jumia's reason, and send it here as "fix the ${short}: <the reason>". I'll work out the fix.` };
     case "cannot_fix":
       return { kind: "say", text: `⚠️ *${shorten(name, 60)}*: ${action.why}` };
   }
@@ -117,7 +137,7 @@ function rejectedSets(products: ShopProduct[]): ShopProduct[] {
  * "Fix my rejected products" / "fix the neck fan" / "fix the neck fan: <the
  * reason pasted from Vendor Center>". `query` null lists them to tap.
  */
-export async function fixRejected(userId: string, phone: string, query: string | null, pasted: string | null = null): Promise<string> {
+export async function fixRejected(userId: string, phone: string, query: string | null, pasted: string | null = null, said: string | null = null): Promise<string> {
   const ctx = await shopContext(userId, phone, CHANGES_FEATURE, CHANGES);
   if (!ctx) return "blocked";
   const products = await catalog(ctx);
@@ -182,12 +202,16 @@ export async function fixRejected(userId: string, phone: string, query: string |
     reason, comment: null, title: product.name, brand: product.brand, categoryPath: category?.path ?? null,
     fields: attrs.map((a) => ({ name: a.name, label: a.label ?? null })),
   });
-  const plan = fixPlan(decided.action, product.name, reason ?? "", categoryPickerUrl(product.categoryCode, ctx.country));
-  console.info(`[qc-chat] ${product.sellerSku}: ${decided.action.kind} (${decided.source})`);
+  // Jumia sent no reason, but the seller says what to rewrite: their words are the fix.
+  const action: QcAction = decided.action.kind === "ask_details" && said && namedFields(said).length > 0
+    ? { kind: "redraft", why: "Jumia didn't send its reason with the product, so I went by what you said." }
+    : decided.action;
+  const plan = fixPlan(action, product.name, reason ?? "", categoryPickerUrl(product.categoryCode, ctx.country), said);
+  console.info(`[qc-chat] ${product.sellerSku}: ${action.kind} (${decided.source})`);
   if (plan.kind === "say") {
     if (plan.vendorCenter) await sendCtaUrlIfConfigured(phone, plan.text, "Vendor Center", VENDOR_CENTER);
     else await sendTextIfConfigured(phone, plan.text);
-    return `fix: ${decided.action.kind}`;
+    return `fix: ${action.kind}`;
   }
   await sendTextIfConfigured(phone, `${plan.intro} Check it below, then tap Yes to send it to Jumia, which checks it again.`);
   const offered = await proposeContentChange(userId, phone, product.sellerSku, { rewrite: plan.fields, instructions: plan.instructions });

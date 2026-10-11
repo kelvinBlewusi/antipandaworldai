@@ -97,7 +97,7 @@ import { findBrandExact, getBrandCount, searchBrandsFromDB } from "@/lib/jumia/b
 import { chatChannelOf, isWebAddress } from "@/lib/whatsapp/channel";
 import { limitedText } from "@/lib/whatsapp/assistant-limits";
 import { carryPriceToVariants, carrySaleToVariants, carryStockToVariants, chatPrice, dropVariantSalesFrom, shopCurrencyForUser } from "@/lib/whatsapp/listing-edits";
-import { answerLiveValue, answerPendingQuestion, assistantFor, plainQuickEdit, runAssistant, type AssistantOutcome, type Stage } from "@/lib/whatsapp/assistant";
+import { answerLiveValue, answerPendingQuestion, answerProductPick, assistantFor, plainQuickEdit, runAssistant, type AssistantOutcome, type Stage } from "@/lib/whatsapp/assistant";
 import { batchCreditRefusal, creditGate } from "@/lib/whatsapp/credit-gate";
 import { runChatCommand } from "@/lib/whatsapp/chat-commands";
 import { nudgePolishWorker, queuePolish } from "@/lib/whatsapp/chat-polish";
@@ -771,6 +771,12 @@ export async function handleLinkedMessage(
   // kept, "done" offers them for the tap; anything else lets the question go.
   if (session.assistantPending && "kind" in session.assistantPending && session.assistantPending.kind === "add_photos") {
     if (await answerAddPhotos(userId, phoneNumber, session.assistantPending, content)) return;
+    session = { ...session, assistantPending: null };
+  }
+  // A product picked from the assistant's "which one?" list (whichOf): what
+  // they asked for is carried out on it.
+  if (session.assistantPending && "kind" in session.assistantPending && session.assistantPending.kind === "product_pick") {
+    if (await answerProductPick(userId, phoneNumber, session, content.imageMediaId ? undefined : content.text)) return;
     session = { ...session, assistantPending: null };
   }
   if (session.assistantPending && "kind" in session.assistantPending) {

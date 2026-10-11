@@ -37,7 +37,7 @@ import { ownerWhatsApp } from "@/lib/evals/warning-signs";
 import { ASSISTANT_CASES, type EvalCase, type Shape } from "@/lib/evals/assistant-cases";
 import { frontDoor, type FrontDoorInput } from "@/lib/assistant-v2/front-door";
 import { agentRead, agentSystem, catalogLookups, geminiAgentCall } from "@/lib/assistant-v2/agent";
-import { fromRow } from "@/lib/jumia/shop";
+import { findProducts, fromRow } from "@/lib/jumia/shop";
 import type { ListingRow } from "@/lib/supabase/types";
 
 /** What the AI is told about the seller: the shape sellerFacts gives, for a Standard seller in Ghana. */
@@ -146,7 +146,9 @@ export async function understandFrontDoor(c: EvalCase, models: { router: string;
 
 /**
  * What agent mode makes of the case's message: its lookups answered from
- * the case's catalog (names only; nothing else about them is known).
+ * the case's catalog. A product read (product_details) gives its name with
+ * the same stand-in details for every product: the run scores what the
+ * chat does with them, not the facts.
  */
 export async function understandAgent(c: EvalCase, model: string) {
   const shop = (c.catalog ?? []).map((name, i) => fromRow({ product_sid: `p${i + 1}`, seller_sku: `SKU-${i + 1}`, name }));
@@ -154,7 +156,13 @@ export async function understandAgent(c: EvalCase, model: string) {
     stage: c.stage, message: c.msg, conversation: c.ctx ?? [], drafts: facts(c), listed: c.listed ?? null,
     waitingFor: c.waitingFor, seller: SELLER, links: assistantLinks(), currency: "GHS", web: c.web ?? true, shopNames: c.catalog, listingCost: 2,
   };
-  return agentRead(input, geminiAgentCall(model, agentSystem(2), { feature: "assistant_eval" }), catalogLookups(shop));
+  const productDetails = async (words: string) => {
+    const hits = findProducts(shop, words, 5);
+    if (hits.length !== 1) return hits.map((p) => `- ${p.name} (SKU ${p.sellerSku})`);
+    const p = hits[0];
+    return [`Name: ${p.name}\nSKU ${p.sellerSku} · ON · approved · price GHS 100 · stock 5\nPhotos: 3 (the main one first)\nDetails: color=Black; material=Plastic; what_is_in_the_box=1 x ${p.name}`];
+  };
+  return agentRead(input, geminiAgentCall(model, agentSystem(2), { feature: "assistant_eval" }), { ...catalogLookups(shop), productDetails });
 }
 
 const summary = (a: unknown) => JSON.stringify(a).slice(0, 400);

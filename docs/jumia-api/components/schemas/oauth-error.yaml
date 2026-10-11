@@ -1,0 +1,42 @@
+type: object
+title: oauthError
+description: |-
+  Returned by the **Authentication** endpoints (`/login`, `/token`).
+
+  These endpoints are served by Jumia's identity provider rather than by the Vendor APIs, so the body
+  follows the OAuth 2.0 error format ([RFC 6749, Section 5.2](https://www.rfc-editor.org/rfc/rfc6749#section-5.2))
+  and **not** the `code`/`message` shape used elsewhere in this document.
+properties:
+  error:
+    type: string
+    description: |-
+      The OAuth 2.0 error code. Machine-readable and stable — branch on this, not on `error_description`.
+    enum:
+      - invalid_request
+      - invalid_scope
+      - invalid_client
+      - invalid_grant
+      - unauthorized_client
+      - unsupported_grant_type
+      - server_error
+      - interaction_required
+      - login_required
+      - request_not_supported
+      - access_denied
+      - expired_token
+      - invalid_target
+    example: invalid_grant
+  error_description:
+    type: string
+    description: |-
+      Human-readable explanation of the failure. Intended for developers reading logs — the wording is
+      not part of the contract and may change without notice.
+    example: Invalid refresh token
+  state:
+    type: string
+    description: The `state` value from the original authorization request, when one was supplied.
+  session_state:
+    type: string
+    description: Identifier of the session the failure relates to, when one applies.
+required:
+  - error

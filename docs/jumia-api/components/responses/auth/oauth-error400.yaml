@@ -1,0 +1,32 @@
+description: |-
+  Bad Request. The request was rejected before a token could be issued.
+
+  The most common causes are an expired or already-used Authorization Code, a `refresh_token` that has
+  expired, and a `grant_type` the application is not registered for. See the
+  [troubleshooting table](#tag/Step-by-Step-Authentication) for how to tell them apart.
+content:
+  application/json:
+    schema:
+      $ref: '../../schemas/oauth-error.yaml'
+    examples:
+      Authorization Code already used or expired:
+        value:
+          error: invalid_grant
+          error_description: Invalid or expired authorization code
+      Refresh Token no longer valid:
+        value:
+          error: invalid_grant
+          error_description: Invalid refresh token
+      Grant type not enabled for this application:
+        description: |-
+          Returned when a **Web Application** attempts `grant_type=refresh_token`, or a
+          **Self Authorization** application attempts `grant_type=authorization_code`. The grant is
+          fixed by the application type chosen when the application was created and cannot be changed
+          afterwards.
+        value:
+          error: unauthorized_client
+          error_description: The client is not authorized to use this grant type
+      redirect_uri does not match:
+        value:
+          error: invalid_request
+          error_description: The redirect_uri does not match the one registered for this application
