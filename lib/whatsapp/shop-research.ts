@@ -494,23 +494,29 @@ async function readPandaworldListings(ctx: Ctx, need: Extract<ResearchNeed, { so
   const tz = ctx.jc?.timeZone ?? "UTC";
   const from = periodStart(need.period, tz);
   const { data } = await createServerClient().from("listings")
-    .select("title, status, selling_price, created_at").eq("user_id", ctx.userId).gt("created_at", `${from}T00:00:00`)
+    .select("title, status, selling_price, created_at, whatsapp_batch_id, chat_channel").eq("user_id", ctx.userId).gt("created_at", `${from}T00:00:00`)
     .order("created_at", { ascending: false }).limit(MAX_ROWS);
-  const list = (data ?? []) as { title: string | null; status: string; selling_price: number | null; created_at: string }[];
+  const list = (data ?? []) as { title: string | null; status: string; selling_price: number | null; created_at: string; whatsapp_batch_id: string | null; chat_channel: string | null }[];
   const title = `Products listed with PandaWorld ${PERIOD_WORDS[need.period]}`;
   if (list.length === 0) return { title: `${title}: none`, lines: [] };
   const LISTING_TONE: Record<string, RichTone> = { live: "good", pending_approval: "info", processing: "info", failed: "bad", draft: "neutral", awaiting_review: "neutral" };
+  // Where each was made (owner's web chat, 2026-10-11: "how many were made from whatsapp" had no answer).
+  const madeIn = (l: (typeof list)[number]) => (!l.whatsapp_batch_id ? "Chrome extension" : l.chat_channel === "web" ? "web chat" : "WhatsApp");
+  const counts = new Map<string, number>();
+  for (const l of list) counts.set(madeIn(l), (counts.get(madeIn(l)) ?? 0) + 1);
+  const drafts = list.filter((l) => l.status === "draft" || l.status === "failed").length;
+  const split = Array.from(counts).map(([where, n]) => `${n} from the ${where}`).join(", ");
   return {
     rich: [{
-      kind: "table", columns: ["Product", "Where it is", "Price", "Listed"], align: ["left", "left", "right", "left"],
+      kind: "table", columns: ["Product", "Where it is", "Made in", "Price", "Listed"], align: ["left", "left", "left", "right", "left"],
       rows: list.map((l) => [
-        shorten(l.title ?? "(no name yet)", 70), cell(LISTING_STATUS[l.status] ?? l.status, LISTING_TONE[l.status] ?? "neutral"),
+        shorten(l.title ?? "(no name yet)", 70), cell(LISTING_STATUS[l.status] ?? l.status, LISTING_TONE[l.status] ?? "neutral"), madeIn(l),
         l.selling_price != null ? formatAmount(l.selling_price, ctx.currency, ctx.jc) : "", dayText(l.created_at, tz),
       ]),
     }],
-    title: `${title}: ${list.length}${list.length >= MAX_ROWS ? "+" : ""} (newest first)`,
+    title: `${title}: ${list.length}${list.length >= MAX_ROWS ? "+" : ""} (${split}; ${drafts} draft${drafts === 1 ? "" : "s"} not yet sent; newest first)`,
     lines: list.map((l) => [
-      `• ${shorten(l.title ?? "(no name yet)", 70)}`, LISTING_STATUS[l.status] ?? l.status,
+      `• ${shorten(l.title ?? "(no name yet)", 70)}`, LISTING_STATUS[l.status] ?? l.status, `made in the ${madeIn(l)}`,
       l.selling_price != null ? formatAmount(l.selling_price, ctx.currency, ctx.jc) : "", dayText(l.created_at, tz),
     ].filter(Boolean).join(" · ")),
   };

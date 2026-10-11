@@ -192,7 +192,9 @@ function describeContent(f: ContentFields): string {
       v.variation ? `variation (SKU ${v.sellerSku}) → ${v.variation}` : null,
       v.barcode ? `barcode${(f.variations ?? []).length > 1 ? ` (SKU ${v.sellerSku})` : ""} → ${v.barcode}` : null,
     ]),
-    f.images?.length ? `${f.images.length} more photo${f.images.length === 1 ? "" : "s"} after its main one` : null,
+    f.images?.length && f.dropImages?.length
+      ? `${Math.min(f.images.length, f.dropImages.length)} of its photos swapped for new ones${f.images.length > f.dropImages.length ? ` and ${f.images.length - f.dropImages.length} added` : ""}`
+      : f.images?.length ? `${f.images.length} more photo${f.images.length === 1 ? "" : "s"} after its main one` : null,
   ].filter(Boolean).join(", ") || "its content";
 }
 
@@ -310,7 +312,22 @@ export async function proposeLiveChange(
   }
   // "Change its sale price…" right after changing one of these: that one.
   const preferred = opts.preferSid ? onJumia.find((m) => m.sid === opts.preferSid) : undefined;
-  const matches = preferred ? [preferred] : onJumia;
+  let matches = preferred ? [preferred] : onJumia;
+
+  // A sale at or above the price, or a price at or under a running sale, is
+  // refused by Jumia minutes later: said now instead (owner, 2026-10-11, the
+  // dartboard's sale at GHS 200 on a GHS 180 price came back as "The Local
+  // Sale Price … should not be greater than local Price").
+  if (change.kind === "sale" || change.kind === "price") {
+    const newPrices = change.kind === "sale" ? await priceChangesUnderway(userId, matches.map((m) => m.sid)) : new Map<string, number>();
+    const clashes = matches.map((m) => ({ m, why: priceClash(m, change, newPrices.get(m.sid) ?? null, ctx) }));
+    const fine = clashes.filter((c) => !c.why).map((c) => c.m);
+    if (fine.length === 0) {
+      await sendTextIfConfigured(phone, `⚠️ ${clashes[0].why}`);
+      return `price clash: ${matches.map((m) => m.sellerSku).join(", ")}`;
+    }
+    matches = fine;
+  }
 
   const db = createServerClient();
   const one = matches.length === 1 ? matches[0] : null;
@@ -356,6 +373,45 @@ export async function proposeLiveChange(
   return `asked which of ${matches.length}`;
 }
 
+/**
+ * Why Jumia would refuse this price or sale on this product, or null. Its
+ * rule: the sale price below the price, never equal. A sale is checked
+ * against the price it will have (a price change for it just sent or
+ * waiting for its tap, `newPrice`); a price against a sale that hasn't
+ * ended. Exported for its tests.
+ */
+export function priceClash(p: ShopProduct, change: LiveChange, newPrice: number | null, ctx: { currency: string; jc?: JumiaCountry }, today = new Date().toISOString().slice(0, 10)): string | null {
+  const cur = p.currency || ctx.currency;
+  const amount = (n: number) => formatAmount(n, cur, ctx.jc);
+  const name = `*${shorten(label(p), 80)}*`;
+  if (change.kind === "sale" && change.sale) {
+    const price = newPrice ?? p.price;
+    if (price == null || change.sale.price < price) return null;
+    return `Jumia won't take a sale at ${amount(change.sale.price)} on ${name}: its price is ${amount(price)}${newPrice != null ? " (the new one)" : ""}, and a sale price has to be below the price. ` +
+      `Send a sale price under ${amount(price)}, or raise the price above ${amount(change.sale.price)} first.`;
+  }
+  if (change.kind === "price" && p.salePrice != null && (!p.saleEnd || p.saleEnd.slice(0, 10) >= today) && p.salePrice >= change.price) {
+    const until = p.saleEnd ? ` until ${p.saleEnd.slice(0, 10)}` : "";
+    return `Jumia won't take a price of ${amount(change.price)} on ${name}: it's on sale at ${amount(p.salePrice)}${until}, and the sale price has to stay below the price. ` +
+      `Set a price above ${amount(p.salePrice)}, or end the sale first (e.g. "end the sale on ${shorten(p.name, 30)}").`;
+  }
+  return null;
+}
+
+/** Each product's new price from a price change sent in the last half hour or waiting for its tap, newest first. */
+async function priceChangesUnderway(userId: string, sids: string[]): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  if (sids.length === 0) return out;
+  const { data } = await createServerClient().from("jumia_product_changes")
+    .select("product_sid, change, status, created_at").eq("user_id", userId).in("product_sid", sids.slice(0, 50))
+    .in("status", ["pending", "sent"]).gt("created_at", new Date(Date.now() - 30 * 60_000).toISOString())
+    .order("created_at", { ascending: false });
+  for (const r of (data ?? []) as { product_sid: string | null; change: LiveChange | null }[]) {
+    if (r.product_sid && r.change?.kind === "price" && !out.has(r.product_sid)) out.set(r.product_sid, r.change.price);
+  }
+  return out;
+}
+
 /** Several products, one change: said back when any is missing or unclear, else one question for one tap. */
 async function proposeGroup(
   ctx: Ctx, products: ShopProduct[], queries: string[], change: LiveChange, opts: { preferSid?: string | null; all?: boolean },
@@ -385,6 +441,20 @@ async function proposeGroup(
     ].join("\n"));
     if (off.length === targets.length) return `group not on Jumia: ${off.map((p) => p.sellerSku).join(", ")}`;
     targets = targets.filter(changeable);
+  }
+  if (change.kind === "sale" || change.kind === "price") {
+    const newPrices = change.kind === "sale" ? await priceChangesUnderway(userId, targets.map((p) => p.sid)) : new Map<string, number>();
+    const clashes = targets.map((p) => ({ p, why: priceClash(p, change, newPrices.get(p.sid) ?? null, ctx) })).filter((c) => c.why);
+    if (clashes.length > 0) {
+      await sendLong(phone, clashes.length === targets.length && clashes.length === 1 ? `⚠️ ${clashes[0].why}` : [
+        clashes.length === targets.length ? "⚠️ I haven't changed anything: Jumia would refuse each one." : `⚠️ I'll leave ${clashes.length === 1 ? "this one" : `these ${clashes.length}`} out: Jumia would refuse ${clashes.length === 1 ? "it" : "them"}.`,
+        ...clashes.slice(0, 10).map((c) => `• ${c.why}`),
+        ...(clashes.length > 10 ? [`+${clashes.length - 10} more`] : []),
+      ].join("\n"));
+      if (clashes.length === targets.length) return `group price clash: ${clashes.map((c) => c.p.sellerSku).join(", ")}`;
+      const out = new Set(clashes.map((c) => c.p.sid));
+      targets = targets.filter((p) => !out.has(p.sid));
+    }
   }
   if (targets.length > MAX_GROUP) {
     await sendTextIfConfigured(phone, `That's ${targets.length} products: I change up to ${MAX_GROUP} with one tap. Name fewer at a time, or use Jumia Vendor Center's bulk tools for more.`);
@@ -475,6 +545,11 @@ export function bulkTargets(
     if ((change.kind === "price_pct" || change.kind === "sale_pct" || change.kind === "sale") && p.price == null) { skip("price not known yet"); return false; }
     if (price != null && minimum != null && price < minimum) { skip("would go below Jumia's lowest price"); return false; }
     if (change.kind === "sale" && change.sale && p.price != null && change.sale.price >= p.price) { skip("sale price not below its price"); return false; }
+    // A lower price under a sale that hasn't ended: Jumia refuses it (priceClash).
+    const today = new Date().toISOString().slice(0, 10);
+    if ((change.kind === "price" || change.kind === "price_pct") && price != null && p.salePrice != null && (!p.saleEnd || p.saleEnd.slice(0, 10) >= today) && p.salePrice >= price) {
+      skip("its sale price would be above the new price (end the sale first)"); return false;
+    }
     return true;
   });
   return { targets, skipped: Array.from(skipped.entries()).map(([reason, count]) => ({ reason, count })) };
@@ -842,10 +917,6 @@ export async function proposeAddSize(userId: string, phone: string, query: strin
   }
   const product = sets[0];
   const short = shorten(product.name.split(/[–—-]/)[0].trim(), 30).toLowerCase();
-  if (req.stock == null || !Number.isInteger(req.stock) || req.stock < 0) {
-    await sendTextIfConfigured(phone, `How many ${req.size} do you have? Say e.g. "add size ${req.size} to the ${short}, 5 in stock"${req.price == null ? ", and its price if it's not the same as the others" : ""}.`);
-    return "add size: no stock";
-  }
   const set = await fetchProductSet(ctx.token, product.sellerSku);
   if (!set.ok || !set.data) {
     await sendTextIfConfigured(phone, `I couldn't read ${shorten(product.name, 60)} from Jumia just now${set.ok ? "" : `: ${set.message}`}. Try again in a minute.`);
@@ -875,12 +946,36 @@ export async function proposeAddSize(userId: string, phone: string, query: strin
     await sendTextIfConfigured(phone, `${shorten(product.name, 60)} already has ${value}. To change its stock, say e.g. "set the ${short} ${value} to 5".`);
     return "add size: has it";
   }
+  // Its stock, then its price, each asked when not given: the next message's
+  // number is the answer (lib/whatsapp/assistant.ts answerLiveValue). The
+  // price isn't taken from the others without a word (owner, 2026-10-11):
+  // "Same price" is one tap.
   const siblings = products.filter((p) => (p.setSid ?? p.sid) === (product.setSid ?? product.sid));
-  const price = req.price ?? siblings.find((p) => p.price != null)?.price ?? null;
-  if (price == null) {
-    await sendTextIfConfigured(phone, `What should ${value} sell for? Say e.g. "add size ${value} to the ${short}, ${req.stock} in stock at 120".`);
-    return "add size: no price";
+  const prices = Array.from(new Set(siblings.map((p) => p.price).filter((n): n is number => n != null))).sort((a, b) => a - b);
+  // "Same price" only when its sizes have one price between them.
+  const same = prices.length === 1 ? prices[0] : null;
+  const ask = (field: "stock" | "price") => updateSession(phone, {
+    assistantPending: {
+      kind: "live_value", field, products: [product.sellerSku], preferSid: product.sid, at: new Date().toISOString(),
+      addSize: { size: value, said: req.said, stock: req.stock, price: req.price, same },
+    },
+  });
+  if (req.stock == null || !Number.isInteger(req.stock) || req.stock < 0) {
+    await ask("stock");
+    await sendTextIfConfigured(phone, `How many *${value}* of *${shorten(product.name, 60)}* do you have? Send the number.`);
+    return "add size: asked stock";
   }
+  if (req.price == null) {
+    await ask("price");
+    const money = (n: number) => formatAmount(n, product.currency || ctx.currency, ctx.jc);
+    const amount = same != null ? money(same) : null;
+    const others = prices.length > 1 ? ` (its other sizes are ${prices.slice(0, 4).map(money).join(", ")})` : "";
+    const question = `What should *${value}* of *${shorten(product.name, 60)}* sell for? Send its price${amount ? `, or tap *Same price* for ${amount} like the others` : others}.`;
+    if (amount) await sendButtonsIfConfigured(phone, question, [{ id: "lval:same", title: "Same price" }]);
+    else await sendTextIfConfigured(phone, question);
+    return "add size: asked price";
+  }
+  const price = req.price;
   const parentSku = set.data.parentSku ?? set.data.variations[0].sellerSku;
   const change: LiveChange = {
     kind: "add_variation", variation: value, price, stock: req.stock, axis: axis?.name ?? null,
@@ -959,8 +1054,9 @@ async function applyChange(ctx: Ctx, id: string, product: ShopProduct, live: Liv
     await sendTextIfConfigured(ctx.phone, `⚠️ Jumia didn't take that change to ${shorten(label(product), 80)}: ${sent.message}`);
     return "failed";
   }
-  await db.from("jumia_product_changes").update({ status: "sent", feed_id: sent.data.feedId, ...where, updated_at: now }).eq("id", id);
-  await sendTextIfConfigured(ctx.phone, `✅ Sent to Jumia: *${shorten(label(product), 100)}*, ${describeLiveChange(live, product, ctx)}. Jumia usually applies it within a few minutes; I'll tell you if it refuses.`);
+  // What Jumia makes of it is told where it was asked (lib/whatsapp/shop-notices.ts).
+  await db.from("jumia_product_changes").update({ status: "sent", feed_id: sent.data.feedId, reply_to: ctx.phone, ...where, updated_at: now }).eq("id", id);
+  await sendTextIfConfigured(ctx.phone, `✅ Sent to Jumia: *${shorten(label(product), 100)}*, ${describeLiveChange(live, product, ctx)}. Jumia usually applies it within a few minutes; I'll tell you here once it has, or if it refuses.`);
   return "sent";
 }
 
@@ -1015,11 +1111,11 @@ async function handleGroupTap(userId: string, phone: string, groupId: string, co
     await sendTextIfConfigured(phone, `⚠️ Jumia didn't take that change: ${sent.message}`);
     return;
   }
-  await mark(kept.map((r) => String(r.id)), { status: "sent", feed_id: sent.data.feedId });
+  await mark(kept.map((r) => String(r.id)), { status: "sent", feed_id: sent.data.feedId, reply_to: phone });
   const gone = pending.filter((r) => !kept.includes(r));
   if (gone.length > 0) await mark(gone.map((r) => String(r.id)), { status: "cancelled", error: "product gone" });
   const names = keptProducts.slice(0, 5).map((p) => shorten(label(p), 40)).join(", ") + (keptProducts.length > 5 ? ` and ${keptProducts.length - 5} more` : "");
-  await sendTextIfConfigured(phone, `✅ Sent to Jumia for ${keptProducts.length} product${keptProducts.length === 1 ? "" : "s"} (${names}): ${describeLiveChange(live, null, ctx)}. Jumia usually applies it within a few minutes; I'll tell you if it refuses any.`);
+  await sendTextIfConfigured(phone, `✅ Sent to Jumia for ${keptProducts.length} product${keptProducts.length === 1 ? "" : "s"} (${names}): ${describeLiveChange(live, null, ctx)}. Jumia usually applies it within a few minutes; I'll tell you here once it has, or if it refuses any.`);
 }
 
 /** Handle a change's tap. False when the message isn't one. */

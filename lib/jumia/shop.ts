@@ -362,6 +362,12 @@ export interface ContentFields {
   variations?:  { sellerSku: string; barcode?: string; variation?: string }[];
   /** More photos, after the ones it has (its main photo stays first; owner, 2026-10-09). */
   images?:      string[];
+  /**
+   * Its photos to take out, by URL, the new ones going in their places
+   * (owner, 2026-10-11: "for cases where the live product is 8 and we can't
+   * add more and we will need to replace the old"). Never the main one.
+   */
+  dropImages?:  string[];
 }
 
 /** The most photos Jumia takes on one product. */
@@ -643,7 +649,7 @@ export async function contentItems(accessToken: string, products: ShopProduct[],
         description: { value: fields.description ?? set.description },
         brand:       fields.brand ?? set.brand,
         category:    set.category,
-        images:      withImages(set.images, fields.images),
+        images:      withImages(set.images, fields.images, fields.dropImages),
         attributes:  [...attributes, ...v.attributes.map((a) => (details.has(a.name) ? { ...a, value: details.get(a.name)! } : a))],
       });
     }
@@ -652,14 +658,37 @@ export async function contentItems(accessToken: string, products: ShopProduct[],
   return { ok: true, data: items };
 }
 
-/** Its photos with more after them: the main one stays first and main, at most MAX_PRODUCT_IMAGES. Pure. */
-export function withImages(images: ProductSet["images"], more: string[] | undefined): ProductSet["images"] {
-  if (!more || more.length === 0) return images;
+/**
+ * Its photos with the new ones: each in the place of one taken out (`drop`,
+ * never the main one), the rest after them. The main one stays first and
+ * main, at most MAX_PRODUCT_IMAGES. Pure.
+ */
+export function withImages(images: ProductSet["images"], more: string[] | undefined, drop: string[] = []): ProductSet["images"] {
+  if ((!more || more.length === 0) && drop.length === 0) return images;
   const main = images.find((i) => i.primary) ?? images[0];
   const ordered = main ? [main, ...images.filter((i) => i !== main)] : [...images];
   const have = new Set(ordered.map((i) => i.url));
-  const added = more.filter((u) => u && !have.has(u)).map((url) => ({ url, primary: false }));
-  return [...ordered.map((i, n) => ({ ...i, primary: n === 0 })), ...added].slice(0, MAX_PRODUCT_IMAGES);
+  const fresh = (more ?? []).filter((u) => u && !have.has(u));
+  const out: { url: string; primary: boolean }[] = [];
+  for (const image of ordered) {
+    if (image === main || !drop.includes(image.url)) out.push(image);
+    else if (fresh.length > 0) out.push({ url: fresh.shift()!, primary: false });
+  }
+  return [...out, ...fresh.map((url) => ({ url, primary: false }))].map((i, n) => ({ ...i, primary: n === 0 })).slice(0, MAX_PRODUCT_IMAGES);
+}
+
+/**
+ * The photos to swap out, by URL, from what the seller said: never the main
+ * one (1), only ones it has. `images` is its photos, main first. Pure.
+ */
+export function photosToSwap(images: { url: string }[], swap: { positions: number[]; last: number; all: boolean } | undefined): { drop: string[]; positions: number[]; main: boolean } {
+  if (!swap) return { drop: [], positions: [], main: false };
+  const have = images.length;
+  const wanted = swap.all ? Array.from({ length: have }, (_, i) => i + 1)
+    : swap.positions.length > 0 ? swap.positions
+    : swap.last > 0 ? Array.from({ length: Math.min(swap.last, have - 1) }, (_, i) => have - Math.min(swap.last, have - 1) + i + 1) : [];
+  const positions = wanted.filter((n) => n >= 2 && n <= have);
+  return { drop: positions.map((n) => images[n - 1].url), positions, main: wanted.includes(1) && !swap.all };
 }
 
 /** A new variation's SKU: the parent's with the size ("PA-12AB-XL"), not one it already has. Pure. */

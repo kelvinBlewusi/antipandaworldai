@@ -17,8 +17,8 @@
 import { createServerClient } from "@/lib/supabase/server";
 import { sendButtonsIfConfigured, sendTextIfConfigured } from "@/lib/whatsapp/client";
 import { ingestWhatsAppImage } from "@/lib/whatsapp/media";
-import { updateSession, type AddPhotosAsk } from "@/lib/whatsapp/session";
-import { MAX_PRODUCT_IMAGES, fetchProductSet, findProducts, fromRow, type LiveChange } from "@/lib/jumia/shop";
+import { updateSession, type AddPhotosAsk, type PhotoSwap } from "@/lib/whatsapp/session";
+import { MAX_PRODUCT_IMAGES, fetchProductSet, findProducts, fromRow, photosToSwap, type LiveChange } from "@/lib/jumia/shop";
 import { CHANGES, CHANGES_FEATURE, catalog, makeChange, sendLong, shopContext, shorten } from "@/lib/whatsapp/shop";
 
 /** Photos not finished in this long are let go. */
@@ -27,8 +27,15 @@ const DONE = { id: "done", title: "Done ✅" };
 const DONE_RE = /^(done|finished|that'?s all|that'?s it|ok done|send|send them)[.!]*$/i;
 const STOP_RE = /^(cancel|stop|never ?mind|forget it|no|not now|leave it)[.!]*$/i;
 
-/** "Add photos to the neck fan": asks for them, and waits. */
-export async function startAddPhotos(userId: string, phone: string, query: string): Promise<string> {
+const numbered = (ns: number[]) => (ns.length === 1 ? `photo ${ns[0]}` : `photos ${ns.slice(0, -1).join(", ")} and ${ns[ns.length - 1]}`);
+
+/**
+ * "Add photos to the neck fan": asks for them, and waits. With `swap`
+ * ("replace photos 7 and 8"), the new ones go in those photos' places:
+ * how a product with 8 photos, the most Jumia takes, gets new ones (owner,
+ * 2026-10-11).
+ */
+export async function startAddPhotos(userId: string, phone: string, query: string, swap?: PhotoSwap): Promise<string> {
   const ctx = await shopContext(userId, phone, CHANGES_FEATURE, CHANGES);
   if (!ctx) return "blocked";
   const products = await catalog(ctx);
@@ -54,10 +61,20 @@ export async function startAddPhotos(userId: string, phone: string, query: strin
     return "set unreadable";
   }
   const have = set.data.images.length;
-  const room = MAX_PRODUCT_IMAGES - have;
+  const main = set.data.images.find((i) => i.primary) ?? set.data.images[0];
+  const ordered = main ? [main, ...set.data.images.filter((i) => i !== main)] : set.data.images;
+  const { drop, positions, main: askedMain } = photosToSwap(ordered, swap);
+  if (askedMain && drop.length === 0) {
+    await sendTextIfConfigured(phone, `Jumia only lets a product's main photo (photo 1) be changed in Vendor Center. I can swap any of its others (2 to ${have}) for new ones: say which, e.g. "replace photo ${Math.max(2, have)} of the ${shorten(product.name.split(/[–—-]/)[0].trim(), 30).toLowerCase()}".`);
+    return "swap: main photo";
+  }
+  const room = MAX_PRODUCT_IMAGES - have + drop.length;
   if (room <= 0) {
-    await sendTextIfConfigured(phone, `${shorten(product.name, 60)} already has ${have} photos, the most Jumia takes. Jumia only lets photos be removed or swapped in Vendor Center.`);
-    return "photos full";
+    await sendTextIfConfigured(phone, [
+      `${shorten(product.name, 60)} already has ${have} photos, the most Jumia takes. I can put new ones in place of some of them: say which (2 to ${have}; the main one, 1, only changes in Vendor Center), e.g. "replace photos ${have - 1} and ${have} of the ${shorten(product.name.split(/[–—-]/)[0].trim(), 30).toLowerCase()}", then send the new ones.`,
+      `To see them numbered, ask "show me its photos".`,
+    ].join("\n\n"));
+    return "photos full: asked which to swap";
   }
   const change: LiveChange = { kind: "content", fields: { images: [] } };
   const { data, error } = await createServerClient().from("jumia_product_changes").insert({
@@ -68,10 +85,19 @@ export async function startAddPhotos(userId: string, phone: string, query: strin
     await sendTextIfConfigured(phone, "I couldn't get that ready just now. Ask again in a moment.");
     return `failed: ${error?.message ?? "no row"}`;
   }
-  const ask: AddPhotosAsk = { kind: "add_photos", changeId: (data as { id: string }).id, name: product.name, room, at: new Date().toISOString() };
+  const ask: AddPhotosAsk = { kind: "add_photos", changeId: (data as { id: string }).id, name: product.name, room, at: new Date().toISOString(), ...(drop.length > 0 ? { drop } : {}) };
   await updateSession(phone, { assistantPending: ask });
+  const tips = "Clear, well lit, plain background, no watermarks.";
+  if (drop.length > 0) {
+    const extra = room - drop.length;
+    await sendButtonsIfConfigured(phone,
+      `📷 Send the new photo${drop.length === 1 ? "" : "s"} for *${shorten(product.name, 80)}*: ${drop.length === 1 ? "it takes" : "they take"} the place of its ${numbered(positions)}${extra > 0 ? `, and up to ${extra} more go after them` : ""}. ${tips} ` +
+      `Its main photo stays. Tap Done when they're all here, and they go to Jumia${drop.length > 1 ? " (send fewer and only that many are swapped)" : ""}.`,
+      [DONE]);
+    return `asked for photos to swap ${numbered(positions)} for ${product.sellerSku}`;
+  }
   await sendButtonsIfConfigured(phone,
-    `📷 Send up to ${room} more photo${room === 1 ? "" : "s"} for *${shorten(product.name, 80)}* (it has ${have}). Clear, well lit, plain background, no watermarks. ` +
+    `📷 Send up to ${room} more photo${room === 1 ? "" : "s"} for *${shorten(product.name, 80)}* (it has ${have}). ${tips} ` +
     "Its main photo stays first: Jumia only lets that one be changed in Vendor Center. Tap Done when they're all here.",
     [DONE]);
   return `asked for photos (${room}) for ${product.sellerSku}`;
@@ -131,7 +157,9 @@ export async function answerAddPhotos(
     return true;
   }
   await updateSession(phone, { assistantPending: null });
-  const change: LiveChange = { kind: "content", fields: { images: photos } };
+  // Swapping: as many of its photos go as new ones came (the first named first).
+  const drop = (ask.drop ?? []).slice(0, photos.length);
+  const change: LiveChange = { kind: "content", fields: { images: photos, ...(drop.length > 0 ? { dropImages: drop } : {}) } };
   const { data: row } = await db.from("jumia_product_changes")
     .update({ change, status: "pending", created_at: new Date().toISOString(), updated_at: new Date().toISOString() })
     .eq("id", ask.changeId).eq("status", "collecting").select("product_sid").maybeSingle();

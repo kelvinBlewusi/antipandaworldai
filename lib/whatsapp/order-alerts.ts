@@ -4,7 +4,7 @@
  * Jumia has no order webhooks, so each seller's pending orders are polled.
  *
  * For each seller with WhatsApp linked, Jumia connected and the
- * `order_alerts` feature (Pro pack and up, admins, grants), whose bot isn't
+ * `order_alerts` feature (every plan since 2026-10-11), whose bot isn't
  * paused for credits (lib/whatsapp/credit-gate.ts):
  *   - quiet from 10pm to 7am in their country's timezone; orders that came
  *     in overnight go out together in the first run after 7am;

@@ -307,6 +307,10 @@ describe("a count of products to list", () => {
     expect(countBacked(1, "I want to list a fridge")).toBe(true);
     expect(countBacked(3, "I want to list a few things")).toBe(false);
     expect(countBacked(6, "I want to list 5 products")).toBe(false);
+    // The owner's web chat, 2026-10-11: one product, after sending its photo.
+    expect(countBacked(1, "let list this product")).toBe(true);
+    expect(countBacked(1, "list it")).toBe(true);
+    expect(countBacked(2, "let list this product")).toBe(false);
   });
 
   it("is read from the AI only when the message backs it", () => {
@@ -773,7 +777,7 @@ describe("its own replies (owner, 2026-10-06)", () => {
     expect(prompt).toContain("- The chat's shop features (products, orders, reports, payouts, fees): on");
     expect(prompt).toContain("- Jumia QC rejection alerts and guided fixes: not on their pack (Standard and up)");
     expect(prompt).toContain("- Shipping label PDFs on WhatsApp: not on their pack (Standard and up)");
-    expect(prompt).toContain("- Order alerts on WhatsApp (new orders, order updates, payouts): not on their pack (Pro and up)");
+    expect(prompt).toContain("- Order alerts on WhatsApp (new orders, order updates, payouts): on");
     expect(prompt).toContain("a shipping label 0.5 credits (the same label again is free)");
     expect(prompt).toContain("- Credits: 9 available, enough for about 4 WhatsApp listings");
     expect(prompt).toContain("- home: PandaWorld's home page");

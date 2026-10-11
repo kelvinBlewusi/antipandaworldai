@@ -49,27 +49,28 @@ describe("the chat's features: on every plan (owner, 2026-10-07)", () => {
 
   it("aren't any pack's own, and name no pack", () => {
     // Image polish on every plan too (owner, 2026-10-07: "even free packs").
-    expect(everyoneFeatures().map((f) => f.id)).toEqual(["shop_whatsapp", "fee_calc_whatsapp", "image_polish_extension"]);
+    // Order alerts too, from 2026-10-11 (owner: "let's fire for free accounts too").
+    expect(everyoneFeatures().map((f) => f.id)).toEqual(["order_alerts", "shop_whatsapp", "fee_calc_whatsapp", "image_polish_extension"]);
     expect(featureMinPackName("shop_whatsapp")).toBe("");
   });
 });
 
-describe("QC fixes and WhatsApp labels (Standard and up), alerts (Pro and up)", () => {
+describe("QC fixes and WhatsApp labels (Standard and up); order alerts on every plan", () => {
   it("aren't included without a pack, or with only Starter", async () => {
     expect(await hasFeature("seller", "qc_fix")).toBe(false);
     expect(await hasFeature("seller", "shipping_labels")).toBe(false);
-    expect(await hasFeature("seller", "order_alerts")).toBe(false);
+    expect(await hasFeature("seller", "order_alerts")).toBe(true);
     bought(100);
     expect(await hasFeature("seller", "qc_fix")).toBe(false);
     expect(await hasFeature("seller", "shipping_labels")).toBe(false);
-    expect(await hasFeature("seller", "order_alerts")).toBe(false);
+    expect(await hasFeature("seller", "order_alerts")).toBe(true);
   });
 
-  it("QC fixes and labels come with Standard, Pro or Business; alerts with Pro or Business", async () => {
+  it("QC fixes and labels come with Standard, Pro or Business; alerts with any", async () => {
     bought(210);
     expect(await hasFeature("seller", "qc_fix")).toBe(true);
     expect(await hasFeature("seller", "shipping_labels")).toBe(true);
-    expect(await hasFeature("seller", "order_alerts")).toBe(false);
+    expect(await hasFeature("seller", "order_alerts")).toBe(true);
     for (const credits of [440, 940]) {
       bought(credits);
       expect(await hasFeature("seller", "shipping_labels")).toBe(true);
@@ -108,7 +109,7 @@ describe("QC fixes and WhatsApp labels (Standard and up), alerts (Pro and up)", 
   it("name the pack they start at", () => {
     expect(featureMinPackName("qc_fix")).toBe("Standard");
     expect(featureMinPackName("shipping_labels")).toBe("Standard");
-    expect(featureMinPackName("order_alerts")).toBe("Pro");
+    expect(featureMinPackName("order_alerts")).toBe("");
   });
 });
 
@@ -160,13 +161,13 @@ describe("at 0 credits", () => {
 
 describe("what each pack lists", () => {
   // The chat's features are on every plan (everyoneFeatures) and no pack lists them.
-  it("Standard adds QC fixes, live product changes and labels; Pro the alerts and the extension's calculator", () => {
+  it("Standard adds QC fixes, live product changes and labels; Pro the extension's calculator", () => {
     expect(packFeatures("starter")).toEqual([]);
     // Labels from Standard since 2026-10-07: each one is charged.
     expect(packFeatures("standard").map((f) => f.id)).toEqual(["qc_fix", "shipping_labels", "shop_changes"]);
     // Every listed feature is available (2026-10-07: none is "not available yet").
     const pro = packFeatures("pro");
-    expect(pro.map((f) => f.id)).toEqual(["qc_fix", "order_alerts", "shipping_labels", "shop_changes", "fee_calc_extension"]);
+    expect(pro.map((f) => f.id)).toEqual(["qc_fix", "shipping_labels", "shop_changes", "fee_calc_extension"]);
     expect(pro.some((f) => "comingSoon" in f)).toBe(false);
     expect(packFeatures("business")).toEqual(pro);
   });

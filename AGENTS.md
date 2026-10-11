@@ -3073,6 +3073,34 @@ cause, and its fix:
   - Agent mode still gets wrong: help-autofills, help-countries-jumia, list-five-review, live-bulk-answer-0, live-describe-latest, live-v-bulk-percent, not-yet-invoice, orders-labels-cancelled, shop-name-malta.
 - Test set: 6 "dart-*" cases from these messages. Tests are in whatsapp-assistant.test.ts ("the owner's dartboard, all in one message", "a message of several parts…"), jumia-shop-more.test.ts, live-additions.test.ts, jumia-capabilities.test.ts and assistant-replay.test.ts.
 
+### Photos into the form, sale vs price, results told, sizes priced, photos swapped, alerts for all (owner, 2026-10-11 afternoon)
+
+- **The sandal photo** (owner's web chat 12:36–12:56):
+  - What happened: the photo opened the form once; closing the form threw it away. "Open the form" again, "let list this product" (asked how many: "this product" wasn't a count) and the form after "1" all came up empty. "use the image uploaded" showed the glasses' photos.
+  - Now (components/assistant/chat-photos.ts): photos the bot answered with the form stay the form's for 6 hours, until a form batch takes them. Any way the form opens (that message's button, a count, New products) puts them on a card.
+  - A closed form keeps its cards (prices, sizes, notes, uploaded photos) and opens again as it was. Photos taken off a card stay off.
+  - "this product" / "list it" counts as 1 (`countBacked`). On the web, "let's list" opens the form (no "how many?").
+  - The AI sees a photo as "[a photo]" with its caption; `restart` covers "use the image I uploaded"; `product_photos` is never for photos sent in the chat.
+- **"do i have drafts?"** with no batch got "Sorry, I didn't catch that": `review` now counts drafts not yet sent (any batch) and links them, or says there are none.
+- **"how many were made from WhatsApp"**: the listings read says where each was made (WhatsApp, web chat, Chrome extension) and how many drafts wait.
+- **Sale at or above the price** (the dartboard's GHS 200 sale on GHS 180): `priceClash` in lib/whatsapp/shop.ts refuses it at once, for one product, a named group and bulk rules.
+  - The price it checks: a price change for the product sent or waiting in the last 30 minutes, else the catalog's.
+  - Also refused: a new price at or under a sale that hasn't ended.
+- **Every live change's result is told** (lib/whatsapp/shop-notices.ts): "✅ Done on Jumia: …" when Jumia applied it (content and new sizes: "shows once its quality check passes it"), as well as refusals.
+  - Told where the change was asked: `jumia_product_changes.reply_to` (migration 2026-10-11_change-reply-to.sql), set when it's sent. Before, the web chat's refusals went to WhatsApp.
+- **A new size's price is asked, not assumed**:
+  - Live (`proposeAddSize`): its stock, then its price, each asked as a `live_value` question with `addSize` carried. "Same price" is a tap (`lval:same`) when its sizes share one price; otherwise their prices are said.
+  - Drafts: a size added beside the ones it has gets "💬 10ml has 50ml's price (4,500). A different price? Say e.g. "10ml 4950"". The edit tool takes `variation_prices` ("XL at 150"), saved on that variant.
+  - `saveVariations` keeps each existing size's own price, stock and sale (adding XL used to reset them all to the first one's).
+- **Swapping photos on a live product** (`add_photos` with `replace`: numbers, "the last two", or all but the main one; `photoSwap`, `photosToSwap`):
+  - The new photos go in the places of the ones named (`ContentFields.dropImages`, `withImages`). The main one (1) never changes: Jumia's update table says no.
+  - At 8 photos with nothing named, the bot asks which to swap. Send fewer than named and only that many are swapped.
+  - Not tried on a real product yet. Jumia's update feed takes the whole images list, so a photo left out should go; confirm on the first real one.
+- **Order alerts on every plan** (owner: "let's fire for free accounts too"): `order_alerts` minPack is now EVERYONE. New-order alerts are free; order updates still cost NOTICE_CREDIT_COST each.
+  - Fired so far: 2 (the owner on 6 Oct, user_3KHCy… on 11 Oct 13:25, whose Pack tap came after the order had moved on).
+  - `order_alert_template` isn't set: outside WhatsApp's 24 hours, alerts wait until the seller writes. A launch blocker for alerts (see the launch audit).
+- Test set: 6 new cases (photo-list-this, photo-use-uploaded, drafts-any, photos-replace, photos-replace-last, draft-variation-price). Tests: chat-photos.test.ts, jumia-shop.test.ts (sale vs price, applied notices, reply_to), jumia-shop-more.test.ts (size price), whatsapp-intake-flow.test.ts (draft size price), live-additions.test.ts (swaps), billing-features.test.ts.
+
 ### A batch Jumia turned down (owner's WhatsApp, 2026-10-11)
 
 "RESTOCK everything in the shop to 10 pcs" became 267 products in 2 feeds.

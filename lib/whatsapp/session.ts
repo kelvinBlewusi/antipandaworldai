@@ -51,6 +51,13 @@ export interface LiveValueAsk {
   products:  string[];
   preferSid: string | null;
   at:        string;
+  /**
+   * Asked while adding a size to a live product (lib/whatsapp/shop.ts
+   * proposeAddSize): what was said so far, carried to the answer. `same` is
+   * the others' price, for "Same price" (owner, 2026-10-11: ask for a new
+   * variant's price instead of taking the others' without a word).
+   */
+  addSize?:  { size: string; said?: string; stock: number | null; price: number | null; same: number | null };
 }
 
 /**
@@ -75,7 +82,12 @@ export interface AddPhotosAsk {
   name:     string;
   room:     number;
   at:       string;
+  /** Its photos the new ones take the place of, by URL, in order (owner, 2026-10-11). */
+  drop?:    string[];
 }
+
+/** Which of a live product's photos to swap for new ones: by number (the main one is 1), the last few, or all but the main one. */
+export interface PhotoSwap { positions: number[]; last: number; all: boolean }
 
 export type WhatsAppSessionState =
   | "awaiting_jumia_credentials"

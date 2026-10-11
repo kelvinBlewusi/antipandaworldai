@@ -83,7 +83,7 @@ import { blankCodes, noteSellerMessage, sellerMemory } from "@/lib/whatsapp/sell
 import { isWebAddress } from "@/lib/whatsapp/channel";
 import { chatClearedAt } from "@/lib/whatsapp/chat-clear";
 import { handleOrderMessage } from "@/lib/whatsapp/orders";
-import { resetSession, updateSession, type AssistantPending, type LiveValueAsk, type WhatsAppSession } from "@/lib/whatsapp/session";
+import { resetSession, updateSession, type AssistantPending, type LiveValueAsk, type PhotoSwap, type WhatsAppSession } from "@/lib/whatsapp/session";
 import { matchOption, parseVariations, saveVariations, sizeNamedIn, variationOptions, VARIATION_FIELD } from "@/lib/whatsapp/variation-question";
 import { carryPriceToVariants, carrySaleToVariants, carryStockToVariants, chatPrice, shopCurrencyForUser } from "@/lib/whatsapp/listing-edits";
 import type { ListingRow } from "@/lib/supabase/types";
@@ -182,6 +182,8 @@ export interface Changes {
   sale?:       boolean;
   /** Something they want changed that chat can't change: sent to the editor. */
   other?:      string;
+  /** One variation's own price ("XL at 150"), the variation in their words. */
+  variationPrices?: { option: string; price: number }[];
 }
 
 export interface EditPart {
@@ -216,7 +218,7 @@ export type AssistantAction =
   /** A new size (or colour) for a live product, with its stock and price (lib/whatsapp/shop.ts proposeAddSize). */
   | { type: "add_size"; product: string; request: AddSizeRequest }
   /** More photos for a live product, sent next (lib/whatsapp/live-photos.ts). */
-  | { type: "add_photos"; product: string }
+  | { type: "add_photos"; product: string; replace?: PhotoSwap }
   | { type: "fees"; product: string; price: number | null }
   | { type: "stock"; product: string | null; filter: "out" | "low" | null }
   | { type: "shop"; filter: "all" | "inactive" | "rejected" }
@@ -294,12 +296,12 @@ export function capabilities(listingCost = LIVE_LISTING_CREDIT_COST): string {
     `- List products on Jumia from WhatsApp: the seller says how many (1 to ${MAX_BATCH_SIZE}), sends each product's photos with the price and notes as the caption, and AI drafts each listing (name, description, category, details) for them to check and submit. Two ways to send: all at once, or guided step by step.`,
     "- Ask for what Jumia needs that the photos don't show: a missing price, weight or other required detail, the variation, the category when unsure.",
     "- Show drafts in chat as drafted (name, price, sizes, highlights, description), and edit them before they're submitted: price, quantity, variations or sizes, name, brand, colour, a sale price with its dates. Anything else in the editor on the review page.",
-    "- Chatting is free on every pack. Every pack, free credits included: listing, orders (see, pack, ready to ship, cancel), reading their shop (products, stock, sales, reports, payouts, fees), image polish and the shop health report; only the commands below that cost credits are charged. Only these need a pack: changes to live Jumia products from the chat, Jumia QC rejection alerts and guided fixes and shipping label PDFs on WhatsApp (Standard and up); order alerts on WhatsApp and the extension's fee calculator (Pro and up). Everything pauses at 0 credits.",
+    "- Chatting is free on every pack. Every pack, free credits included: listing, orders (see, pack, ready to ship, cancel), reading their shop (products, stock, sales, reports, payouts, fees), image polish and the shop health report; only the commands below that cost credits are charged. Order alerts on WhatsApp (new orders, order updates, payouts) are on every pack too. Only these need a pack: changes to live Jumia products from the chat, Jumia QC rejection alerts and guided fixes and shipping label PDFs on WhatsApp (Standard and up); the extension's fee calculator (Pro and up). Everything pauses at 0 credits.",
     "- Submit to Jumia and report back when each product goes live or is rejected; fix common rejections itself (banned words, restricted brands) and guide the seller through the rest with Fix & resubmit. After Jumia accepts a listing, its quality-check verdict is followed up (and the credits returned if QC rejects it) with the Standard pack and up.",
     "- Orders: \"orders\" shows orders waiting to be packed; pack them, mark them ready to ship, or cancel, here or on WhatsApp; where any order is, by its number; orders and sales for today, the week, the month or 90 days. Shipping label PDFs only on WhatsApp (Standard pack and up). Pro and up also: alerts for new Jumia orders on WhatsApp, grouped and quiet at night, and a message when orders are delivered, returned, fail delivery or are cancelled.",
     `- Their live Jumia products, found by name among everything in their shop: change a product's stock, price, a sale price with its dates, end its sale, or turn it on or off, for one product or several named together (up to ${MAX_GROUP}). One product's stock, ON/OFF or ending its sale is done straight away when they name it; a price, a sale, a product taken from the conversation, or several products wait for one tap to confirm; where a product is (on or off, Jumia's quality check, price, sale, stock); how many are left; what's out of stock or low; which products are turned off or rejected by Jumia's quality check.`,
     `- Rules for many products at once, shown in full before one tap: prices up or down by a percentage, a sale a percentage off (with dates), a stock or price, ending sales, turning on or off; for all their products, the ones out of stock, low, off or on, or all that match words ("all perfumes"); up to ${BULK_MAX} products per tap, and a bigger rule in parts of ${BULK_MAX}, one tap each (up to ${BULK_MAX * BULK_PARTS_MAX}).`,
-    "- A live product's name, description and highlights shown as Jumia has them now (product_text). Changing them, or the brand: the seller's own text, or rewritten by AI from what Jumia has now with their instructions (\"remove the word X from the name\"), shown before one tap. Also its other details (colour, material, weight, model and whatever its category takes, checked against Jumia's options), its barcode, or a size's name. Jumia checks content changes again. More photos after its main one (add_photos: they send them, then Done, and they go to Jumia), and a new size or colour with its own stock and price (add_size: one tap; Jumia's quality check looks at it like a new product). Its main photo and category are changed in Vendor Center.",
+    "- A live product's name, description and highlights shown as Jumia has them now (product_text). Changing them, or the brand: the seller's own text, or rewritten by AI from what Jumia has now with their instructions (\"remove the word X from the name\"), shown before one tap. Also its other details (colour, material, weight, model and whatever its category takes, checked against Jumia's options), its barcode, or a size's name. Jumia checks content changes again. More photos after its main one, or new ones in place of others it has (add_photos, \"replace photos 7 and 8\": they send them, then Done, and they go to Jumia), and a new size or colour with its own stock and price (add_size: one tap; Jumia's quality check looks at it like a new product). Its main photo and category are changed in Vendor Center.",
     "- A product's photos (product_photos): every photo Jumia has, the main one first, whatever its status (ON, OFF, rejected, waiting for the quality check), or a draft's photos. Anything about one product, read from Jumia just now (its details, sizes, barcode, description, Jumia's reason for rejecting it), answered in a line or two. Its name, description, highlights, brand, details, barcode and size names change whatever its status too; only stock, price, sale and ON/OFF wait for its first approval.",
     "- Reports: best sellers, products with no sale, what runs out soon at the rate it sells, returns and failed deliveries, for the last 7, 30 or 90 days.",
     "- Products rejected by Jumia's quality check: which ones, with Jumia's reason when Jumia sends one with the product (often it doesn't: then the reason is only in Vendor Center, never guessed). Fixing them (fix_rejected): one listed through PandaWorld gets its Fix & resubmit (redrafted, or the seller asked for what only they know, and sent again); one listed another way gets a rewritten name or description, a brand or a detail from the seller, shown before one tap, and Jumia checks it again. Its category, main photo or price before approval Jumia only lets change in Vendor Center; or it is listed again here. Never say \"API\" to a seller.",
@@ -605,6 +607,24 @@ export function verifyChanges(
     else dropped.push(key === "title" ? "name" : key === "color" ? "colour" : key);
   }
   if (r.sale === true) changes.sale = true;
+  // One variation's own price: the price written, the variation one they
+  // name in the message, or one the draft has or is getting now.
+  if (Array.isArray(r.variation_prices)) {
+    const prices: { option: string; price: number }[] = [];
+    for (const item of r.variation_prices) {
+      const pair = (item && typeof item === "object" ? item : {}) as Record<string, unknown>;
+      const option = typeof pair.option === "string" ? pair.option.trim().slice(0, 60) : "";
+      const price = num(pair.price);
+      if (!option || !(price > 0) || !numbers.includes(price)) { dropped.push("variation price"); continue; }
+      const named = wordInMessage(option, message) || (known.options.length > 0 && sizeNamedIn(option, message));
+      const kept = [...known.variations, ...(changes.variations ?? [])];
+      const match = kept.find((v) => v.toLowerCase() === option.toLowerCase())
+        ?? (known.options.length > 0 ? matchOption(kept, option) : null);
+      if (named && match) prices.push({ option: match, price });
+      else dropped.push("variation price");
+    }
+    if (prices.length > 0) changes.variationPrices = prices;
+  }
   // A field's name ("material", "weight"), not a sentence: "Don't list this
   // again pls" once came back as the field to change.
   if (typeof r.other === "string" && r.other.trim() && r.other.trim().split(/\s+/).length <= 3) changes.other = r.other.trim().slice(0, 40);
@@ -645,6 +665,23 @@ export function saidIsValues(said: string, changes: unknown): boolean {
 
 const hasChanges = (c: Changes) => Object.keys(c).length > 0;
 
+/**
+ * Which of a live product's photos to swap for new ones, as the message
+ * says it (owner, 2026-10-11: "replacing it … where the live product is 8"):
+ * their numbers written in it, "the last two", or all of them. Null when
+ * the message doesn't ask to replace any.
+ */
+export function photoSwap(raw: unknown, message: string): PhotoSwap | null {
+  if (!/\b(?:replac\w*|swap\w*|chang\w*|switch\w*|remov\w*|instead)\b/i.test(message)) return null;
+  const written = messageNumbers(message);
+  const positions = (Array.isArray(raw) ? raw : []).map(Number).filter((n) => Number.isInteger(n) && n >= 1 && n <= 8 && written.includes(n));
+  const lastWord = message.toLowerCase().match(/\blast\s+(\d|one|two|three|four|five|six|seven)?\s*(?:photos?|pictures?|images?|pics?)\b/);
+  const last = lastWord ? (lastWord[1] ? Number(lastWord[1]) || COUNT_WORDS[lastWord[1]] || 1 : 1) : 0;
+  const all = /\ball\b[^.?!]{0,20}\b(?:photos|pictures|images|pics)\b|\b(?:photos|pictures|images|pics)\b[^.?!]{0,12}\ball\b/i.test(message);
+  if (positions.length === 0 && !last && !all) return null;
+  return { positions: Array.from(new Set(positions)).sort((a, b) => a - b), last, all };
+}
+
 const COUNT_WORDS: Record<string, number> = {
   one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
   eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17,
@@ -662,7 +699,9 @@ export function countBacked(count: number, message: string): boolean {
   const values = [...messageNumbers(message).filter((n) => Number.isInteger(n)), ...words];
   if (values.includes(count)) return true;
   const sum = values.reduce((a, b) => a + b, 0);
-  const articles = (lower.match(/\b(?:an?|another)\s+(?!few\b|lot\b|bit\b|couple\b|number\b)[a-z]/g) ?? []).length;
+  // "this product", "list it": one (owner's web chat, 2026-10-11: "let list this product" asked how many).
+  const articles = (lower.match(/\b(?:an?|another)\s+(?!few\b|lot\b|bit\b|couple\b|number\b)[a-z]/g) ?? []).length
+    + (lower.match(/\b(?:this|that)\s+(?:product|item|one|photo|picture|image)\b|\blist\s+it\b/g) ?? []).length;
   return values.length + articles >= 1 && (sum === count || sum + articles === count);
 }
 
@@ -1314,8 +1353,11 @@ function parseActionRaw(
     }
     case "add_photos": {
       const product = typeof parsed.product === "string" ? parsed.product.trim().slice(0, 120) : "";
-      return namesAProduct(product) && (productBacked(product, message) || productBacked(product, context))
-        ? { type: "add_photos", product } : ask("Which product gets the photos? Tell me its name as it shows on Jumia, e.g. \"add photos to the neck fan\".");
+      if (!(namesAProduct(product) && (productBacked(product, message) || productBacked(product, context)))) {
+        return ask("Which product gets the photos? Tell me its name as it shows on Jumia, e.g. \"add photos to the neck fan\".");
+      }
+      const replace = photoSwap(parsed.replace, message);
+      return replace ? { type: "add_photos", product, replace } : { type: "add_photos", product };
     }
     case "fix_rejected": {
       // A product only when it's named here or just before; Jumia's reason only as they pasted it.
@@ -1638,8 +1680,10 @@ export async function recentConversation(phone: string, current: string, max = 2
     return newestWithin(rows.slice(-max).map((r) => {
       // A tapped answer to the front door's question reads as the answer.
       const body = (r.body_text ?? "").trim().replace(/^answer:(?:@[a-z_]+:)?/, "");
-      const shown = !body ? (r.message_type === "image" ? "[a photo]" : "[a message]")
-        : /^[a-z_]+:\S+$/i.test(body) ? "[tapped a button]" : blankCodes(body.replace(/\s+/g, " ").slice(0, CONVERSATION_LINE_MAX));
+      const text = !body ? "" : /^[a-z_]+:\S+$/i.test(body) ? "[tapped a button]" : blankCodes(body.replace(/\s+/g, " ").slice(0, CONVERSATION_LINE_MAX));
+      // A photo the seller sent shows as one, with its caption (it was only the caption before).
+      const shown = r.direction === "inbound" && r.message_type === "image" && !body.startsWith("🧾")
+        ? `[a photo]${text ? ` ${text}` : ""}` : text || (r.message_type === "image" ? "[a photo]" : "[a message]");
       return `${r.direction === "inbound" ? "Seller" : "Bot"}: ${shown}`;
     }));
   } catch {
@@ -1777,11 +1821,12 @@ function describeChanges(c: Changes): string {
   ].filter(Boolean).join(", ");
 }
 
-export interface ApplyResult { done: string[]; problems: string[]; editor: boolean }
+/** What changed, what couldn't, a question to ask after (a new variation's price), and whether the editor is needed. */
+export interface ApplyResult { done: string[]; problems: string[]; asks: string[]; editor: boolean }
 
 /** One product's changes, with the same rules as the rest of the bot. */
 export async function applyChanges(userId: string, listing: ListingRow, changes: Changes, message: string): Promise<ApplyResult> {
-  const result: ApplyResult = { done: [], problems: [], editor: false };
+  const result: ApplyResult = { done: [], problems: [], asks: [], editor: false };
   if (!EDITABLE.has(listing.status)) {
     result.problems.push("it's already with Jumia, so it's changed in Jumia Vendor Center");
     return result;
@@ -1840,7 +1885,7 @@ export async function applyChanges(userId: string, listing: ListingRow, changes:
       .eq("user_id", userId);
     if (error) {
       console.warn(`[assistant] saving listing ${listing.id} failed: ${error.message}`);
-      return { done: [], problems: ["I couldn't save that just now. Send it again in a moment"], editor: false };
+      return { done: [], problems: ["I couldn't save that just now. Send it again in a moment"], asks: [], editor: false };
     }
     if (update.selling_price != null) await carryPriceToVariants(listing.id, listing.selling_price, changes.price!);
     if (update.quantity != null) {
@@ -1862,13 +1907,45 @@ export async function applyChanges(userId: string, listing: ListingRow, changes:
     const parsed: ReturnType<typeof parseVariations> = each.some((e) => typeof e !== "string" && !e.ok)
       ? { ok: false, unknown: each.flatMap((e) => (typeof e !== "string" && !e.ok ? e.unknown : [])) }
       : { ok: true, values: Array.from(new Set(each.flatMap((e) => (typeof e === "string" ? [e] : e.ok ? e.values : [])))) };
+    const { data: before } = await createServerClient().from("variants").select("variation, global_price").eq("listing_id", listing.id);
+    const had = ((before ?? []) as { variation: string | null; global_price: number | null }[]);
     if (!parsed.ok) {
       const shown = options.length > 12 ? `${options.slice(0, 12).join(", ")}...` : options.join(", ");
       result.problems.push(`${parsed.unknown.join(", ")} isn't one of this category's options${shown ? ` (${shown})` : ""}`);
     } else if (await saveVariations(listing.id, parsed.values)) {
       result.done.push(`variation${parsed.values.length > 1 ? "s" : ""} ${parsed.values.join(", ")}`);
+      // A variation added with no price of its own takes the others': asked
+      // whether that's right (owner, 2026-10-11: "when users request an
+      // addition of a variant … without price request for it").
+      // Only sizes added beside the ones it has: a size changed for another keeps the price it had.
+      const kept = had.length > 0 && had.every((h) => parsed.values.some((v) => v.toLowerCase() === (h.variation ?? "").toLowerCase()));
+      const added = kept ? parsed.values.filter((v) => !had.some((h) => (h.variation ?? "").toLowerCase() === v.toLowerCase())) : [];
+      const unpriced = added.filter((v) => changes.price == null && !changes.variationPrices?.some((p) => p.option.toLowerCase() === v.toLowerCase()));
+      // New rows take the first's price (saveVariations).
+      const same = had[0]?.global_price ?? listing.selling_price;
+      const one = new Set(had.map((h) => h.global_price ?? listing.selling_price)).size === 1;
+      if (unpriced.length > 0 && same != null) {
+        const whose = one ? "the same price as the others" : `${had[0].variation}'s price`;
+        result.asks.push(`${unpriced.join(", ")} ${unpriced.length === 1 ? "has" : "have"} ${whose} (${await chatPrice(userId, same)}). A different price? Say e.g. "${unpriced[0]} ${Math.round(same * 1.1)}"`);
+      }
     } else {
       result.problems.push("I couldn't save the variations just now. Send them again in a moment");
+    }
+  }
+  // One variation's own price, after the variations are saved (a new one can be priced as it's added).
+  if (changes.variationPrices) {
+    const minimum = await priceMinimumForUser(userId);
+    const { data: rows } = await createServerClient().from("variants").select("id, variation").eq("listing_id", listing.id);
+    for (const { option, price } of changes.variationPrices) {
+      const row = ((rows ?? []) as { id: string; variation: string | null }[]).find((v) => (v.variation ?? "").toLowerCase() === option.toLowerCase());
+      if (!row) { result.problems.push(`it has no ${option} variation, so its price stays as it was`); continue; }
+      if (isBelowMinimum(price, minimum)) {
+        result.problems.push(`${money(price, minimum.currency)} is below the lowest price Jumia allows (${money(minimum.min, minimum.currency)}), so ${option}'s price stays as it was`);
+        continue;
+      }
+      const { error } = await createServerClient().from("variants").update({ global_price: price }).eq("id", row.id);
+      if (error) result.problems.push(`I couldn't save ${option}'s price just now. Send it again in a moment`);
+      else result.done.push(`${option} at ${await chatPrice(userId, price)}`);
     }
   }
 
@@ -1899,6 +1976,7 @@ async function applyToProducts(
     const label = productLabel(p, products.length);
     if (r.done.length > 0) { lines.push(`✅ ${label}: ${r.done.join(", ")}.`); changed++; }
     for (const problem of r.problems) lines.push(`⚠️ ${label}: ${problem}.`);
+    for (const ask of r.asks) lines.push(`💬 ${label}: ${ask}.`);
     if (r.editor) editorFor = p.listing.id;
     if (r.done.some((d) => d.startsWith("variation"))) variationsSaved.push(p.listing.id);
   }
@@ -2228,13 +2306,29 @@ async function carryOut(
           count ? `Start a new batch of ${count}? Drafts you haven't sent stay on your review page.` : "Start a new batch? Drafts you haven't sent stay on your review page.",
           [count ? { id: `start another ${count}`, title: `Yes, list ${count}` } : START_ANOTHER, REVIEW],
         );
+      } else if (isWebAddress(phone)) {
+        // On the web, products go through the form: no count to ask, and photos sent here are in it.
+        await sendButtonsIfConfigured(phone, "Let's list! 📝 Add each product's photos, price and details in the form, then tap *Draft*.", [{ id: "form", title: "Open the form" }]);
       } else {
         await sendButtonsIfConfigured(phone, "Let's list! How many products are you listing today?", COUNT_QUICK_PICKS);
       }
       return "offered restart";
     }
     case "review": {
-      if (!batchId) return "default";
+      if (!batchId) {
+        // No batch in hand ("do i have drafts?" from idle, owner's web chat 2026-10-11, got "Sorry, I didn't catch that"):
+        // the drafts not yet sent, from any batch.
+        const { count } = await createServerClient().from("listings").select("id", { count: "exact", head: true })
+          .eq("user_id", userId).in("status", ["draft", "failed"]);
+        if (!count) {
+          await sendTextIfConfigured(phone, isWebAddress(phone)
+            ? "You have no drafts waiting to go to Jumia. Tap *New products* (or say \"list\") to make some."
+            : "You have no drafts waiting to go to Jumia. Say how many products you're listing to make some.");
+          return "no drafts";
+        }
+        await sendCtaUrlIfConfigured(phone, `You have ${count} draft${count === 1 ? "" : "s"} not yet sent to Jumia.`, "Review listings", whatsappListingsUrl());
+        return `sent review link (${count} drafts)`;
+      }
       await sendCtaUrlIfConfigured(phone, stage === "review" ? "Here's your batch:" : "Here are the products you sent:", "Review listings", whatsappListingsUrl(batchId));
       return "sent review link";
     }
@@ -2281,7 +2375,7 @@ async function carryOut(
       return proposeAddSize(userId, phone, action.product, action.request);
     case "add_photos": {
       const { startAddPhotos } = await import("@/lib/whatsapp/live-photos");
-      return startAddPhotos(userId, phone, action.product);
+      return startAddPhotos(userId, phone, action.product, action.replace);
     }
     case "fees": {
       // A draft here ("what will I get for the wig?") is worked out from the draft.
@@ -2409,8 +2503,21 @@ export async function answerLiveValue(userId: string, phone: string, session: Wh
   const fresh = Date.now() - new Date(pending.at).getTime() < LIVE_VALUE_TTL_MS;
   const m = (text ?? "").trim().match(/^(?:(?:stock|qty|quantity|price|make it|set it to|to|it'?s|=)\s*:?\s*)?(?:[a-z]{3}|gh₵|₦|₵)?\s*(\d[\d,]*(?:\.\d+)?)\s*(?:pcs|pieces|units|each|cedis|naira)?\s*[.!]?$/i);
   await updateSession(phone, { assistantPending: null });
-  if (!fresh || !m) return false;
-  const n = parseFloat(m[1].replace(/,/g, ""));
+  // A size being added to a live product: the answer fills what was asked, and the rest is asked or offered.
+  const add = pending.addSize;
+  const same = add && pending.field === "price" && add.same != null
+    && /^(?:lval:same|(?:the\s+)?same(?:\s+price)?(?:\s+as\s+(?:the\s+)?others?)?|yes|ok(?:ay)?)[.!]?$/i.test((text ?? "").trim());
+  if (!fresh || (!m && !same)) return false;
+  if (add) {
+    const v = same ? add.same! : parseFloat(m![1].replace(/,/g, ""));
+    const ok = pending.field === "stock" ? Number.isInteger(v) && v >= 0 : v > 0;
+    if (!ok) return false;
+    const req = { size: add.size, said: add.said, stock: pending.field === "stock" ? v : add.stock, price: pending.field === "price" ? v : add.price };
+    const outcome = await proposeAddSize(userId, phone, pending.products[0], req);
+    await logTurn(userId, "idle", text ?? "", null, `answered add size ${pending.field}: ${outcome}`);
+    return true;
+  }
+  const n = parseFloat(m![1].replace(/,/g, ""));
   const change: LiveChange | null = pending.field === "stock"
     ? (Number.isInteger(n) && n >= 0 ? { kind: "stock", stock: n } : null)
     : (n > 0 ? { kind: "price", price: n } : null);

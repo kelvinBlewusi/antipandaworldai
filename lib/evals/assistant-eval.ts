@@ -51,7 +51,7 @@ const SELLER = [
   "- Changes to live Jumia products from the chat: on",
   "- Jumia QC rejection alerts and guided fixes: on",
   "- Shipping label PDFs on WhatsApp: on",
-  "- Order alerts on WhatsApp (new orders, order updates, payouts): not on their pack (Pro and up)",
+  "- Order alerts on WhatsApp (new orders, order updates, payouts): on",
   "- Credits: 80 available, enough for about 40 listings",
 ];
 

@@ -17,9 +17,9 @@ jest.mock("@/lib/supabase/server", () => ({
 import { detailWord, lockedDetailIn, lockedDetails, lockedText } from "@/lib/jumia/locked-details";
 import { explainRefusal } from "@/lib/whatsapp/shop-notices";
 import { fieldsFor, fixPlan, parseFixTap } from "@/lib/whatsapp/fix-rejected";
-import { newVariationItem, newVariationSku, withImages, type ProductSet } from "@/lib/jumia/shop";
+import { newVariationItem, newVariationSku, photosToSwap, withImages, type ProductSet } from "@/lib/jumia/shop";
 import { variantAxis } from "@/lib/whatsapp/shop";
-import { parseAction, assistantLinks } from "@/lib/whatsapp/assistant";
+import { parseAction, assistantLinks, photoSwap } from "@/lib/whatsapp/assistant";
 import { CAPABILITIES, cannotList } from "@/lib/jumia/capabilities";
 import type { JumiaCategoryAttribute } from "@/lib/jumia/categories";
 
@@ -182,6 +182,37 @@ describe("more photos for a live product", () => {
     expect(out.map((i) => i.primary)).toEqual([true, false, false, false]);
     expect(withImages(GOWN.images, Array.from({ length: 10 }, (_, i) => `https://new/${i}.jpg`))).toHaveLength(8);
     expect(withImages(GOWN.images, undefined)).toBe(GOWN.images);
+  });
+
+  // Owner, 2026-10-11: "how about replacing it … where the live product is 8 and we can't add more".
+  it("new photos in the places of the ones swapped out; the main one never", () => {
+    const eight = Array.from({ length: 8 }, (_, i) => ({ url: `https://img/${i + 1}.jpg`, primary: i === 0 }));
+    const out = withImages(eight, ["https://new/a.jpg", "https://new/b.jpg"], ["https://img/3.jpg", "https://img/8.jpg"]);
+    expect(out.map((i) => i.url)).toEqual(["https://img/1.jpg", "https://img/2.jpg", "https://new/a.jpg", "https://img/4.jpg", "https://img/5.jpg", "https://img/6.jpg", "https://img/7.jpg", "https://new/b.jpg"]);
+    expect(out.filter((i) => i.primary).map((i) => i.url)).toEqual(["https://img/1.jpg"]);
+    expect(withImages(eight, ["https://new/a.jpg"], ["https://img/1.jpg"]).map((i) => i.url)[0]).toBe("https://img/1.jpg");
+    // More new ones than swapped: the rest after, still at most 8.
+    expect(withImages(GOWN.images, ["https://new/a.jpg", "https://new/b.jpg"], ["https://img/2.jpg"]).map((i) => i.url))
+      .toEqual(["https://img/1.jpg", "https://new/a.jpg", "https://new/b.jpg"]);
+  });
+
+  it("which photos: their numbers, the last few, or all but the main one", () => {
+    const eight = Array.from({ length: 8 }, (_, i) => ({ url: `u${i + 1}` }));
+    expect(photosToSwap(eight, { positions: [3, 8], last: 0, all: false })).toEqual({ drop: ["u3", "u8"], positions: [3, 8], main: false });
+    expect(photosToSwap(eight, { positions: [], last: 2, all: false })).toEqual({ drop: ["u7", "u8"], positions: [7, 8], main: false });
+    expect(photosToSwap(eight, { positions: [], last: 0, all: true }).positions).toEqual([2, 3, 4, 5, 6, 7, 8]);
+    expect(photosToSwap(eight, { positions: [1], last: 0, all: false })).toEqual({ drop: [], positions: [], main: true });
+    expect(photosToSwap(eight, undefined)).toEqual({ drop: [], positions: [], main: false });
+
+    expect(photoSwap([7, 8], "replace photos 7 and 8 of the dartboard")).toEqual({ positions: [7, 8], last: 0, all: false });
+    expect(photoSwap([7, 8], "swap the last two pictures of the dartboard")).toEqual({ positions: [], last: 2, all: false });
+    expect(photoSwap([], "change all the photos of the dartboard")).toMatchObject({ all: true });
+    // Numbers the message doesn't have aren't taken; nothing said about replacing is no swap.
+    expect(photoSwap([3], "replace a photo of the dartboard")).toBeNull();
+    expect(photoSwap([7, 8], "add photos to the dartboard")).toBeNull();
+    const links = assistantLinks();
+    expect(parseAction('{"type":"add_photos","product":"dartboard","replace":[7,8]}', "replace photos 7 and 8 of the dartboard", [], links))
+      .toEqual({ type: "add_photos", product: "dartboard", replace: { positions: [7, 8], last: 0, all: false } });
   });
 
   it("the action needs the product named", () => {
