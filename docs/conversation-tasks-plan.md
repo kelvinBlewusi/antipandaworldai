@@ -124,8 +124,8 @@ for now. They're inside the fixed listing flow, which the owner wants kept.
 - The agent must call an action (`mode: "ANY"`).
 - `parseAction` drops any value not typed in **this** message
   (`saidInMessage`).
-- If nothing is left, a fixed sentence goes out. There are 28 of these in assistant.ts, plus more in shop.ts:
-  `ask("…")` lines.
+- If nothing is left, a fixed sentence goes out. There are 28 of these
+  `ask("…")` lines in assistant.ts, plus more in shop.ts.
 
 The model never gets to say "I see you mean the weight on Jumia is right".
 
