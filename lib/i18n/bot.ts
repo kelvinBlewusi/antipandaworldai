@@ -17,7 +17,7 @@
  *     place (20 for a button), is sent in English.
  *   - Each line is translated once (bot_translations), so a fixed message
  *     costs nothing after its first time. gemini-2.5-flash-lite, ~$0.0002 a
- *     new line, counted as "translation" in the cost log; 8 s at most, then
+ *     new line, counted as "translation" in the cost log; 12 s at most, then
  *     English.
  *   - Not translated: what the AI wrote (already in the seller's language:
  *     `aiWritten`, and any line already in their language), templates (their
@@ -170,29 +170,38 @@ export function slotsOf(body: Rec): Slot[] {
 // ─── Translating ───────────────────────────────────────────────────────────
 
 const TRANSLATE_MODEL = "gemini-2.5-flash-lite";
-const TRANSLATE_TIMEOUT_MS = 8_000;
-const BATCH = 40;
+// A long batch of 19 lines took over 8 s in French (live check, 2026-10-12); a
+// message is 1 to 5 lines, and batches of BATCH go side by side.
+const TRANSLATE_TIMEOUT_MS = 12_000;
+const BATCH = 12;
 
 const LANGUAGE_FOR: Record<Foreign, string> = {
   fr: "French, as a seller in Côte d'Ivoire, Senegal or Morocco would read it",
   ar: "Modern Standard Arabic",
 };
 
+/** The words the chat itself uses (lib/i18n/chat.ts), so the bot says them the same way. */
+const GLOSSARY: Record<Foreign, string> = {
+  fr: "draft / drafted = « brouillon » / « rédigé » (a listing written and saved, not yet sent to Jumia); listing = « annonce »; credits = « crédits »; batch = « lot »; polish photos = « retoucher les photos »; submit = « soumettre »; payout = « paiement »; stock = « stock ».",
+  ar: "draft / drafted = « مسودة » / « تمت صياغته » (a listing written and saved, not yet sent to Jumia; never « سحب »); listing = « إعلان »; credits = « رصيد »; batch = « مجموعة »; polish photos = « تحسين الصور »; submit = « إرسال »; payout = « دفعة مالية »; stock = « المخزون ».",
+};
+
 export function translationPrompt(lang: Foreign, items: { text: string; max: number; kind?: Slot["kind"] }[]): string {
   return [
     `You translate the messages of a WhatsApp assistant for online sellers on Jumia from English into ${LANGUAGE_FOR[lang]}.`,
-    "Translate each item of the JSON array below. Rules:",
-    "- Every item is translated, including short ones: an item with \"kind\": \"label\" is a button, a list row or a column name (\"Submit all\", \"Sales today\"), never a command to keep.",
+    "Translate each of the texts below (\"texts\"). Rules:",
+    "- Every text is translated, including short ones: a text marked true in \"label\" is a button, a list row or a column name (\"Submit all\", \"Sales today\"), never a command to keep.",
+    `- Use these words: ${GLOSSARY[lang]}`,
     "- Keep WhatsApp formatting exactly: *bold*, _italic_, ~strike~, line breaks, bullets (•, -), numbering (\"1.\") and every emoji, in the same places. Text in *bold* is translated like the rest.",
     "- Keep exactly as written, never translated: a product's name (the words after \"Product drafted:\", \"Product 2:\" and the like), brand names, SKUs, order and product numbers, prices, amounts, currency codes and symbols, dates, every number, links, email addresses, codes, and anything in quotes.",
     "- Keep these words as they are: Jumia, PandaWorld, Vendor Center, Seller Center, WhatsApp, ON, OFF, Client ID, token.",
     "- Only when a message explicitly tells the seller to type, reply, say or send a word (Reply *done*, type *restart*, say *menu*), keep that one word or phrase in English.",
     ...(lang === "ar" ? ["- Write numbers with the digits 0-9, never Arabic-Indic digits."] : ["- French punctuation: a space before : ; ! ?"]),
-    "- Each item has \"max\": the translation must be at most that many characters; use shorter words if needed.",
+    "- \"max\" gives each text's most characters, in the same order: use shorter words if needed.",
     "- Natural, friendly and as short as the original; add nothing, leave nothing out.",
-    "Return JSON only: an array of strings (just the translated text, not objects), one per item, in the same order.",
+    "Return JSON only: an array of strings, the translated texts in the same order, nothing else.",
     "",
-    JSON.stringify(items.map((i) => ({ text: i.text, max: i.max, kind: i.kind ?? "message" }))),
+    JSON.stringify({ texts: items.map((i) => i.text), max: items.map((i) => i.max), label: items.map((i) => i.kind === "label") }),
   ].join("\n");
 }
 
@@ -215,7 +224,7 @@ export function keepsEssentials(source: string, out: string, max: number, lang?:
 }
 
 /** Bumped when what makes a good translation changes, so older cached ones aren't read again (v2: 2026-10-12, labels). */
-const CACHE_VERSION = "v2";
+const CACHE_VERSION = "v3";
 const hashOf = (text: string, max: number) => createHash("sha256").update(`${CACHE_VERSION}\n${max}\n${text}`).digest("hex").slice(0, 40);
 
 async function askModel(lang: Foreign, items: { text: string; max: number; kind?: Slot["kind"] }[], userId: string | null, onAnswer?: (raw: string) => void): Promise<(string | null)[]> {
@@ -264,8 +273,9 @@ export async function translateLines(
   const todo = new Map<string, number>(); // hash → first item with it
   hashes.forEach((h, i) => { if (out[i] == null && !todo.has(h)) todo.set(h, i); });
   const firsts = Array.from(todo.values());
-  for (let at = 0; at < firsts.length; at += BATCH) {
-    const chunk = firsts.slice(at, at + BATCH);
+  const chunks: number[][] = [];
+  for (let at = 0; at < firsts.length; at += BATCH) chunks.push(firsts.slice(at, at + BATCH));
+  await Promise.all(chunks.map(async (chunk) => {
     try {
       const fresh = await askModel(lang, chunk.map((i) => items[i]), userId, onAnswer);
       const rows: { lang: string; source_hash: string; translated: string }[] = [];
@@ -282,7 +292,7 @@ export async function translateLines(
     } catch (e) {
       console.warn(`[bot-language] ${chunk.length} line(s) stay English for ${lang}: ${(e as Error).message}`);
     }
-  }
+  }));
   return out;
 }
 
