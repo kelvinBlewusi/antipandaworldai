@@ -53,6 +53,8 @@ import {
 } from "@/lib/jumia/shop";
 import { allowedValueFor } from "@/lib/jumia/preflight";
 import { cell, productStatusCell, sendRich, stockCell, type RichBlock, type RichTone } from "@/lib/whatsapp/rich";
+import { htmlToWhatsApp } from "@/lib/whatsapp/html-text";
+import { untranslated } from "@/lib/i18n/bot";
 import type { JumiaCategoryAttribute } from "@/lib/jumia/categories";
 import { findBrandExact, searchBrandsFromDB } from "@/lib/jumia/brands";
 import { categoryDetails, resolveDetails } from "@/lib/whatsapp/live-details";
@@ -234,13 +236,11 @@ function confirmText(products: ShopProduct[], change: LiveChange, ctx: { currenc
   if (change.kind === "content") {
     const one = products[0];
     const f = change.fields;
-    const preview = [
-      f.description ? `*New description:*\n${shorten(htmlToText(f.description), 450)}` : null,
-      f.highlights ? `*New highlights:*\n${shorten(htmlToText(f.highlights), 300)}` : null,
-    ].filter(Boolean).join("\n\n");
+    // The new description and highlights were just shown in full (sendContentPreview).
+    const above = f.description || f.highlights ? `The new ${[f.description ? "description" : null, f.highlights ? "highlights" : null].filter(Boolean).join(" and ")} ${f.description && f.highlights ? "are" : "is"} above.` : null;
     const head = `Update *${shorten(label(one), 100)}* (SKU ${one.sellerSku}) on Jumia: ${describeContent(f)}?`;
-    const tail = `Jumia checks content changes again before they show${cost}.`;
-    const body = [head, preview, tail].filter(Boolean).join("\n\n");
+    const tail = `Tap Yes to send it to Jumia. Jumia checks content changes again before they show${cost}.`;
+    const body = [head, above, tail].filter(Boolean).join("\n\n");
     return body.length <= INTERACTIVE_BODY_MAX ? body : `${body.slice(0, INTERACTIVE_BODY_MAX - tail.length - 4).trimEnd()}…\n\n${tail}`;
   }
   if (change.kind === "add_variation") {
@@ -633,6 +633,23 @@ export function htmlToText(html: string): string {
     .replace(/[ \t]+/g, " ").replace(/\n\s*\n+/g, "\n").trim();
 }
 
+/**
+ * A new description or highlights, shown in full before the tap that sends
+ * it (owner, 2026-10-12: the preview was 450 characters of plain text, so a
+ * rewrite written with bold, lists and tables looked as if it had none): on
+ * the web chat as Jumia will show it, on WhatsApp in WhatsApp's formatting.
+ */
+export async function sendContentPreview(phone: string, fields: ContentFields): Promise<void> {
+  const parts = [
+    fields.description ? { title: "New description", html: fields.description } : null,
+    fields.highlights ? { title: "New highlights", html: fields.highlights } : null,
+  ].filter((p): p is { title: string; html: string } => p != null);
+  if (parts.length === 0) return;
+  const text = parts.map((p) => `*${p.title}:*\n${htmlToWhatsApp(p.html)}`).join("\n\n");
+  // The listing's own words, in its listing language: never put into the chat's language.
+  await untranslated(() => sendRich(phone, text, parts.map((p) => ({ kind: "html" as const, title: p.title, html: p.html }))));
+}
+
 /** What the seller asked to change on a live product's content. */
 export interface ContentRequest {
   name?:        string;
@@ -649,6 +666,8 @@ export interface ContentRequest {
   /** Written by AI from what Jumia has now, with the seller's own instructions. */
   rewrite?:     ("name" | "description" | "highlights")[];
   instructions?: string;
+  /** HTML added at the end of what its description says now (a warranty, an FDA number Jumia asked for). */
+  appendDescription?: string;
 }
 
 const REWRITE_MODEL = "gemini-2.5-flash";
@@ -691,6 +710,12 @@ export async function rewriteContent(
       ? `Its ${images.length} photo${images.length === 1 ? " is" : "s are"} attached (the main one first). Write from what the product really is: what the photos show, its details below, and what its listing says now.`
       : "Write from what the product really is: its details below, and what its listing says now.",
     "Never invent specifications, materials, sizes, warranties or claims you can't see, read or confirm.",
+    // A brand named in the text that the shop isn't approved for is a rejection
+    // ("Restricted Brand: Nivea in DESCRIPTION"); a creatine rewrite named
+    // "Nutricost" from web search (owner's web chat, 2026-10-12).
+    !set.brand?.name || /^generic$/i.test(set.brand.name)
+      ? "Name no brand anywhere in what you write (not one seen in the photos or found by search): Jumia rejects a listing whose text names a brand the shop isn't approved for. Say what the product is instead."
+      : `Name no brand but ${set.brand.name} in what you write, and never in the name: Jumia rejects a listing whose text names a brand the shop isn't approved for.`,
     buildContentPolicyInstructions({ categoryPath: set.category?.name ?? null, includeImageRules: false }).trim(),
     `Product name now: ${set.name}`,
     `Brand: ${set.brand?.name ?? "unknown"} · Category: ${set.category?.name ?? "unknown"}`,
@@ -771,7 +796,7 @@ export async function proposeContentChange(userId: string, phone: string, query:
   const product = sets[0];
   const fields: ContentFields = {};
   if (req.name) fields.name = req.name.replace(/\s+/g, " ").trim().slice(0, 120);
-  if (req.description) fields.description = req.description.trim().slice(0, 5000);
+  if (req.description) fields.description = req.description.trim().slice(0, 8000);
   if (req.highlights) fields.highlights = req.highlights.trim().slice(0, 2000);
 
   if (req.brand) {
@@ -824,6 +849,17 @@ export async function proposeContentChange(userId: string, phone: string, query:
     if (!fields.attributes) delete fields.attributes;
   }
 
+  // A line Jumia asked for, added to what the description says now.
+  if (req.appendDescription && !fields.description && !req.rewrite?.includes("description")) {
+    const set = await fetchProductSet(ctx.token, product.sellerSku);
+    if (!set.ok || !set.data) {
+      await sendTextIfConfigured(phone, `I couldn't read ${shorten(product.name, 60)} from Jumia just now${set.ok ? "" : `: ${set.message}`}. Try again in a minute.`);
+      return "set unreadable";
+    }
+    const now = set.data.description.trim();
+    if (!now.includes(req.appendDescription)) fields.description = `${now}${req.appendDescription}`.slice(0, 8000);
+  }
+
   if (req.rewrite && req.rewrite.length > 0) {
     const set = await fetchProductSet(ctx.token, product.sellerSku);
     if (!set.ok || !set.data) {
@@ -851,6 +887,7 @@ export async function proposeContentChange(userId: string, phone: string, query:
     return `failed: ${error?.message ?? "no row"}`;
   }
   const id = (data as { id: string }).id;
+  await sendContentPreview(phone, fields);
   await sendButtonsIfConfigured(phone, confirmText([product], change, ctx), [
     { id: `lchg:${id}`, title: "Yes, update it ✅" }, { id: `lchgno:${id}`, title: "No" },
   ]);

@@ -23,6 +23,7 @@
  */
 
 import { callGeminiBackend } from "@/lib/ai/gemini-client";
+import { restrictedBrandWordsInRejection, restrictedWordsInJumiaRejection } from "@/lib/ai/restricted-words";
 import { jumiaSuggestedCategoryPath } from "@/lib/jumia/qc-followup";
 
 export type QcAction =
@@ -31,9 +32,17 @@ export type QcAction =
   /** The category is wrong but Jumia didn't say which: ask the seller. */
   | { kind: "ask_category" }
   /** Something only the seller has, for one of the category's fields (an
-   *  FDA number, a certificate). field is null when the category has no
-   *  such field; the answer then goes in the description. */
-  | { kind: "ask_value"; field: string | null; fieldLabel: string; question: string }
+   *  FDA number, a certificate, the weight, the warranty). field is null
+   *  when the category has no such field; the answer then goes in the
+   *  description. `about` reads the answer its way: a weight as kg, a
+   *  warranty into the warranty fields and the description. */
+  | { kind: "ask_value"; field: string | null; fieldLabel: string; question: string; about?: "weight" | "warranty" }
+  /** Words in the listing's text Jumia won't take from this shop (a brand it
+   *  isn't approved for, a banned word): taken out, nothing else changes. */
+  | { kind: "remove_words"; words: string[]; why: string }
+  /** The name starts with words Jumia reads as a brand ("Brand field
+   *  'Fashion' but name starts with: Kinky Curly"): reworded so it doesn't. */
+  | { kind: "rename"; start: string; why: string }
   | { kind: "ask_brand"; why: string }
   | { kind: "ask_price"; why: string }
   | { kind: "ask_photos"; why: string }
@@ -81,6 +90,13 @@ function regulatoryField(fields: QcContext["fields"], text: string): { field: st
   return { field: null, fieldLabel: wantsCert ? "Certification" : "FDA registration number" };
 }
 
+/** The category's warranty field for the seller's own words (free text first). */
+function warrantyField(fields: QcContext["fields"]): { name: string; label: string | null } | null {
+  return fields.find((f) => f.name === "product_warranty")
+    ?? fields.find((f) => /warrant/i.test(f.name) && !/duration|type|address/i.test(f.name))
+    ?? null;
+}
+
 /**
  * The known reasons. Null when none matches, for the AI to decide.
  * Order matters: the most specific signals first.
@@ -96,6 +112,15 @@ export function qcActionFromTable(ctx: QcContext): QcAction | null {
 
   if (/prohibit|not (?:allowed|permitted) (?:to be )?(?:sold|listed|on jumia)|illegal|forbidden product|banned product/i.test(text)) {
     return { kind: "cannot_fix", why: `Jumia doesn't allow this product to be sold on its site${why}.` };
+  }
+  // A brand this shop isn't approved for, or a banned word, in the listing's
+  // own text ("Restricted Brand: Nivea in DESCRIPTION - Seller not in
+  // approved list", on a Generic body lotion): the word is the trouble, not
+  // the product (owner, 2026-10-12). It read as "your shop can't sell this
+  // brand" before.
+  const words = [...restrictedBrandWordsInRejection(text), ...restrictedWordsInJumiaRejection(text)];
+  if (words.length > 0) {
+    return { kind: "remove_words", words: Array.from(new Set(words)), why: `Jumia's quality check won't take ${words.map((w) => `"${w}"`).join(", ")} in the listing from your shop${why}.` };
   }
   if (REGULATORY_RE.test(text)) {
     const { field, fieldLabel } = regulatoryField(ctx.fields, text);
@@ -125,6 +150,32 @@ export function qcActionFromTable(ctx: QcContext): QcAction | null {
     return {
       kind: "cannot_fix",
       why: `Jumia already has this product${why}, and it allows one listing per product, so it can't be added again as new.`,
+    };
+  }
+  // Jumia's check read the name's first words as a brand ("Brand field
+  // 'Fashion' but name starts with: Kinky Curly", on a kinky curly wig):
+  // a name that starts with what the product is fixes it, or the real brand.
+  const start = /brand field\s*['"‘’]?[^'"‘’]*['"‘’]?\s*but (?:the )?name starts with\s*:?\s*([^)\n.;]{2,60})/i.exec(text);
+  if (start) return { kind: "rename", start: start[1].trim(), why };
+  // A warranty Jumia requires (phones, appliances): only the seller knows
+  // it; it goes in the warranty fields and the description (owner,
+  // 2026-10-12, a Galaxy A15). Before, the word "description" in Jumia's
+  // comment made it a rewrite, which can't invent a warranty.
+  if (/warrant/i.test(text)) {
+    const f = warrantyField(ctx.fields);
+    return {
+      kind: "ask_value", about: "warranty", field: f?.name ?? null, fieldLabel: "Warranty",
+      question: "What warranty does it come with? E.g. \"1 year, replacement by vendor\" or \"6 months, repair by vendor\".",
+    };
+  }
+  // The weight (owner, 2026-10-12: a collagen supplement's "Please confirm and
+  // update the actual weight" got its name and description rewritten). Only
+  // the seller knows it; it goes in the weight field, in kg.
+  if (/\bweight\b/i.test(text)) {
+    const f = ctx.fields.find((x) => /weight/i.test(x.name) && !/net|volume/i.test(x.name)) ?? null;
+    return {
+      kind: "ask_value", about: "weight", field: f?.name ?? "product_weight", fieldLabel: f?.label ?? "Weight (kg)",
+      question: "What does it weigh, packed as it ships? Send it in kg or g, e.g. \"0.35 kg\" or \"350 g\".",
     };
   }
   if (/brand/i.test(text)) return { kind: "ask_brand", why };

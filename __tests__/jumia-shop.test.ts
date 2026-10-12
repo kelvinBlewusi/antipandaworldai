@@ -652,6 +652,31 @@ describe("told without asking", () => {
       .toBe("✅ Done on Jumia for 2 products (price -10%):\n• A\n• B");
   });
 
+  it("each order names its products: a failed delivery says what didn't arrive", async () => {
+    seed();
+    orders = [];
+    await runShopNotices(at("2026-10-07T10:00:00Z"));
+    orders = [order("o9", 334695219, "Failed")];
+    orderItems = { o9: [
+      { id: "i1", status: "failed", product: { name: "Nasco Electric Kettle 1.8L" } },
+      { id: "i2", status: "failed", product: { name: "Nasco Electric Kettle 1.8L" } },
+      { id: "i3", status: "failed", product: { name: "Binatone Blender" } },
+    ] };
+    await runShopNotices(at("2026-10-07T10:10:00Z"));
+    expect(last().body).toBe("📦 Jumia order updates\n\n*❌ Delivery failed*\n#334695219 · GHS 100\n• 2× Nasco Electric Kettle 1.8L\n• Binatone Blender");
+  });
+
+  it("product lines: three per order, fewer when the message would pass WhatsApp's limit", () => {
+    const items = ["A", "B", "C", "D"].map((n) => ({ id: n, status: "x", product: { name: n } }));
+    const one = [{ id: "o1", number: "1", status: "Delivered" }];
+    expect(orderUpdatesText(one as never, undefined, new Map([["o1", items as never]])).split("\n").slice(-4)).toEqual(["• A", "• B", "• C", "• +1 more"]);
+    const long = (i: number) => Array.from({ length: 3 }, (_, j) => ({ id: `${i}-${j}`, status: "x", product: { name: `${"Long product name ".repeat(4)}${j}` } }));
+    const many = Array.from({ length: 15 }, (_, i) => ({ id: `o${i}`, number: String(i), status: ["Delivered", "Returned", "Failed", "Canceled"][i % 4] }));
+    const text = orderUpdatesText(many as never, undefined, new Map(many.map((o, i) => [o.id, long(i) as never])));
+    expect(text.length).toBeLessThanOrEqual(3_900);
+    expect(text).toContain("• Long product name");
+  });
+
   it("the grouped text, cut at 15 per kind", () => {
     const many = Array.from({ length: 17 }, (_, i) => ({ id: `x${i}`, number: String(i), status: "Delivered" }));
     expect(orderUpdatesText(many as never).split("\n").at(-1)).toBe("+2 more");

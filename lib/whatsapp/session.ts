@@ -86,6 +86,27 @@ export interface AddPhotosAsk {
   drop?:    string[];
 }
 
+/**
+ * What Jumia's quality check needs for a rejected product on Jumia, asked by
+ * lib/whatsapp/fix-rejected.ts (owner, 2026-10-12: "change the brand to pro"
+ * got the brand question back three times): the reply is the answer, put in
+ * the product and offered for its tap. Anything that isn't an answer lets it
+ * go.
+ */
+export interface QcLiveAsk {
+  kind:       "qc_live";
+  sku:        string;
+  name:       string;
+  ask:        "brand" | "value";
+  /** The category field the value goes in, null for a line in the description. */
+  field:      string | null;
+  fieldLabel: string;
+  about:      "weight" | "warranty" | null;
+  /** Its category, for the warranty fields' options. */
+  category:   number | null;
+  at:         string;
+}
+
 /** Which of a live product's photos to swap for new ones: by number (the main one is 1), the last few, or all but the main one. */
 export interface PhotoSwap { positions: number[]; last: number; all: boolean }
 
@@ -197,7 +218,7 @@ export interface WhatsAppSession {
    * for the tap or the number. Null when none is outstanding; anything
    * that isn't an answer drops it. See lib/whatsapp/assistant.ts.
    */
-  assistantPending: AssistantPending | LiveValueAsk | AddPhotosAsk | ProductPickAsk | null;
+  assistantPending: AssistantPending | LiveValueAsk | AddPhotosAsk | ProductPickAsk | QcLiveAsk | null;
   /** The products the assistant last listed (ListedProducts). */
   lastListed: ListedProducts | null;
 }
@@ -209,6 +230,8 @@ export interface QcQuestion {
   /** ask_value: the category field the answer goes in, null for the description. */
   field?:      string | null;
   fieldLabel?: string;
+  /** ask_value: a weight is read as kg; a warranty also goes in the description. */
+  about?:      "weight" | "warranty";
 }
 
 function fromRow(row: Record<string, unknown>): WhatsAppSession {
@@ -231,7 +254,7 @@ function fromRow(row: Record<string, unknown>): WhatsAppSession {
     lastSubmittedBatchId: (row.last_submitted_batch_id as string | null) ?? null,
     batchQuiet: (row.batch_quiet as boolean | null) ?? null,
     preferredBatchQuiet: (row.preferred_batch_quiet as boolean | null) ?? null,
-    assistantPending: (row.assistant_pending as AssistantPending | LiveValueAsk | AddPhotosAsk | ProductPickAsk | null) ?? null,
+    assistantPending: (row.assistant_pending as AssistantPending | LiveValueAsk | AddPhotosAsk | ProductPickAsk | QcLiveAsk | null) ?? null,
     lastListed: (row.last_listed as ListedProducts | null) ?? null,
   };
 }
@@ -367,7 +390,7 @@ export async function updateSession(
     lastSubmittedBatchId: string | null;
     batchQuiet: boolean | null;
     preferredBatchQuiet: boolean | null;
-    assistantPending: AssistantPending | LiveValueAsk | AddPhotosAsk | ProductPickAsk | null;
+    assistantPending: AssistantPending | LiveValueAsk | AddPhotosAsk | ProductPickAsk | QcLiveAsk | null;
     lastListed: ListedProducts | null;
   }>,
 ): Promise<void> {
