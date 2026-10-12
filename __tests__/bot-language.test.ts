@@ -99,6 +99,16 @@ describe("a message on its way", () => {
     expect((await assistantMessages("u1")).map((m) => m.text)).toEqual(["Bonjour : Send the photos of product 2.", "Bonjour : Send the photos of product 2."]);
   });
 
+  it("a cached line that fails the checks is translated again and replaced", async () => {
+    db.tables.seller_preferences = [{ user_id: "u1", ui_language: "fr" }];
+    await sendTextIfConfigured("web:u1", "Send the photos.");
+    expect(prompts).toHaveLength(1);
+    db.tables.bot_translations[0].translated = "Send the photos.";
+    await sendTextIfConfigured("web:u1", "Send the photos.");
+    expect(prompts).toHaveLength(2);
+    expect(db.tables.bot_translations).toMatchObject([{ translated: "Bonjour : Send the photos." }]);
+  });
+
   it("a line whose numbers, links or length change stays English; a failed call sends it all in English", async () => {
     db.tables.seller_preferences = [{ user_id: "u1", ui_language: "fr" }];
     translate = (s) => s.replace("150", "one hundred fifty").replace("Stock", "Le stock");
