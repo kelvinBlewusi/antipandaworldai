@@ -43,7 +43,7 @@ import { detailWord, lockedDetailIn, lockedText, rememberLocked } from "@/lib/ju
 import {
   NOT_FOUND_RE, feedItemResults, fetchPayouts, fetchStock, markNoticed, noticed, orderStatusWord, ordersChangedSince, type LiveChange, type PayoutStatement,
 } from "@/lib/jumia/shop";
-import type { JumiaOrder } from "@/lib/jumia/orders";
+import { getItemsOfOrders, type JumiaOrder, type JumiaOrderItem } from "@/lib/jumia/orders";
 
 export const ORDER_UPDATES_GAP_MS = 2 * 3_600_000;
 export const PAYOUT_CHECK_MS = 6 * 3_600_000;
@@ -255,18 +255,50 @@ const UPDATE_KINDS: { status: string; head: string }[] = [
   { status: "DELIVERED", head: "✅ Delivered" },
 ];
 
-/** The grouped order-updates message. */
-export function orderUpdatesText(orders: JumiaOrder[], country?: JumiaCountry): string {
-  const line = (o: JumiaOrder) => `#${o.number}` +
-    (o.totalAmountLocal ? ` · ${formatAmount(Number(o.totalAmountLocal.value) || 0, o.totalAmountLocal.currency, country)}` : "");
-  const parts: string[] = ["📦 Jumia order updates"];
-  for (const k of UPDATE_KINDS) {
-    const these = orders.filter((o) => orderStatusWord(o) === k.status);
-    if (these.length === 0) continue;
-    const shown = these.slice(0, 15).map(line);
-    parts.push("", `*${k.head}*`, ...shown, ...(these.length > 15 ? [`+${these.length - 15} more`] : []));
+/** "• 2× Nasco Kettle" lines for an order's items, one per product, at most `most`. */
+export function productLines(items: JumiaOrderItem[], most = 3): string[] {
+  const counts = new Map<string, number>();
+  for (const it of items) {
+    const name = (it.product?.name ?? it.product?.sellerSku ?? "").replace(/\s+/g, " ").trim();
+    if (name) counts.set(name, (counts.get(name) ?? 0) + 1);
   }
-  return parts.join("\n");
+  const names = Array.from(counts.keys());
+  const cut = (s: string) => (s.length > 70 ? `${s.slice(0, 69).trimEnd()}…` : s);
+  const lines = names.slice(0, most).map((n) => `• ${(counts.get(n) ?? 1) > 1 ? `${counts.get(n)}× ` : ""}${cut(n)}`);
+  if (names.length > most) lines.push(`• +${names.length - most} more`);
+  return lines;
+}
+
+/** WhatsApp's text limit is 4,096: product lines are trimmed to stay under it. */
+const UPDATES_MAX_CHARS = 3_900;
+
+/**
+ * The grouped order-updates message. Each order names its products under it
+ * (owner, 2026-10-12: "delivery failure updates should have the name of the
+ * product too"), when its items could be read: up to three per order, fewer
+ * when a long message would pass WhatsApp's limit.
+ */
+export function orderUpdatesText(orders: JumiaOrder[], country?: JumiaCountry, itemsOf?: Map<string, JumiaOrderItem[]>): string {
+  const build = (most: number) => {
+    const line = (o: JumiaOrder) => [
+      `#${o.number}` +
+        (o.totalAmountLocal ? ` · ${formatAmount(Number(o.totalAmountLocal.value) || 0, o.totalAmountLocal.currency, country)}` : ""),
+      ...(most > 0 ? productLines(itemsOf?.get(o.id) ?? [], most) : []),
+    ].join("\n");
+    const parts: string[] = ["📦 Jumia order updates"];
+    for (const k of UPDATE_KINDS) {
+      const these = orders.filter((o) => orderStatusWord(o) === k.status);
+      if (these.length === 0) continue;
+      const shown = these.slice(0, 15).map(line);
+      parts.push("", `*${k.head}*`, ...shown, ...(these.length > 15 ? [`+${these.length - 15} more`] : []));
+    }
+    return parts.join("\n");
+  };
+  for (const most of [3, 1]) {
+    const text = build(most);
+    if (text.length <= UPDATES_MAX_CHARS) return text;
+  }
+  return build(0);
 }
 
 /** Delivered / returned / failed / cancelled orders not yet told. */
@@ -291,7 +323,11 @@ async function orderUpdates(userId: string, phone: string, token: string, countr
 
   // Charged (NOTICE_CREDIT_COST): a seller who can't cover it hears once they top up.
   if (!(await chargeService(userId, NOTICE_CREDIT_COST, `notice:orders:${userId}:${now.toISOString()}`, "Order updates on WhatsApp")).ok) return;
-  await sendTextIfConfigured(phone, orderUpdatesText(fresh, country));
+  // Their products, by order: the update still goes without them if Jumia won't say.
+  const items = await getItemsOfOrders(token, fresh.slice(0, 60).map((o) => o.id)).catch(() => null);
+  const itemsOf = new Map<string, JumiaOrderItem[]>();
+  if (items?.ok) items.data.forEach((v, id) => itemsOf.set(id, v.items));
+  await sendTextIfConfigured(phone, orderUpdatesText(fresh, country, itemsOf));
   for (const o of fresh) await markNoticed(userId, "order", ref(o));
   await markNoticed(userId, "order_updates_sent", now.toISOString(), now);
   run.updates += fresh.length;

@@ -7,9 +7,10 @@
  * sent with its text (lib/whatsapp/rich.ts). Drawn from React nodes only.
  */
 
-import type { ReactNode } from "react";
+import { Fragment, useEffect, useState, type ReactNode } from "react";
 import { ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { htmlToWhatsApp } from "@/lib/whatsapp/html-text";
 import type { RichBlock, RichCell, RichTone } from "@/lib/whatsapp/rich-blocks";
 
 const VALUE_TONE: Record<RichTone, string> = {
@@ -116,6 +117,61 @@ function Bars({ block }: { block: Extract<RichBlock, { kind: "bars" }> }) {
   );
 }
 
+/** Tags a listing's text may use, drawn as themselves; any other keeps only its text. */
+const LISTING_TAGS = new Set(["p", "br", "strong", "b", "em", "i", "u", "ul", "ol", "li", "table", "thead", "tbody", "tfoot", "tr", "th", "td", "h2", "h3", "h4", "h5", "h6"]);
+/** Tags whose content is never text for a reader. */
+const DROPPED_TAGS = new Set(["script", "style", "iframe", "object", "embed", "noscript", "template", "svg", "math", "img", "video", "audio", "form", "input", "button", "select", "textarea"]);
+
+/** One parsed node as React: allowed tags as themselves, no attributes but a cell's span. */
+function listingNode(node: Node, key: string): ReactNode {
+  if (node.nodeType === 3) return node.textContent;
+  if (node.nodeType !== 1) return null;
+  const el = node as Element;
+  const tag = el.tagName.toLowerCase();
+  if (DROPPED_TAGS.has(tag)) return null;
+  const kids = Array.from(el.childNodes).map((c, i) => listingNode(c, `${key}.${i}`));
+  if (tag === "br") return <br key={key} />;
+  if (tag === "h1") return <h3 key={key}>{kids}</h3>;
+  if (!LISTING_TAGS.has(tag)) return <Fragment key={key}>{kids}</Fragment>;
+  if (tag === "td" || tag === "th") {
+    const span = (name: string) => {
+      const n = Number(el.getAttribute(name));
+      return Number.isInteger(n) && n > 1 && n <= 12 ? n : undefined;
+    };
+    const Cell = tag;
+    return <Cell key={key} colSpan={span("colspan")} rowSpan={span("rowspan")}>{kids}</Cell>;
+  }
+  const Tag = tag as keyof JSX.IntrinsicElements;
+  return <Tag key={key}>{kids}</Tag>;
+}
+
+/**
+ * A rewrite's description or highlights as it will read on Jumia (owner,
+ * 2026-10-12: shown as plain text, it looked as if the bold, lists and
+ * tables weren't there). Parsed in the browser and rebuilt from an
+ * allow-list, so nothing in the text runs or links anywhere; until it's
+ * parsed, the same text in WhatsApp's formatting.
+ */
+function ListingHtml({ block, renderText }: { block: Extract<RichBlock, { kind: "html" }>; renderText: (text: string) => ReactNode }) {
+  const [nodes, setNodes] = useState<ReactNode[] | null>(null);
+  useEffect(() => {
+    if (typeof DOMParser === "undefined") return;
+    const doc = new DOMParser().parseFromString(block.html, "text/html");
+    setNodes(Array.from(doc.body.childNodes).map((n, i) => listingNode(n, String(i))));
+  }, [block.html]);
+  return (
+    <div>
+      {block.title && <p className="mb-1.5 text-sm font-medium text-zinc-700">{block.title}</p>}
+      <div
+        dir="auto"
+        className="prose prose-sm prose-zinc max-h-[28rem] max-w-none overflow-y-auto rounded-xl border border-zinc-200 bg-white px-4 py-3 prose-p:my-2 prose-ul:my-2 prose-li:my-0.5 prose-table:my-2 prose-th:bg-zinc-50 prose-th:px-2 prose-td:px-2 [&_table]:block [&_table]:overflow-x-auto"
+      >
+        {nodes ?? <div className="whitespace-pre-wrap">{renderText(htmlToWhatsApp(block.html))}</div>}
+      </div>
+    </div>
+  );
+}
+
 export function RichMessage({ blocks, renderText }: { blocks: RichBlock[]; renderText: (text: string) => ReactNode }) {
   return (
     <div className="space-y-3">
@@ -161,6 +217,8 @@ export function RichMessage({ blocks, renderText }: { blocks: RichBlock[]; rende
             return <p key={i} className={cn("rounded-lg px-3 py-2 text-sm leading-relaxed", NOTE_TONE[b.tone ?? "neutral"])}>{renderText(b.text)}</p>;
           case "text":
             return <div key={i} className="whitespace-pre-wrap break-words">{renderText(b.text)}</div>;
+          case "html":
+            return <ListingHtml key={i} block={b} renderText={renderText} />;
         }
       })}
     </div>

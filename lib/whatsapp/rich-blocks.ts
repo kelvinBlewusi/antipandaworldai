@@ -19,9 +19,16 @@ export type RichBlock =
   /** Words, with WhatsApp's *bold* and _italic_. */
   | { kind: "text"; text: string }
   /** A side remark in a soft box: what's still applying, what to try next. */
-  | { kind: "note"; text: string; tone?: RichTone };
+  | { kind: "note"; text: string; tone?: RichTone }
+  /**
+   * A listing's text as Jumia shows it (a description or highlights, with
+   * its bold, lists and tables), under `title`: a rewrite shown before it's
+   * sent. Drawn from an allow-list of tags, never as raw HTML
+   * (components/assistant/rich-message.tsx ListingHtml).
+   */
+  | { kind: "html"; title?: string; html: string };
 
-const BLOCK_KINDS = new Set(["heading", "stats", "table", "bars", "text", "note"]);
+const BLOCK_KINDS = new Set(["heading", "stats", "table", "bars", "text", "note", "html"]);
 
 /** The blocks of a stored message, or null when there are none fit to draw. Pure. */
 export function richBlocks(v: unknown): RichBlock[] | null {

@@ -55,7 +55,8 @@ import { answerProductPhotos, productDetailsLookup, productFactsText, whereLine 
 import { answerProductText, answerProducts, answerStock, bulkTargets, handleShopTap, htmlToText, proposeAddSize, proposeBulkChange, proposeContentChange } from "@/lib/whatsapp/shop";
 import { runApiChecks } from "@/lib/jumia/api-checks";
 import { answerLiveValue } from "@/lib/whatsapp/assistant";
-import { fixRejected } from "@/lib/whatsapp/fix-rejected";
+import { answerQcLive, fixRejected } from "@/lib/whatsapp/fix-rejected";
+import type { QcLiveAsk } from "@/lib/whatsapp/session";
 import {
   answerBrand, answerLinkedShops, answerPayoutDetail, answerReport, answerWarehouseStock, daysLeft, handleWarehouseTap, proposeWarehouseOrder,
   proposeWarehouseShipped, salesByProduct, statementLines,
@@ -303,7 +304,10 @@ describe("a live product's content", () => {
   it("a rewrite is written from what Jumia has now and shown before the tap", async () => {
     rewritten = '{"description":"<p>A sturdy rain boot.</p><ul><li>Waterproof</li></ul>"}';
     expect(await proposeContentChange(USER, PHONE, "wellington boot", { rewrite: ["description"], instructions: "rewrite it" })).toBe("offered content (description) for WEL-B");
-    expect(last().body).toContain("*New description:*\nA sturdy rain boot.\n• Waterproof");
+    // Shown in full first, in WhatsApp's formatting, then the tap (owner, 2026-10-12: it read as plain text).
+    expect(sent.at(-2)!.body).toBe("*New description:*\nA sturdy rain boot.\n\n• Waterproof");
+    expect(last().body).toContain("The new description is above.");
+    expect(last().body).toContain("Tap Yes to send it to Jumia.");
   });
 
   // Owner, 2026-10-11: "have a look at the pictures of it and rewrite the description yourself"; "does not follow the standard we have when drafting from scratch".
@@ -327,7 +331,7 @@ describe("a live product's content", () => {
       .toBe("fix: rewrite (offered content (description) for WEL-B)");
     expect(sent.find((m) => m.body.includes("I've rewritten its description to fix it, as you asked"))).toBeTruthy();
     expect(aiPrompts.join("\n")).toContain("say it's for farm and garden");
-    expect(last().body).toContain("A tall rubber rain boot for farm and garden.");
+    expect(sent.at(-2)!.body).toContain("A tall rubber rain boot for farm and garden.");
     // Saying nothing of what to change still asks for Jumia's reason.
     expect(await fixRejected(USER, PHONE, "wellington boot", null, "fix the wellington boot")).toBe("fix: ask_details");
     expect(writes()).toHaveLength(0);
@@ -587,5 +591,103 @@ describe("brands, shops and Jumia's warehouse", () => {
     await handleWarehouseTap(USER, PHONE, last().ids![1]);
     expect(last().body).toBe("OK, nothing sent to Jumia.");
     expect(writes()).toHaveLength(0);
+  });
+});
+
+// Owner's web chat, 2026-10-12: a weight rejection got its name and
+// description rewritten, and "change the brand to pro" got the brand
+// question back three times. "Fix what we can, ask for what only the seller
+// has, then put it in and send it back."
+describe("rejected products, fixed from what Jumia's quality check said", () => {
+  const reject = (i: number, reason: string) => {
+    const s = catalog[i] as { variations: { businessClients: { qc: Record<string, unknown> }[] }[] };
+    s.variations[0].businessClients[0].qc = { status: "REJECTED", rejectionReason: reason };
+  };
+  const pending = () => db.tables.whatsapp_sessions[0].assistant_pending as QcLiveAsk;
+  const attr = (name: string, label: string, type: string, allowed: string[] = []) =>
+    ({ category_code: 1000844, name, label, type, allowed_values: allowed, required: false, is_variant: false, sort_order: 1 });
+  beforeEach(() => {
+    db.tables.whatsapp_sessions = [{ phone_number: PHONE, user_id: USER, state: "idle", assistant_pending: null }];
+    db.tables.jumia_category_attributes = [
+      attr("product_weight", "Weight (kg)", "string"),
+      attr("product_warranty", "Product warranty", "textarea"),
+      attr("warranty_duration", "Warranty Duration", "enum", ["1 Year", "6 Months", "2 Years", "None"]),
+      attr("warranty_type", "Warranty Type", "multi", ["Repair by Vendor", "Replacement by Vendor"]),
+      attr("fda", "FDA", "string"),
+    ];
+  });
+  const updated = () => (writes().find((c) => c.path === "/feeds/products/update")!.body as { products: Record<string, unknown>[] }).products[0];
+
+  it("a weight Jumia doubts: asked, never rewritten; the reply goes in its weight field in kg", async () => {
+    reject(2, "Please confirm and update the actual weight of the product, as the current weight information appears to be inaccurate or missing. 150 g should be entered as 0.15 kg");
+    expect(await fixRejected(USER, PHONE, "wellington boot")).toBe("fix: ask_value");
+    expect(last().body).toContain("What does it weigh, packed as it ships?");
+    expect(aiPrompts).toHaveLength(0);
+    expect(pending()).toMatchObject({ kind: "qc_live", sku: "WEL-B", ask: "value", about: "weight", field: "product_weight" });
+    // A bare big number could be grams or kilos: asked.
+    expect(await answerQcLive(USER, PHONE, pending(), "1200")).toBe(true);
+    expect(last().body).toContain("Is that 1200 g or 1200 kg?");
+    expect(await answerQcLive(USER, PHONE, pending(), "1200 g")).toBe(true);
+    expect(last().body).toContain("weight → 1.2");
+    await handleShopTap(USER, PHONE, last().ids![0]);
+    expect(updated().attributes).toContainEqual({ name: "product_weight", value: "1.2" });
+    expect(updated().description).toEqual({ value: "<p>Wellington Rain Boot, the original description.</p>" });
+  });
+
+  it("the brand in their own message is put in, not asked again", async () => {
+    db.tables.jumia_brands = [{ code: 1001, name: "Lattafa" }];
+    reject(2, "Brand 'Generic' is not a recognized brand for a rain boot. Please list this product under a genuine, specific brand name.");
+    expect(await fixRejected(USER, PHONE, "wellington boot")).toBe("fix: ask_brand");
+    expect(await fixRejected(USER, PHONE, "wellington boot", null, "change the brand to lattafa")).toBe("fix: ask_brand answered (offered content (brand) for WEL-B)");
+    expect(last().body).toContain("brand → Lattafa");
+    // A brand Jumia doesn't have: said, and the next reply is still the answer.
+    expect(await answerQcLive(USER, PHONE, { ...pending(), at: new Date().toISOString() }, "Pro")).toBe(true);
+    expect(sent.some((m) => m.body.includes("\"Pro\" isn't a brand on Jumia"))).toBe(true);
+    expect(pending()).toMatchObject({ kind: "qc_live", ask: "brand" });
+  });
+
+  it("a name Jumia read as a brand is reworded to start with what it is; a brand reply still counts", async () => {
+    reject(2, "Kindly use the brand name on the package ... (Brand field 'Fashion' but name starts with: Wellington Rain)");
+    rewritten = '{"name":"Rain Boot - Wellington Style, Green Rubber"}';
+    expect(await fixRejected(USER, PHONE, "wellington boot")).toBe("fix: rewrite (offered content (name) for WEL-B)");
+    expect(aiPrompts[0]).toContain('The new name must NOT begin with "Wellington Rain"');
+    expect(last().body).toContain('name → "Rain Boot - Wellington Style, Green Rubber"');
+    expect(pending()).toMatchObject({ kind: "qc_live", ask: "brand" });
+  });
+
+  it("a brand word in the description is taken out, and nothing else changes", async () => {
+    const boot = catalog[2] as { description: string };
+    boot.description = "<p>Tough like Nivea boots, made for rain.</p>";
+    reject(2, "Restricted Brand: Nivea in DESCRIPTION - Seller not in approved list");
+    expect(await fixRejected(USER, PHONE, "wellington boot")).toBe("fix: remove (offered content (description) for WEL-B)");
+    expect(aiPrompts).toHaveLength(0);
+    await handleShopTap(USER, PHONE, last().ids![0]);
+    expect(updated().description).toEqual({ value: "<p>Tough like boots, made for rain.</p>" });
+    expect(updated().name).toEqual({ value: "Wellington Rain Boot" });
+  });
+
+  it("a warranty: its fields and a line in the description", async () => {
+    reject(2, "For listing this type of product requires a valid warranty as per our platform guidelines. Please ensure the warranty details are clearly mentioned in: Product Description tab, Warranty Tab.");
+    expect(await fixRejected(USER, PHONE, "wellington boot")).toBe("fix: ask_value");
+    expect(pending()).toMatchObject({ about: "warranty", field: "product_warranty" });
+    expect(await answerQcLive(USER, PHONE, pending(), "12 months, replacement by vendor")).toBe(true);
+    await handleShopTap(USER, PHONE, last().ids![0]);
+    expect(updated().attributes).toEqual(expect.arrayContaining([
+      { name: "product_warranty", value: "12 months, replacement by vendor" },
+      { name: "warranty_duration", value: "1 Year" },
+      { name: "warranty_type", value: "Replacement by Vendor" },
+    ]));
+    expect(updated().description).toEqual({ value: "<p>Wellington Rain Boot, the original description.</p><p><strong>Warranty:</strong> 12 months, replacement by vendor</p>" });
+  });
+
+  it("an FDA number goes in its field; a question back lets the question go", async () => {
+    reject(2, "Kindly Provide Product's Health/Food Regulation Registration Number. (Mandatory FDA registration number is missing.)");
+    expect(await fixRejected(USER, PHONE, "wellington boot")).toBe("fix: ask_value");
+    expect(last().body).toContain("No number? Jumia won't approve it until the product is registered.");
+    expect(await answerQcLive(USER, PHONE, pending(), "where do I find it?")).toBe(false);
+    db.tables.whatsapp_sessions[0].assistant_pending = { kind: "qc_live", sku: "WEL-B", name: "Wellington Rain Boot", ask: "value", field: "fda", fieldLabel: "FDA", about: null, category: 1000844, at: new Date().toISOString() };
+    expect(await answerQcLive(USER, PHONE, pending(), "FDA number is FDA/CS/24-1234")).toBe(true);
+    await handleShopTap(USER, PHONE, last().ids![0]);
+    expect(updated().attributes).toContainEqual({ name: "fda", value: "FDA/CS/24-1234" });
   });
 });

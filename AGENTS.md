@@ -3206,6 +3206,92 @@ Jumia failed both:
 - Tests in jumia-shop.test.ts: the turned-down batch with a read-back, and a
   product with no status.
 
+### Rejected products fixed from Jumia's words; rewrites shown as they'll read (owner's web chat, 2026-10-12)
+
+The owner's web chat, 05:30–05:36, showed four faults:
+
+- A collagen supplement rejected for its weight had its name and description
+  rewritten.
+- "Change the brand to pro" got the same brand question back three times. The
+  agent called `fix_rejected` again, and `ask_brand` ignored the message.
+- Two rewrites (creatine, collagen) were never tapped, so nothing reached
+  Jumia. Both were good HTML (bold, lists). The preview had flattened them to
+  450 characters of plain text.
+- Delivery-failed updates named no product.
+
+What changed:
+
+- **QC reasons** (lib/jumia/qc-remedy.ts `qcActionFromTable`), checked on all
+  11 of the owner's rejected products:
+  - Weight → `ask_value` with `about: "weight"`, for the category's weight
+    field (product_weight). Before, it was a redraft.
+  - Warranty → `ask_value` with `about: "warranty"` (product_warranty). The
+    word "description" in Jumia's comment had made it a redraft.
+  - "Restricted Brand: X in DESCRIPTION/NAME" or "restricted words: …" →
+    `remove_words`: the words are taken out and nothing else changes
+    (`withoutWords`). It used to say "your shop can't sell this brand".
+  - "Brand field 'Fashion' but name starts with: Kinky Curly" → `rename`: an
+    AI rewrite of the name only, which must not begin with those words. The
+    seller can also reply with the real brand.
+  - "Brand 'Generic' is not a recognized brand", FDA numbers, suggested
+    categories and an empty reason work as before.
+- **Answers** (lib/jumia/qc-answers.ts, pure):
+  - `parseWeightKg`: "350 g" → 0.35. A bare number under 10 is kg; a bigger
+    one asks for the unit.
+  - `parseBrandAnswer`: "change the brand to pro", "the brand is X", or a
+    bare reply to the question. "none" → Generic.
+  - `warrantyAnswer`: their words go in the free-text field. Length and kind
+    go in warranty_duration/warranty_type only when Jumia has the option.
+- **The reply is the answer** (lib/whatsapp/fix-rejected.ts):
+  - Asking sets `assistantPending` to a `QcLiveAsk` (session.ts). intake
+    routes the next message to `answerQcLive` before anything else reads it.
+    A tap, a question back or "stop" lets it go.
+  - `fixRejected` also reads the answer from the seller's own message, so
+    "change the brand to X" is put in, never asked again.
+  - Each answer is offered with `proposeContentChange` for one tap:
+    - a brand → `brand`;
+    - a weight, an FDA number or warranty details → `details`;
+    - a warranty line, or a value its category has no field for →
+      `appendDescription` (ContentRequest, added to what the description
+      says now).
+  - A brand Jumia doesn't have keeps the question open.
+- **PandaWorld-listed products** (intake `fixQcRejection`): a weight answer
+  goes in as kg, and a warranty is added to the description too.
+  `remove_words` and `rename` go to the redraft.
+- **Rewrites shown in full** (`sendContentPreview`, lib/whatsapp/shop.ts):
+  - Before the Yes/No message, the new description and highlights are sent
+    whole:
+    - on the web chat as an `html` rich block, drawn by `ListingHtml`
+      (components/assistant/rich-message.tsx). It parses in the browser and
+      rebuilds only allowed tags, with no attributes but a cell's span.
+      Scripts and images are dropped.
+    - on WhatsApp in its own formatting (lib/whatsapp/html-text.ts
+      `htmlToWhatsApp`: *bold*, _italic_, "• ", table rows "a · b").
+  - It's sent `untranslated`: it's the listing's own words.
+  - The tap message now says "The new description is above. Tap Yes to send
+    it to Jumia."
+  - Seller-written descriptions are capped at 8,000 characters, like
+    rewrites.
+- **No brand names in rewrites**: `rewriteContent` tells the writer to name no
+  brand when the product's brand is Generic, and only its own brand
+  otherwise. The creatine rewrite had named "Nutricost" from web search.
+  Jumia rejects that ("Restricted Brand: … in DESCRIPTION").
+- **Order updates name the products** (shop-notices `orderUpdatesText`,
+  `productLines`):
+  - The items are read with `getItemsOfOrders`: up to 3 products per order,
+    as "• 2× Name".
+  - Fewer when the message would pass 3,900 characters, and none if Jumia
+    won't say.
+- Tests:
+  - qc-live-answers.test.ts (new): the 11 real reasons, weight, brand and
+    warranty answers, `withoutWords`, `htmlToWhatsApp`.
+  - jumia-shop-more.test.ts: weight, brand, rename, brand word, warranty and
+    FDA, end to end to the update feed.
+  - jumia-shop.test.ts: product names, and the length cap.
+- Still open from that chat: the collagen and creatine rewrites from that
+  morning are still pending rows. Tapping their old Yes still sends them, and
+  the collagen one is the wrong fix.
+
 ### What sellers can and can't ask of Jumia (owner, 2026-10-09)
 
 "The system understands what is capable and doable and what is not and

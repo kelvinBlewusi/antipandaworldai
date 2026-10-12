@@ -24,7 +24,8 @@ import { columnFor, readAttributeValue } from "@/lib/jumia/attribute-mapping";
 import { refillAttributesForCategory } from "@/lib/jumia/refill-attributes";
 import { classifyJumiaRejection, isAutoFixable, extractRejectionText, rejectionFingerprint, shouldBlockRepeatedAutoFix, extractNotVisibleAttributeNames, isStaleCategoryError, type Remedy, isPriceRejection, priceLimitInRejection } from "@/lib/jumia/rejection-remedy";
 import { decideQcAction, type QcContext } from "@/lib/jumia/qc-remedy";
-import { fixRejected, parseFixTap } from "@/lib/whatsapp/fix-rejected";
+import { answerQcLive, fixRejected, parseFixTap } from "@/lib/whatsapp/fix-rejected";
+import { escapeHtml, parseWeightKg } from "@/lib/jumia/qc-answers";
 import { answerAddPhotos } from "@/lib/whatsapp/live-photos";
 import { featureAccess, featureMinPackName } from "@/lib/billing/features";
 import { removeAttributesFromCache, getCategoryByCode, getCategoryAttributes, type JumiaCategoryAttribute } from "@/lib/jumia/categories";
@@ -669,6 +670,9 @@ function openQuestion(session: WhatsAppSession): string | undefined {
   }
   if (session.awaitingCategoryFor) return "the right category for a product Jumia rejected";
   if (session.awaitingQcAnswer) return `what Jumia's quality check needs for a rejected product (${session.awaitingQcAnswer.kind})`;
+  if (session.assistantPending && "kind" in session.assistantPending && session.assistantPending.kind === "qc_live") {
+    return `what Jumia's quality check needs for their rejected product ${session.assistantPending.name} (${session.assistantPending.fieldLabel.toLowerCase()})`;
+  }
   if (session.assistantPending) return "which product they meant";
   return undefined;
 }
@@ -779,6 +783,12 @@ export async function handleLinkedMessage(
   // they asked for is carried out on it.
   if (session.assistantPending && "kind" in session.assistantPending && session.assistantPending.kind === "product_pick") {
     if (await answerProductPick(userId, phoneNumber, session, content.imageMediaId ? undefined : content.text)) return;
+    session = { ...session, assistantPending: null };
+  }
+  // What Jumia's quality check asked for a rejected product on Jumia
+  // (lib/whatsapp/fix-rejected.ts): the reply is the answer.
+  if (session.assistantPending && "kind" in session.assistantPending && session.assistantPending.kind === "qc_live") {
+    if (await answerQcLive(userId, phoneNumber, session.assistantPending, content.imageMediaId ? undefined : content.text)) return;
     session = { ...session, assistantPending: null };
   }
   if (session.assistantPending && "kind" in session.assistantPending) {
@@ -5124,13 +5134,19 @@ async function fixQcRejection(
       return null;
     case "redraft":
       return { kind: "rerun", explanation: action.why };
+    // Brand words are taken out above, before this; anything else Jumia
+    // flagged in the text, and a name read as a brand, go to the redraft.
+    case "remove_words":
+      return { kind: "rerun", explanation: action.why };
+    case "rename":
+      return { kind: "rerun", explanation: `Jumia's quality check read "${action.start}" at the start of the name as a brand: the name must start with what the product is` };
     case "cannot_fix":
       await replyText(phoneNumber, `⚠️ ${label}: ${action.why}`);
       return null;
     case "ask_value":
       await askQc(
         phoneNumber,
-        { listingId, kind: "value", field: action.field, fieldLabel: action.fieldLabel },
+        { listingId, kind: "value", field: action.field, fieldLabel: action.fieldLabel, ...(action.about ? { about: action.about } : {}) },
         `🔍 ${label}: Jumia's quality check needs something only you have. ${action.question}\n\nReply with it here and I'll add it and resubmit.`,
       );
       return null;
@@ -5257,7 +5273,6 @@ async function answerQcQuestion(userId: string, phoneNumber: string, q: QcQuesti
     `${label}'s ${q.fieldLabel ?? "detail"} is ${now ? `*${now}* now` : "empty now"}. Reply with just the ${q.fieldLabel ?? "value"} Jumia needs, or *stop* to leave it.`);
 }
 
-const escapeHtml = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]!));
 
 async function applyQcAnswer(userId: string, phoneNumber: string, q: QcQuestion, text: string): Promise<void> {
   const db = createServerClient();
@@ -5342,8 +5357,28 @@ async function applyQcAnswer(userId: string, phoneNumber: string, q: QcQuestion,
   }
 
   if (q.kind === "value") {
-    const value = text.slice(0, 300);
+    let value = text.slice(0, 300);
     const fieldLabel = q.fieldLabel ?? "Detail";
+    // A weight goes in as kg (owner, 2026-10-12: Jumia's "Please confirm and
+    // update the actual weight", which wants 150 g as 0.15).
+    if (q.about === "weight") {
+      const w = parseWeightKg(text);
+      if (!w) {
+        await replyText(phoneNumber, `I couldn't read a weight in that. Reply with it in kg or g, e.g. *0.35 kg* or *350 g*.`);
+        return;
+      }
+      if ("unit" in w) {
+        await replyText(phoneNumber, `Is that ${w.unit} g or ${w.unit} kg? Reply with the unit, e.g. *${w.unit} g*.`);
+        return;
+      }
+      value = w.kg;
+    }
+    // A warranty: in the warranty field and the description, which Jumia asks for both.
+    if (q.about === "warranty") {
+      const line = `<p><strong>Warranty:</strong> ${escapeHtml(value)}</p>`;
+      const now = (row.description as string | null) ?? "";
+      if (!now.includes(line)) await db.from("listings").update({ description: `${now}${line}` }).eq("id", q.listingId);
+    }
     if (q.field) {
       const attrs = { ...((row.dynamic_attributes as Record<string, unknown> | null) ?? {}), [q.field]: value };
       await db.from("listings").update({

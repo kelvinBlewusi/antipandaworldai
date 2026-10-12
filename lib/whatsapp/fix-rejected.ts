@@ -19,18 +19,26 @@
 import { createServerClient } from "@/lib/supabase/server";
 import { sendButtonsIfConfigured, sendCtaUrlIfConfigured, sendListIfConfigured, sendTextIfConfigured } from "@/lib/whatsapp/client";
 import { decideQcAction, type QcAction } from "@/lib/jumia/qc-remedy";
-import { findProducts, type ShopProduct } from "@/lib/jumia/shop";
-import { getCategoryByCode } from "@/lib/jumia/categories";
+import { escapeHtml, parseBrandAnswer, parseWeightKg, warrantyAnswer } from "@/lib/jumia/qc-answers";
+import { fetchProductSet, findProducts, type ShopProduct } from "@/lib/jumia/shop";
+import { getCategoryAttributes, getCategoryByCode } from "@/lib/jumia/categories";
+import { removeWordsFromText } from "@/lib/ai/restricted-words";
 import { categoryDetails } from "@/lib/whatsapp/live-details";
 import { categoryPickerUrl } from "@/lib/whatsapp/category-question";
-import { CHANGES, CHANGES_FEATURE, catalog, label, proposeContentChange, shopContext, shorten } from "@/lib/whatsapp/shop";
+import { updateSession, type QcLiveAsk } from "@/lib/whatsapp/session";
+import { CHANGES, CHANGES_FEATURE, catalog, label, proposeContentChange, shopContext, shorten, type ContentRequest } from "@/lib/whatsapp/shop";
 
 const VENDOR_CENTER = "https://vendorcenter.jumia.com";
 const REJECTED_PATH = "Products → Manage Products → Rejected";
 
-/** What to do for one rejected product: a rewrite offered for a tap, or words to say. */
+/**
+ * What to do for one rejected product: a rewrite offered for a tap, words
+ * taken out of its text and offered for a tap, or words to say (a question
+ * gets its answer as the next message: QcLiveAsk).
+ */
 export type FixPlan =
   | { kind: "rewrite"; fields: ("name" | "description" | "highlights")[]; instructions: string; intro: string }
+  | { kind: "remove"; words: string[]; intro: string }
   | { kind: "say"; text: string; vendorCenter?: boolean };
 
 /** The product as the seller would say it, for the words that change it: "the neck fan". */
@@ -83,16 +91,34 @@ export function fixPlan(action: QcAction, name: string, reason: string, pickerUr
         intro: `🔧 *${shorten(name, 60)}*: ${action.why} I've rewritten its ${what} to fix it${theirs ? ", as you asked" : ""}.`,
       };
     }
+    case "remove_words":
+      return {
+        kind: "remove", words: action.words,
+        intro: `🔧 *${shorten(name, 60)}*: ${action.why.replace(/\.$/, "")}. I've taken ${action.words.length === 1 ? "it" : "them"} out and changed nothing else.`,
+      };
+    case "rename":
+      return {
+        kind: "rewrite", fields: ["name"],
+        instructions: [
+          `Jumia's quality check read the name's first words "${action.start}" as a brand${action.why}.`,
+          `The new name must NOT begin with "${action.start}": begin with what the product is (its type), and keep "${action.start}" later in the name only as a description of it.`,
+          ...(theirs ? [`What the seller asked for: "${theirs}".`] : []),
+          "Keep every fact that is there and add none.",
+        ].join(" "),
+        intro: `🔧 *${shorten(name, 60)}*: Jumia's quality check read "${action.start}" at the start of the name as a brand. I've reworded the name to start with what the product is. If its package does show a brand, reply with it instead (e.g. "the brand is …").`,
+      };
     case "ask_brand":
-      return { kind: "say", text: `🔍 *${shorten(name, 60)}*: Jumia's quality check says the brand is wrong${action.why}. What brand is on the product? Say e.g. "change the ${short}'s brand to Nivea", or "…to Generic" if it has none, and I'll send the fix.` };
-    case "ask_value":
+      return { kind: "say", text: `🔍 *${shorten(name, 60)}*: Jumia's quality check says the brand is wrong${action.why}. What brand is printed on the product or its package? Reply with just the brand, or *generic* if it has none, and I'll put it in and send it back to Jumia. A brand Jumia doesn't have yet needs Jumia's brand form first.` };
+    case "ask_value": {
+      const noFda = !action.about && /fda|registration/i.test(`${action.fieldLabel} ${action.question}`)
+        ? "\n\nNo number? Jumia won't approve it until the product is registered. If it doesn't need registering, Jumia's seller support can confirm that."
+        : "";
       return {
         kind: "say",
         text: `🔍 *${shorten(name, 60)}*: Jumia's quality check needs something only you have. ${action.question}\n\n` +
-          (action.field
-            ? `Send it like "the ${short}'s ${action.fieldLabel.toLowerCase()} is …" and I'll add it.`
-            : `Send it like "add <it> to the ${short}'s description" and I'll add it.`),
+          `Reply with it here and I'll put it in${action.about === "warranty" ? " (its warranty details and the description)" : ""} and send it back to Jumia.${noFda}`,
       };
+    }
     case "ask_price":
       return { kind: "say", vendorCenter: true, text: `🔍 *${shorten(name, 60)}*: Jumia's quality check flagged the price${action.why}. Before a product is approved, Jumia only lets its price be changed in Vendor Center, so change the price there (${REJECTED_PATH}) and send it for checking again there.` };
     case "ask_photos":
@@ -208,14 +234,130 @@ export async function fixRejected(userId: string, phone: string, query: string |
     : decided.action;
   const plan = fixPlan(action, product.name, reason ?? "", categoryPickerUrl(product.categoryCode, ctx.country), said);
   console.info(`[qc-chat] ${product.sellerSku}: ${action.kind} (${decided.source})`);
+  const ask = (a: Pick<QcLiveAsk, "ask" | "field" | "fieldLabel" | "about">): QcLiveAsk => ({
+    kind: "qc_live", sku: product.sellerSku, name: product.name, category: Number.isFinite(code) ? code : null, at: new Date().toISOString(), ...a,
+  });
+
+  // What Jumia asked for may be in their message already ("change the brand
+  // to pro": owner's web chat, 2026-10-12, which got the question back three
+  // times): put in and offered, not asked again.
+  if (said && (action.kind === "ask_brand" || action.kind === "ask_value" || action.kind === "rename")) {
+    const pending = action.kind !== "ask_value"
+      ? ask({ ask: "brand", field: null, fieldLabel: "Brand", about: null })
+      : ask({ ask: "value", field: action.field, fieldLabel: action.fieldLabel, about: action.about ?? null });
+    const done = await applyQcAnswer(userId, phone, pending, said, false);
+    if (done !== "not an answer") return `fix: ${action.kind} answered (${done})`;
+  }
   if (plan.kind === "say") {
     if (plan.vendorCenter) await sendCtaUrlIfConfigured(phone, plan.text, "Vendor Center", VENDOR_CENTER);
     else await sendTextIfConfigured(phone, plan.text);
+    // Their reply is the answer (answerQcLive).
+    if (action.kind === "ask_brand") await updateSession(phone, { assistantPending: ask({ ask: "brand", field: null, fieldLabel: "Brand", about: null }) });
+    if (action.kind === "ask_value") await updateSession(phone, { assistantPending: ask({ ask: "value", field: action.field, fieldLabel: action.fieldLabel, about: action.about ?? null }) });
     return `fix: ${action.kind}`;
+  }
+  if (plan.kind === "remove") {
+    const set = await fetchProductSet(ctx.token, product.sellerSku);
+    if (!set.ok || !set.data) {
+      await sendTextIfConfigured(phone, `I couldn't read ${shorten(product.name, 60)} from Jumia just now${set.ok ? "" : `: ${set.message}`}. Try again in a minute.`);
+      return "fix: remove, set unreadable";
+    }
+    const req = withoutWords(set.data, plan.words);
+    if (Object.keys(req).length === 0) {
+      await sendTextIfConfigured(phone, `🔍 *${shorten(product.name, 60)}*: Jumia's quality check objected to ${plan.words.map((w) => `"${w}"`).join(", ")}, but its name, description and highlights on Jumia don't have ${plan.words.length === 1 ? "it" : "them"} now. If you changed it in Vendor Center, send it for checking again there.`);
+      return "fix: remove, nothing to remove";
+    }
+    await sendTextIfConfigured(phone, `${plan.intro} Check it below, then tap Yes to send it to Jumia, which checks it again.`);
+    const offered = await proposeContentChange(userId, phone, product.sellerSku, req);
+    return `fix: remove (${offered})`;
   }
   await sendTextIfConfigured(phone, `${plan.intro} Check it below, then tap Yes to send it to Jumia, which checks it again.`);
   const offered = await proposeContentChange(userId, phone, product.sellerSku, { rewrite: plan.fields, instructions: plan.instructions });
+  // A brand-like start: a brand in their reply is taken too.
+  if (action.kind === "rename") await updateSession(phone, { assistantPending: ask({ ask: "brand", field: null, fieldLabel: "Brand", about: null }) });
   return `fix: rewrite (${offered})`;
+}
+
+/** Its name, description and highlights with `words` taken out: only the ones that change. Pure. */
+export function withoutWords(set: { name: string; description: string; attributes: { name: string; value: string }[] }, words: string[]): ContentRequest {
+  const req: ContentRequest = {};
+  const name = removeWordsFromText(set.name, words, { line: true });
+  if (name && name !== set.name) req.name = name;
+  const description = removeWordsFromText(set.description, words);
+  if (description && description !== set.description) req.description = description;
+  const now = set.attributes.find((a) => a.name === "short_description")?.value ?? "";
+  const highlights = removeWordsFromText(now, words);
+  if (highlights && highlights !== now) req.highlights = highlights;
+  return req;
+}
+
+/** How long a rejected product's question waits for its answer. */
+const QC_LIVE_TTL_MS = 60 * 60_000;
+
+/**
+ * The seller's answer to what Jumia's quality check asked for, put in the
+ * product and offered for its tap (proposeContentChange; Jumia checks it
+ * again). `reply`: it's the reply to the question, so a bare "Pro" is the
+ * brand; otherwise (their own message) only words that say it count.
+ * "not an answer" when it isn't one; "again" when it was, but needs saying
+ * again (a weight without its unit).
+ */
+async function applyQcAnswer(userId: string, phone: string, q: QcLiveAsk, text: string, reply: boolean): Promise<string> {
+  const t = text.trim();
+  if (q.ask === "brand") {
+    const brand = parseBrandAnswer(t, reply);
+    if (!brand) return "not an answer";
+    const outcome = await proposeContentChange(userId, phone, q.sku, { brand });
+    // A brand Jumia doesn't have: they can send it again.
+    if (outcome === "brand unknown" || outcome === "brand forbidden") await updateSession(phone, { assistantPending: { ...q, at: new Date().toISOString() } });
+    return outcome;
+  }
+  if (q.about === "weight") {
+    const w = parseWeightKg(t);
+    if (!w || (!reply && !/\b(weigh\w*|kg|kgs|kilo\w*|g|grams?)\b/i.test(t))) return "not an answer";
+    if ("unit" in w) {
+      await updateSession(phone, { assistantPending: { ...q, at: new Date().toISOString() } });
+      await sendTextIfConfigured(phone, `Is that ${w.unit} g or ${w.unit} kg? Reply with the unit, e.g. "${w.unit} g".`);
+      return "again";
+    }
+    return proposeContentChange(userId, phone, q.sku, { details: { [q.field ?? "product_weight"]: w.kg } });
+  }
+  if (q.about === "warranty") {
+    if (!reply || t.length < 3 || t.length > 300) return "not an answer";
+    const attrs = q.category != null ? await getCategoryAttributes(q.category).catch(() => []) : [];
+    const w = warrantyAnswer(t, attrs);
+    const req: ContentRequest = { appendDescription: `<p><strong>Warranty:</strong> ${escapeHtml(w.line)}</p>` };
+    if (Object.keys(w.details).length > 0) req.details = w.details;
+    return proposeContentChange(userId, phone, q.sku, req);
+  }
+  // A number Jumia asked for (an FDA registration number, a certificate):
+  // only from the reply, never guessed out of another message.
+  if (!reply || t.length < 2 || t.length > 300) return "not an answer";
+  if (/fda|registration/i.test(q.fieldLabel) && !/\d/.test(t)) return "not an answer";
+  const value = t.replace(/^(?:(?:the|its|it'?s|my)\s+)?(?:fda\s*)?(?:reg(?:istration)?\.?\s*)?(?:no\.?|number|num)?\s*(?:is|:|=)?\s*/i, "").trim() || t;
+  return proposeContentChange(userId, phone, q.sku, q.field
+    ? { details: { [q.field]: value.slice(0, 200) } }
+    : { appendDescription: `<p><strong>${escapeHtml(q.fieldLabel)}:</strong> ${escapeHtml(value.slice(0, 200))}</p>` });
+}
+
+/**
+ * A message while a rejected product's question is open (QcLiveAsk): true
+ * when it was the answer and was handled. A tap, a question back or
+ * anything else lets the question go, and the message is handled as usual.
+ */
+export async function answerQcLive(userId: string, phone: string, q: QcLiveAsk, text: string | undefined): Promise<boolean> {
+  const t = (text ?? "").trim();
+  await updateSession(phone, { assistantPending: null });
+  if (!t || Date.now() - new Date(q.at).getTime() > QC_LIVE_TTL_MS) return false;
+  if (/^(?!https?:)[a-z_]+:\S/i.test(t)) return false; // a tapped button
+  if (/^(cancel|stop|never ?mind|forget it|not now|leave it|later)\b/i.test(t)) {
+    await sendTextIfConfigured(phone, `OK, I've left *${shorten(q.name, 60)}* as it is. Say "fix my rejected products" any time to come back to it.`);
+    return true;
+  }
+  if (/\?\s*$/.test(t) || /^(what|which|why|how|who|where|when|can|could|do|does|did|should|is|are|show|list|fix|rewrite)\b/i.test(t)) return false;
+  const outcome = await applyQcAnswer(userId, phone, q, t, true);
+  console.info(`[qc-chat] answer for ${q.sku}: ${outcome}`);
+  return outcome !== "not an answer";
 }
 
 /** A tap on the rejected list (`qcfix:<sku>`), or null when it isn't one. Cheap: no I/O. */

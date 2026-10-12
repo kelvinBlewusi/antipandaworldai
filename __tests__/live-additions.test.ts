@@ -85,11 +85,14 @@ describe("fixing a rejected product from the chat", () => {
     expect(fixPlan({ kind: "redraft", why }, "Neck Fan", "Poor quality content", undefined, "fix it")).toMatchObject({ fields: ["name", "description"] });
   });
 
-  it("asks for what only the seller knows, in the words that change it", () => {
+  it("asks for what only the seller knows; the reply is the answer", () => {
     const brand = fixPlan({ kind: "ask_brand", why: " (Wrong Brand)" }, "Portable USB Neck Fan – 360°", "Wrong Brand");
-    expect(brand).toMatchObject({ kind: "say", text: expect.stringContaining("change the portable usb neck fan's brand to") });
+    expect(brand).toMatchObject({ kind: "say", text: expect.stringContaining("Reply with just the brand, or *generic* if it has none") });
     const value = fixPlan({ kind: "ask_value", field: "fda_number", fieldLabel: "FDA Number", question: "What is its FDA registration number?" }, "Shea Butter Cream", "");
-    expect(value).toMatchObject({ kind: "say", text: expect.stringContaining("the shea butter cream's fda number is") });
+    expect(value).toMatchObject({ kind: "say", text: expect.stringContaining("Reply with it here and I'll put it in and send it back to Jumia.") });
+    expect((value as { text: string }).text).toContain("No number? Jumia won't approve it until the product is registered.");
+    const warranty = fixPlan({ kind: "ask_value", about: "warranty", field: "product_warranty", fieldLabel: "Warranty", question: "What warranty does it come with?" }, "Galaxy A15", "");
+    expect((warranty as { text: string }).text).toContain("(its warranty details and the description)");
   });
 
   it("says plainly what Jumia only allows in Vendor Center, with Vendor Center", () => {
