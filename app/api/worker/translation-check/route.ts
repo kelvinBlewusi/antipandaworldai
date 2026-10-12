@@ -37,9 +37,13 @@ export async function POST(req: NextRequest) {
   if (!cronSecret) return new NextResponse("Server not configured", { status: 500 });
   if (req.headers.get("authorization") !== `Bearer ${cronSecret}`) return new NextResponse("Unauthorized", { status: 401 });
 
-  const [fr, ar] = await Promise.all([translateLines("fr", LINES), translateLines("ar", LINES)]);
+  // The AI's own answers (the start of each), to see why a line stayed English.
+  const answers: string[] = [];
+  const keep = (raw: string) => { answers.push(raw.slice(0, 1500)); };
+  const [fr, ar] = await Promise.all([translateLines("fr", LINES, null, keep), translateLines("ar", LINES, null, keep)]);
   return NextResponse.json({
     lines: LINES.map((l, i) => ({ en: l.text, fr: fr[i], ar: ar[i] })),
     englishKept: { fr: fr.filter((t) => t == null).length, ar: ar.filter((t) => t == null).length },
+    answers,
   });
 }

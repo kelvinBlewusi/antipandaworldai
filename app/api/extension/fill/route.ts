@@ -36,6 +36,7 @@ import {
 } from "@/lib/extension/fill";
 import { aiFillRenderedFields, aiConfigured } from "@/lib/ai/extension-fill";
 import { sellerLanguages } from "@/lib/preferences/language";
+import { sellerCountry } from "@/lib/jumia/unlistable-categories";
 import { translateListingCopy } from "@/lib/ai/listing-language";
 import { withAiUsageContext } from "@/lib/ai/usage";
 import {
@@ -284,7 +285,10 @@ export async function POST(req: Request) {
     );
   }
 
-  const market = body.market || "GH";
+  // The seller's own Jumia market: every published panel sends "GH" (it was
+  // fixed in the panel until 0.2.59), which told the AI a Ghana shop's
+  // currency and wording for every seller.
+  const market = (await sellerCountry(userId).catch(() => null)) || body.market || "GH";
   const notes = body.notes || "";
 
   // Test-only path — never reachable in production (no one sets this env var

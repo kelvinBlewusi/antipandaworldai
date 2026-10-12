@@ -37,6 +37,13 @@ const JUMIA_HOST_RE = /^https:\/\/vendorcenter\.jumia\.com\/products\/(add\/new|
 let polishAllowed = false;
 // At 0 credits pack tools pause (server, 2026-10-06): say Buy credits, not Upgrade.
 let outOfCredits = false;
+// The seller's Jumia market (account country), sent with Autofill: it was
+// always "GH" before 0.2.59.
+let accountCountry = null;
+// What the status row last showed, to write again in a new language.
+let shownCredits = null;
+let shownLatest = null;
+let shownCountryName = null;
 
 // ── Settings persistence ─────────────────────────────────────────────────────
 async function loadSettings() {
@@ -66,7 +73,7 @@ function showBuyCredits() {
 async function signOutRevoked(message) {
   await chrome.storage.local.remove("apiKey");
   $("apiKey").value = "";
-  showConnectScreen(message || "Your key is no longer valid — reconnect.");
+  showConnectScreen(message || t("keyInvalid"));
   await refreshView();
 }
 
@@ -132,7 +139,7 @@ function renderWarnings(warnings) {
     const close = document.createElement("button");
     close.className = "wClose";
     close.type = "button";
-    close.setAttribute("aria-label", "Dismiss");
+    close.setAttribute("aria-label", t("dismiss"));
     close.textContent = "×";
     close.addEventListener("click", () => d.remove());
     d.append(text, close);
@@ -156,7 +163,8 @@ function showToast(text, kind = "ok", ms = 3000) {
 }
 
 function setCreditsText(credits, unlimited) {
-  $("creditsText").textContent = unlimited ? "∞ credits" : credits == null ? "— credits" : `${credits} credits`;
+  shownCredits = { credits, unlimited };
+  $("creditsText").textContent = unlimited ? t("creditsUnlimited") : credits == null ? t("creditsUnknown") : t("credits", credits);
 }
 function setPlanText(plan) {
   // Matches the reference's compact pill — just the plan name, no "Plan:" prefix.
@@ -228,12 +236,13 @@ function requestUpdateCheck() {
 }
 
 function renderUpdateBar(latest) {
+  shownLatest = latest;
   const bar = $("updateBar");
   if (!latest || !isNewerVersion(latest, currentVersion)) {
     bar.hidden = true;
     return;
   }
-  $("updateText").textContent = `A new version of PandaWorldAI is available (v${latest}).`;
+  $("updateText").textContent = t("updateAvailable", latest);
   $("updateNote").hidden = true;
   bar.hidden = false;
   // Once per panel session, ask Chrome for it quietly so it's on its way
@@ -242,8 +251,8 @@ function renderUpdateBar(latest) {
     updateCheckedOnce = true;
     requestUpdateCheck().then((r) => {
       if (r.status === "update_available") {
-        $("updateText").textContent = `PandaWorldAI v${latest} is ready to install.`;
-        $("updateBtn").textContent = "Restart to update";
+        $("updateText").textContent = t("updateReady", latest);
+        $("updateBtn").textContent = t("restartToUpdate");
       }
     });
   }
@@ -254,16 +263,14 @@ $("updateBtn").addEventListener("click", async () => {
   const note = $("updateNote");
   btn.disabled = true;
   note.hidden = false;
-  note.textContent = "Checking…";
+  note.textContent = t("checking");
   const { status } = await requestUpdateCheck();
   if (status === "update_available") {
-    note.textContent = "Updating. This panel will close: open it again, then refresh your Jumia page.";
+    note.textContent = t("updating");
     setTimeout(() => chrome.runtime.reload(), 1500);
     return;
   }
-  note.textContent = status === "error"
-    ? "Couldn't check just now. Chrome will update PandaWorldAI by itself within a few hours."
-    : "Chrome doesn't have it yet. It will install by itself within a few hours, nothing else to do.";
+  note.textContent = status === "error" ? t("updateCheckFailed") : t("updateNotYet");
   btn.disabled = false;
 });
 
@@ -313,7 +320,7 @@ function renderNotices(notices) {
     const ok = document.createElement("button");
     ok.type = "button";
     ok.className = "noticeOk";
-    ok.textContent = "Got it";
+    ok.textContent = t("gotIt");
     ok.addEventListener("click", () => {
       card.remove();
       box.hidden = box.children.length === 0;
@@ -334,12 +341,14 @@ async function refreshAccount(apiKey) {
     // their saved key and boot them back to the connect screen.
     if (resp?.status === 401) {
       await chrome.storage.local.remove("apiKey");
-      showConnectScreen(resp?.error || "Your key is no longer valid — reconnect.");
+      showConnectScreen(resp?.error || t("keyInvalid"));
     } else {
-      $("creditsText").textContent = "couldn't load";
+      $("creditsText").textContent = t("creditsFailed");
     }
     return false;
   }
+  await followAccountLanguages(resp.data.languages, apiKey);
+  accountCountry = resp.data.country?.code || null;
   setPlanText(resp.data.plan);
   setCreditsText(resp.data.credits, resp.data.unlimitedCredits);
   // The Pro and Business tools; the server checks again on use. Polish
@@ -369,7 +378,8 @@ let calcCountry = null;
 function setUpCalculator(country) {
   $("calcSection").hidden = !country;
   if (!country) return;
-  $("calcCountry").textContent = `Jumia ${country.name}`;
+  shownCountryName = country.name;
+  $("calcCountry").textContent = t("jumiaCountry", country.name);
   if (calcCountry === country.code) return;
   calcCountry = country.code;
   $("calcFrame").removeAttribute("src");
@@ -435,9 +445,80 @@ document.addEventListener("click", () => {
   document.querySelectorAll(".helpIcon.open").forEach((b) => setHelpOpen(b, false));
 });
 
+// ── Language (i18n.js) ──────────────────────────────────────────────────────
+//
+// The switch at the top: what the panel is shown in. Kept on this device
+// (uiLang) and, once connected, with the account (POST /api/extension/
+// language), the same choice as Settings → Language, the web chat and
+// WhatsApp. The listing language (Advanced Options) is the account's only.
+
+/** POST the choice to the account; the languages it saved, or null. */
+async function saveLanguages(apiKey, choice) {
+  try {
+    const res = await fetch(`${apiBase}/api/extension/language`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify(choice),
+    });
+    return res.ok ? await res.json() : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Writes again what the panel wrote itself, in the new language. */
+function rewriteShown() {
+  if (shownCredits) setCreditsText(shownCredits.credits, shownCredits.unlimited);
+  if (shownLatest) renderUpdateBar(shownLatest);
+  if (shownCountryName) $("calcCountry").textContent = t("jumiaCountry", shownCountryName);
+}
+
+function showLanguage(lang) {
+  applyLanguage(lang);
+  rewriteShown();
+}
+
+/**
+ * The account's languages (GET /api/extension/account, from 0.2.59): one the
+ * seller chose wins; else a choice made on this panel before connecting goes
+ * to the account; else the account's market default (French in Côte
+ * d'Ivoire, Senegal, Morocco).
+ */
+async function followAccountLanguages(langs, apiKey) {
+  if (!langs) return;
+  $("listingLanguage").value = langs.listing || "en";
+  const { uiLang } = await chrome.storage.local.get(["uiLang"]);
+  if (!langs.chosen?.ui && uiLang && uiLang !== langs.ui) {
+    saveLanguages(apiKey, { ui: uiLang });
+    return;
+  }
+  if (langs.ui && langs.ui !== panelLang) {
+    await chrome.storage.local.set({ uiLang: langs.ui });
+    showLanguage(langs.ui);
+  }
+}
+
+$("langSelect").addEventListener("change", async (e) => {
+  const lang = e.target.value;
+  await chrome.storage.local.set({ uiLang: lang });
+  showLanguage(lang);
+  const { apiKey } = await chrome.storage.local.get(["apiKey"]);
+  if (apiKey) saveLanguages(apiKey, { ui: lang });
+});
+
+$("listingLanguage").addEventListener("change", async (e) => {
+  const { apiKey } = await chrome.storage.local.get(["apiKey"]);
+  if (!apiKey) return;
+  const saved = await saveLanguages(apiKey, { listing: e.target.value });
+  if (!saved) showToast(t("wentWrong"), "err");
+});
+
 // ── Boot ─────────────────────────────────────────────────────────────────────
 async function boot() {
   const { apiKey } = await loadSettings();
+  // The language chosen here before, else the browser's; the account's choice wins once connected.
+  const { uiLang } = await chrome.storage.local.get(["uiLang"]);
+  applyLanguage(uiLang || browserLanguage());
   $("getKeyLink").href = `${apiBase}/extension/dashboard`;
   $("privacyLink").href = `${apiBase}/privacy`;
   $("polishUpgrade").href = `${apiBase}/pricing`;
@@ -476,7 +557,7 @@ $("tryFree").addEventListener("click", () => {
 $("saveKey").addEventListener("click", async () => {
   const key = $("apiKey").value.trim();
   if (!key) {
-    showConnectScreen("Paste your API key first.");
+    showConnectScreen(t("pasteKeyFirst"));
     return;
   }
   const btn = $("saveKey");
@@ -487,7 +568,7 @@ $("saveKey").addEventListener("click", async () => {
     const ok = await refreshAccount(key);
     if (ok) {
       await refreshView();
-      showToast("Connected to PandaWorldAI");
+      showToast(t("connected"));
     }
   } finally {
     btn.disabled = false;
@@ -538,7 +619,7 @@ $("autofill").addEventListener("click", async () => {
   try {
     const { apiKey } = await chrome.storage.local.get(["apiKey"]);
     if (!apiKey) {
-      showConnectScreen("Add your API key first.");
+      showConnectScreen(t("addKeyFirst"));
       return;
     }
 
@@ -546,31 +627,31 @@ $("autofill").addEventListener("click", async () => {
     if (!tab) {
       // Say why, rather than silently doing nothing — refreshView() alone
       // just swaps the banner in, which reads as the button being broken.
-      setStatus("Open a Jumia Vendor Center tab to autofill a listing.", "err");
+      setStatus(t("openJumiaTab"), "err");
       hideProgress();
       await refreshView();
       return;
     }
 
-    setStatus("Reading the form…");
+    setStatus(t("readingForm"));
     setProgress(15);
     const harvest = await sendToTab(tab.id, { type: "HARVEST" });
     if (!harvest?.ok) {
-      setStatus("Could not read the page. Reload the Jumia tab and try again.", "err");
+      setStatus(t("cantReadPage"), "err");
       hideProgress();
       return;
     }
     if (!harvest.fields.length) {
-      setStatus("No fields found — did you pick a category to open the form?", "err");
+      setStatus(t("noFields"), "err");
       hideProgress();
       return;
     }
     if (!harvest.images || !harvest.images.length) {
-      setStatus("No product photo detected — upload one on Jumia, then try again.", "err");
+      setStatus(t("noPhoto"), "err");
       hideProgress();
       return;
     }
-    setStatus(`Found ${harvest.fields.length} fields. Asking AI…`);
+    setStatus(t("foundFields", harvest.fields.length));
     // The AI call is the one genuinely unpredictable wait (a single vision
     // request, no sub-steps to report) — hold the bar here and pulse it
     // rather than guessing at a percentage that would just be wrong.
@@ -599,7 +680,7 @@ $("autofill").addEventListener("click", async () => {
       apiBase,
       apiKey,
       payload: {
-        market: "GH",
+        market: accountCountry || "GH",
         notes,
         images: harvest.images,
         fields: harvest.fields,
@@ -611,13 +692,13 @@ $("autofill").addEventListener("click", async () => {
       return;
     }
     if (!fill?.ok) {
-      setStatus(fill?.error || "Something went wrong — please try again.", "err");
+      setStatus(fill?.error || t("wentWrong"), "err");
       if (fill?.status === 402) showBuyCredits();
       hideProgress();
       return;
     }
 
-    setStatus("Filling the form…");
+    setStatus(t("fillingForm"));
     setProgress(85);
     const apply = await sendToTab(tab.id, {
       type: "APPLY",
@@ -635,12 +716,12 @@ $("autofill").addEventListener("click", async () => {
     if (fill.data.creditsRemaining != null || fill.data.unlimitedCredits) {
       setCreditsText(fill.data.creditsRemaining, fill.data.unlimitedCredits);
     }
-    const skipNote = skippedCount ? ` (${skippedCount} already had content, left as-is)` : "";
-    setStatus(`Filled ${okCount}/${Object.keys(fill.data.values).length} fields${skipNote}. Review, then submit on Jumia.`, "ok");
+    const skipNote = skippedCount ? t("skipped", skippedCount) : "";
+    setStatus(t("filled", okCount, Object.keys(fill.data.values).length, skipNote), "ok");
     scheduleResultsFade();
   } catch (e) {
     console.error("[PandaWorld] autofill failed:", e);
-    setStatus("Something went wrong — please try again.", "err");
+    setStatus(t("wentWrong"), "err");
     hideProgress();
   } finally {
     btn.disabled = false;
@@ -673,12 +754,12 @@ function setPolishStatus(text, kind = "") {
  * they're out of credits (the way to buy them).
  */
 function showPolishUpgrade() {
-  setPolishStatus(outOfCredits ? "You're out of credits." : "Upgrade to use this feature.", "err");
+  setPolishStatus(outOfCredits ? t("outOfCredits") : t("upgrade"), "err");
   showPolishLink(outOfCredits);
 }
 function showPolishLink(buyCredits) {
   const link = $("polishUpgrade");
-  link.textContent = buyCredits ? "Buy credits →" : "See credit packs →";
+  link.textContent = buyCredits ? t("buyCredits") : t("seePacks");
   link.href = buyCredits ? `${apiBase}/extension/dashboard` : `${apiBase}/pricing`;
   link.hidden = false;
 }
@@ -728,7 +809,7 @@ function renderPolishGrid(images) {
     const save = document.createElement("a");
     save.href = img.dataUrl;
     save.download = img.name;
-    save.textContent = "Save";
+    save.textContent = t("save");
     cap.append(label, save);
     fig.append(el, cap);
     grid.appendChild(fig);
@@ -748,14 +829,14 @@ $("polishBtn").addEventListener("click", async () => {
     const { apiKey } = await chrome.storage.local.get(["apiKey"]);
     const tab = await activeJumiaTab();
     if (!apiKey || !tab) {
-      setPolishStatus("Open the Add Products page on Jumia first.", "err");
+      setPolishStatus(t("openAddProducts"), "err");
       return;
     }
 
-    setPolishStatus("Reading your photos…");
+    setPolishStatus(t("readingPhotos"));
     const harvest = await sendToTab(tab.id, { type: "HARVEST_IMAGES" });
     if (!harvest?.images?.length) {
-      setPolishStatus("No product photo found — upload at least one on Jumia, then try again.", "err");
+      setPolishStatus(t("noPhotoFound"), "err");
       return;
     }
     // Shrunk before sending: phone photos are several MB each, past what
@@ -764,7 +845,7 @@ $("polishBtn").addEventListener("click", async () => {
       i.dataUrl ? { dataUrl: await toJpegDataUrl(i.dataUrl, 1536, 0.85) } : { httpUrl: i.httpUrl },
     ));
 
-    setPolishStatus(`Creating 4 product images from ${sources.length} photo${sources.length === 1 ? "" : "s"}… about 30 seconds.`);
+    setPolishStatus(t("creatingImages", sources.length));
     $("polishProgress").hidden = false;
     const res = await fetch(`${apiBase}/api/extension/polish-images`, {
       method: "POST",
@@ -783,7 +864,7 @@ $("polishBtn").addEventListener("click", async () => {
       return;
     }
     if (!res.ok || !data?.images) {
-      setPolishStatus(data?.error || `Something went wrong (HTTP ${res.status}) — please try again.`, "err");
+      setPolishStatus(data?.error || t("wentWrongHttp", res.status), "err");
       if (res.status === 402) showPolishLink(true);
       return;
     }
@@ -801,23 +882,23 @@ $("polishBtn").addEventListener("click", async () => {
     })));
     renderPolishGrid(images);
 
-    setPolishStatus("Putting them in Jumia's image slots…");
+    setPolishStatus(t("placingImages"));
     const placed = await sendToTab(tab.id, {
       type:   "PLACE_IMAGES",
       images: images.map((i) => ({ dataUrl: i.dataUrl, name: i.name })),
     });
     const missed = data.images.length - shots.length;
-    const missedNote = missed ? ` (${missed} couldn't be made)` : "";
+    const missedNote = missed ? t("missed", missed) : "";
     if (placed?.ok && placed.placed >= images.length) {
-      setPolishStatus(`Done — ${placed.placed} image${placed.placed === 1 ? "" : "s"} added to the listing${missedNote}. Check them on Jumia before you submit.`, "ok");
+      setPolishStatus(t("placedAll", placed.placed, missedNote), "ok");
     } else if (placed?.ok && placed.placed > 0) {
-      setPolishStatus(`${placed.placed} of ${images.length} images added to the listing${missedNote}. Save the rest below and add them on Jumia.`, "ok");
+      setPolishStatus(t("placedSome", placed.placed, images.length, missedNote), "ok");
     } else {
-      setPolishStatus(`Your ${images.length} images are ready${missedNote}, but I couldn't put them in the slots (${placed?.error || "no image slots found"}). Save them below and add them on Jumia.`, "err");
+      setPolishStatus(t("placedNone", images.length, missedNote, placed?.error || t("noSlots")), "err");
     }
   } catch (e) {
     console.error("[PandaWorld] polish failed:", e);
-    setPolishStatus("Something went wrong — please try again.", "err");
+    setPolishStatus(t("wentWrong"), "err");
   } finally {
     $("polishProgress").hidden = true;
     btn.disabled = false;

@@ -7,12 +7,23 @@
     <title>PandaWorldAI - AI Jumia Listing Assistant</title>
   </head>
   <body>
-    <!-- Connected status row — Plan · Credits · disconnect. Shown once an
-         API key is saved (replaces the connect screen below). -->
-    <div class="statusRow" id="statusRow" hidden>
-      <span class="pill plan" id="planPill">FREE</span>
-      <span class="pill credits" id="creditsPill"><span class="dot"></span><span id="creditsText">— credits</span></span>
-      <button id="logoutBtn" class="iconBtn" title="Disconnect" aria-label="Disconnect">⏻</button>
+    <!-- Top row: the connected status (Plan · Credits · disconnect, shown
+         once an API key is saved) and the language switch, always there
+         (i18n.js; saved with the account once connected). -->
+    <div class="topRow">
+      <div class="statusRow" id="statusRow" hidden>
+        <span class="pill plan" id="planPill">FREE</span>
+        <span class="pill credits" id="creditsPill"><span class="dot"></span><span id="creditsText">— credits</span></span>
+        <button id="logoutBtn" class="iconBtn" title="Disconnect" aria-label="Disconnect" data-i18n-title="disconnect" data-i18n-aria="disconnect">⏻</button>
+      </div>
+      <label class="langPick" title="Language" data-i18n-title="language">
+        <span aria-hidden="true">🌐</span>
+        <select id="langSelect" aria-label="Language" data-i18n-aria="language">
+          <option value="en">English</option>
+          <option value="fr">Français</option>
+          <option value="ar">العربية</option>
+        </select>
+      </label>
     </div>
 
     <!-- "A new version is available" — shown when the account's
@@ -21,7 +32,7 @@
          (panel.js). -->
     <div class="updateBar" id="updateBar" hidden>
       <div class="updateText" id="updateText"></div>
-      <button type="button" id="updateBtn" class="updateBtn">Update now</button>
+      <button type="button" id="updateBtn" class="updateBtn" data-i18n="updateNow">Update now</button>
       <div class="updateNote" id="updateNote" hidden></div>
     </div>
 
@@ -35,69 +46,79 @@
          of the connect screen / main form applies). -->
     <div class="banner warn" id="jumiaBanner" hidden>
       <div class="bannerIcon">🛍️</div>
-      <div class="bannerTitle">Open Jumia to use PandaWorldAI</div>
-      <div class="bannerBody">Go to Vendor Center → Add Products → upload a photo &amp; pick a category to open the form.</div>
-      <button id="openJumia" class="primary">Open Jumia Vendor Center →</button>
+      <div class="bannerTitle" data-i18n="openJumiaTitle">Open Jumia to use PandaWorldAI</div>
+      <div class="bannerBody" data-i18n="openJumiaBody">Go to Vendor Center → Add Products → upload a photo &amp; pick a category to open the form.</div>
+      <button id="openJumia" class="primary" data-i18n="openJumiaButton">Open Jumia Vendor Center →</button>
     </div>
 
     <!-- Connect screen — shown until an API key is saved. -->
     <div id="connectScreen" hidden>
-      <h1 class="heroTitle">Start for free today</h1>
-      <!-- Matches FREE_SIGNUP_CREDITS in lib/billing/credit-packs.ts. -->
-      <p class="heroSub">20 free AI-powered listing credits,<br />no credit card required.</p>
+      <h1 class="heroTitle" data-i18n="heroTitle">Start for free today</h1>
+      <!-- data-i18n-arg matches FREE_SIGNUP_CREDITS in lib/billing/credit-packs.ts (12 since 2026-10-06). -->
+      <p class="heroSub"><span data-i18n="heroSub1" data-i18n-arg="12">12 free AI-powered listing credits,</span><br /><span data-i18n="heroSub2">no credit card required.</span></p>
       <div class="heroStats">
-        <span>20 free credits</span>
+        <span data-i18n="freeCredits" data-i18n-arg="12">12 free credits</span>
         <span class="sep">•</span>
-        <span>SEO optimized</span>
+        <span data-i18n="seoOptimized">SEO optimized</span>
       </div>
 
-      <button id="tryFree" class="primary big">✨ Try for Free</button>
+      <button id="tryFree" class="primary big" data-i18n="tryFree">✨ Try for Free</button>
 
-      <div class="orDivider"><span>or sign in with API key</span></div>
+      <div class="orDivider"><span data-i18n="orApiKey">or sign in with API key</span></div>
 
       <label class="fld">
-        <input id="apiKey" type="text" placeholder="Paste your API key here…" />
+        <input id="apiKey" type="text" dir="ltr" placeholder="Paste your API key here…" data-i18n-placeholder="apiKeyPlaceholder" />
       </label>
-      <p class="lockHint"><a id="privacyLink" href="#" target="_blank" rel="noopener">Privacy Policy</a></p>
+      <p class="lockHint"><a id="privacyLink" href="#" target="_blank" rel="noopener" data-i18n="privacy">Privacy Policy</a></p>
 
       <div id="connectError" class="status err" hidden></div>
-      <button id="saveKey" class="primary">Connect to PandaWorldAI</button>
-      <a id="getKeyLink" class="linkline" href="#" target="_blank" rel="noopener">Don&rsquo;t have a key? Get one →</a>
+      <button id="saveKey" class="primary" data-i18n="connect">Connect to PandaWorldAI</button>
+      <a id="getKeyLink" class="linkline" href="#" target="_blank" rel="noopener" data-i18n="getKey">Don&rsquo;t have a key? Get one →</a>
     </div>
 
     <!-- Main form — shown when connected AND on a Jumia Add-Products tab. -->
     <div id="mainForm" hidden>
       <label class="fld">
-        <span>About this listing <em>(optional)</em>
+        <span><span data-i18n="aboutListing">About this listing</span> <em data-i18n="optional">(optional)</em>
           <button
             type="button"
             class="helpIcon"
             id="notesHelp"
             aria-label="What is this field for?"
+            data-i18n-aria="whatIsThis"
             aria-expanded="false"
             aria-describedby="notesHelpText"
           >!</button>
         </span>
-        <p class="fieldHelp" id="notesHelpText" hidden>Anything typed here is sent to the AI and takes priority over its own guesses — use it for exact SKU, GTIN/barcode, quantity, sale dates, size/variation, or any other details you want reflected in this listing.</p>
-        <textarea id="notes" rows="3" placeholder="e.g. price 250, water resistant, leather strap"></textarea>
+        <p class="fieldHelp" id="notesHelpText" data-i18n="notesHelp" hidden>Anything typed here is sent to the AI and takes priority over its own guesses — use it for exact SKU, GTIN/barcode, quantity, sale dates, size/variation, or any other details you want reflected in this listing.</p>
+        <textarea id="notes" rows="3" dir="auto" placeholder="e.g. price 250, water resistant, leather strap" data-i18n-placeholder="notesPlaceholder"></textarea>
       </label>
 
       <details class="advanced" id="advancedDetails">
-        <summary>Advanced Options</summary>
+        <summary data-i18n="advanced">Advanced Options</summary>
+        <!-- What the name, description and highlights are written in (saved
+             with the account: Settings → Language, the chat, WhatsApp). -->
         <label class="fld">
-          <span>Writing style</span>
-          <select id="writingStyle">
-            <option value="SEO Optimized" selected>🎯 SEO Optimized (Recommended)</option>
-            <option value="Storytelling">📖 Storytelling</option>
-            <option value="Friendly & Conversational">😊 Friendly &amp; Conversational</option>
-            <option value="Professional & Clean">💼 Professional &amp; Clean</option>
-            <option value="Fun & Playful">🎉 Fun &amp; Playful</option>
+          <span data-i18n="listingLanguage">Listing language</span>
+          <select id="listingLanguage">
+            <option value="en">English</option>
+            <option value="fr">Français</option>
           </select>
         </label>
         <label class="fld">
-          <span>Warranty duration</span>
+          <span data-i18n="writingStyle">Writing style</span>
+          <select id="writingStyle">
+            <option value="SEO Optimized" selected data-i18n="styleSeo">🎯 SEO Optimized (Recommended)</option>
+            <option value="Storytelling" data-i18n="styleStory">📖 Storytelling</option>
+            <option value="Friendly & Conversational" data-i18n="styleFriendly">😊 Friendly &amp; Conversational</option>
+            <option value="Professional & Clean" data-i18n="styleProfessional">💼 Professional &amp; Clean</option>
+            <option value="Fun & Playful" data-i18n="styleFun">🎉 Fun &amp; Playful</option>
+          </select>
+        </label>
+        <label class="fld">
+          <span data-i18n="warrantyDuration">Warranty duration</span>
           <select id="warrantyDuration">
-            <option value="">Not set — AI defaults to N/A</option>
+            <option value="" data-i18n="warrantyNotSet">Not set — AI defaults to N/A</option>
             <option value="10 Years">10 Years</option>
             <option value="1 Month">1 Month</option>
             <option value="1 Year">1 Year</option>
@@ -115,23 +136,23 @@
           </select>
         </label>
         <label class="fld">
-          <span>Warranty address <em>(optional)</em></span>
-          <input id="warrantyAddress" type="text" placeholder="e.g. 123 Repair Street, Accra" />
+          <span><span data-i18n="warrantyAddress">Warranty address</span> <em data-i18n="optional">(optional)</em></span>
+          <input id="warrantyAddress" type="text" dir="auto" placeholder="e.g. 123 Repair Street, Accra" data-i18n-placeholder="warrantyAddressPlaceholder" />
         </label>
       </details>
 
       <label class="checkRow">
         <input type="checkbox" id="overwriteExisting" />
-        <span>Overwrite existing content</span>
+        <span data-i18n="overwrite">Overwrite existing content</span>
       </label>
 
-      <button id="autofill" class="primary big">✨ Autofill this listing</button>
+      <button id="autofill" class="primary big" data-i18n="autofill">✨ Autofill this listing</button>
 
       <div class="progressTrack" id="progressTrack" hidden>
         <div class="progressBar" id="progressBar"></div>
       </div>
       <div id="status" class="status" aria-live="polite"></div>
-      <a id="buyCreditsLink" class="linkline" href="#" target="_blank" rel="noopener" hidden>Buy credits →</a>
+      <a id="buyCreditsLink" class="linkline" href="#" target="_blank" rel="noopener" data-i18n="buyCredits" hidden>Buy credits →</a>
       <ul id="results" class="results"></ul>
       <div id="warnings" class="warnings"></div>
 
@@ -142,10 +163,10 @@
            Jumia's image slots. -->
       <section class="polish" id="polishSection" hidden>
         <div class="polishHead">
-          <span class="polishTitle">Polish images</span>
-          <span class="betaPill">Beta</span>
+          <span class="polishTitle" data-i18n="polishTitle">Polish images</span>
+          <span class="betaPill" data-i18n="beta">Beta</span>
         </div>
-        <button id="polishBtn" class="secondary">🪄 Polish images</button>
+        <button id="polishBtn" class="secondary" data-i18n="polishButton">🪄 Polish images</button>
         <div class="progressTrack" id="polishProgress" hidden>
           <div class="progressBar pulse" style="width: 60%"></div>
         </div>
@@ -160,24 +181,25 @@
          site's calculator for that country, loaded when opened. Outside the
          main form so it works on any tab. -->
     <details class="calc" id="calcSection" hidden>
-      <summary><span class="calcTitle">🧮 Price calculator</span><span class="calcCountry" id="calcCountry"></span></summary>
-      <iframe id="calcFrame" title="Jumia price calculator"></iframe>
+      <summary><span class="calcTitle" data-i18n="calculator">🧮 Price calculator</span><span class="calcCountry" id="calcCountry"></span></summary>
+      <iframe id="calcFrame" title="Jumia price calculator" data-i18n-title="calculatorFrame"></iframe>
     </details>
 
     <footer class="linksFooter">
-      <a href="#" id="footerDashboard">Dashboard</a>
+      <a href="#" id="footerDashboard" data-i18n="dashboard">Dashboard</a>
       <span class="sep">•</span>
-      <a href="#" id="footerHelp">Help</a>
+      <a href="#" id="footerHelp" data-i18n="help">Help</a>
       <span class="sep">•</span>
-      <a href="#" id="footerReport">Report a problem</a>
+      <a href="#" id="footerReport" data-i18n="report">Report a problem</a>
       <span class="sep">•</span>
-      <a href="#" id="footerLogout">Logout</a>
-      <p class="aiDisclaimer">AI can make mistakes — double-check the listing before submitting.</p>
+      <a href="#" id="footerLogout" data-i18n="logout">Logout</a>
+      <p class="aiDisclaimer" data-i18n="disclaimer">AI can make mistakes — double-check the listing before submitting.</p>
     </footer>
 
     <!-- Toast — transient confirmation banner (e.g. after a successful connect). -->
     <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
+    <script src="i18n.js"></script>
     <script src="panel.js"></script>
   </body>
 </html>

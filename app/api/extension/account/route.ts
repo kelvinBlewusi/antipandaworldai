@@ -16,6 +16,7 @@ import { featureAccess } from "@/lib/billing/features";
 import { visitorJumiaCountry } from "@/lib/marketing/visitor-country";
 import { getUserNotices } from "@/lib/notices";
 import { latestExtensionVersion } from "@/lib/extension/latest-version";
+import { sellerLanguages } from "@/lib/preferences/language";
 
 export const runtime = "nodejs";
 
@@ -36,7 +37,7 @@ export async function GET(req: Request) {
   }
 
   const userId = authResult.userId;
-  const [balance, recentPack, polishAccess, feeCalcAccess, country, notices, latestVersion] = await Promise.all([
+  const [balance, recentPack, polishAccess, feeCalcAccess, country, notices, latestVersion, languages] = await Promise.all([
     getOrCreateCreditBalance(userId),
     getMostRecentCreditPack(userId),
     featureAccess(userId, "image_polish_extension"),
@@ -47,6 +48,8 @@ export async function GET(req: Request) {
     // Messages from us, shown on the panel until dismissed (lib/notices.ts).
     getUserNotices(userId),
     latestExtensionVersion(),
+    // What the panel is shown in, and what listings are written in (panels from 0.2.59).
+    sellerLanguages(userId).catch(() => null),
   ]);
 
   // Same as the dashboard's Plan pill (app/extension/(app)/layout.tsx): the
@@ -78,6 +81,7 @@ export async function GET(req: Request) {
       latestExtensionVersion: latestVersion,
       country:          { code: country?.code ?? "GH", name: country?.name ?? "Ghana" },
       isAdmin:          isAdmin(userId),
+      languages:        languages ? { ui: languages.ui, listing: languages.listing, chosen: languages.chosen } : null,
     },
     { status: 200, headers: CORS },
   );

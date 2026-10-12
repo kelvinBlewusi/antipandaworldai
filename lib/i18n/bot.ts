@@ -212,23 +212,34 @@ export function keepsEssentials(source: string, out: string, max: number): boole
 
 const hashOf = (text: string, max: number) => createHash("sha256").update(`${max}\n${text}`).digest("hex").slice(0, 40);
 
-async function askModel(lang: Foreign, items: { text: string; max: number }[], userId: string | null): Promise<(string | null)[]> {
+async function askModel(lang: Foreign, items: { text: string; max: number }[], userId: string | null, onAnswer?: (raw: string) => void): Promise<(string | null)[]> {
   const call = withAiUsageContext({ feature: "translation", userId }, () =>
     callGeminiBackend(TRANSLATE_MODEL, [{ text: translationPrompt(lang, items) }], { json: true }));
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), TRANSLATE_TIMEOUT_MS); });
   const res = await Promise.race([call, timeout]).finally(() => clearTimeout(timer));
   if (!res) throw new Error(`no answer in ${TRANSLATE_TIMEOUT_MS / 1000} s`);
+  onAnswer?.(res.text);
   const parsed = JSON.parse(res.text.replace(/^```(?:json)?\s*|\s*```$/g, "")) as unknown;
-  if (!Array.isArray(parsed) || parsed.length !== items.length) throw new Error("answer isn't one line per item");
-  return parsed.map((v, i) => (typeof v === "string" && keepsEssentials(items[i].text, v.trim(), items[i].max) ? v.trim() : null));
+  const list = Array.isArray(parsed) ? parsed : (parsed as { translations?: unknown } | null)?.translations;
+  if (!Array.isArray(list) || list.length !== items.length) throw new Error("answer isn't one line per item");
+  // Each a string, or the item's own shape back ({ text }), as the model sometimes answers.
+  const lines = list.map((v) => (typeof v === "string" ? v : typeof (v as { text?: unknown })?.text === "string" ? (v as { text: string }).text : "").trim());
+  const kept = lines.map((v, i) => (v && keepsEssentials(items[i].text, v, items[i].max) ? v : null));
+  const failed = kept.filter((v) => v == null).length;
+  if (failed > 0) console.warn(`[bot-language] ${failed} of ${items.length} line(s) failed the checks for ${lang}; they stay English`);
+  return kept;
 }
 
 /**
  * Each line in `lang`, or null where it stays English (failed a check, or
  * the call did): from bot_translations, else one AI call for the rest.
  */
-export async function translateLines(lang: Foreign, items: { text: string; max: number }[], userId: string | null = null): Promise<(string | null)[]> {
+export async function translateLines(
+  lang: Foreign, items: { text: string; max: number }[], userId: string | null = null,
+  /** The AI's raw answer, for /api/worker/translation-check. */
+  onAnswer?: (raw: string) => void,
+): Promise<(string | null)[]> {
   const out: (string | null)[] = items.map(() => null);
   if (items.length === 0) return out;
   const hashes = items.map((i) => hashOf(i.text, i.max));
@@ -246,7 +257,7 @@ export async function translateLines(lang: Foreign, items: { text: string; max: 
   for (let at = 0; at < firsts.length; at += BATCH) {
     const chunk = firsts.slice(at, at + BATCH);
     try {
-      const fresh = await askModel(lang, chunk.map((i) => items[i]), userId);
+      const fresh = await askModel(lang, chunk.map((i) => items[i]), userId, onAnswer);
       const rows: { lang: string; source_hash: string; translated: string }[] = [];
       chunk.forEach((i, n) => {
         const t = fresh[n];

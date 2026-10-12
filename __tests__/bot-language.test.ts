@@ -120,6 +120,23 @@ describe("a message on its way", () => {
     expect(m.payload).toEqual({ buttons: [{ id: "review", title: "Voir les annonces" }] });
   });
 
+  it("takes the answer in the item's own shape too ({ text })", async () => {
+    db.tables.seller_preferences = [{ user_id: "u1", ui_language: "fr" }];
+    const mock = jest.requireMock("@/lib/ai/gemini-client") as { callGeminiBackend: (m: string, p: { text?: string }[]) => Promise<{ text: string }> };
+    const real = mock.callGeminiBackend;
+    mock.callGeminiBackend = async (_m, parts) => {
+      const prompt = parts.map((p) => p.text ?? "").join("\n");
+      const items = JSON.parse(prompt.slice(prompt.lastIndexOf("\n[") + 1)) as { text: string; max: number }[];
+      return { text: JSON.stringify(items.map((i) => ({ text: `Bonjour : ${i.text}`, max: i.max }))) };
+    };
+    try {
+      await sendTextIfConfigured("web:u1", "Your listing is live.");
+      expect((await assistantMessages("u1"))[0].text).toBe("Bonjour : Your listing is live.");
+    } finally {
+      mock.callGeminiBackend = real;
+    }
+  });
+
   it("a line already in their language, or with no words, isn't sent to the AI", async () => {
     db.tables.seller_preferences = [{ user_id: "u1", ui_language: "fr" }];
     await sendButtonsIfConfigured("web:u1", "Vous avez 3 produits dans votre boutique, et le stock est bon.", [{ id: "1", title: "1" }, { id: "2", title: "2" }]);
