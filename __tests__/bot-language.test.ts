@@ -86,7 +86,8 @@ describe("a message on its way", () => {
     expect(shown.text).toBe("Bonjour : Your product is ready. Soumettre it?");
     expect(shown.payload).toEqual({ buttons: [{ id: "submit all", title: "Tout soumettre ✅" }] });
     expect(prompts[0]).toContain("into French");
-    expect(prompts[0]).toContain("keep that word or phrase exactly as written, in English");
+    expect(prompts[0]).toContain("keep that one word or phrase in English");
+    expect(prompts[0]).toContain("never a command to keep");
   });
 
   it("each line is translated once: the same message again needs no AI", async () => {
@@ -201,6 +202,11 @@ describe("the checks on a translation", () => {
     expect(keepsEssentials("Open https://pandaworldai.site/x", "Ouvrez le lien", 100)).toBe(false);
     expect(keepsEssentials("Reply *done*", "Répondez *done", 100)).toBe(false);
     expect(keepsEssentials("Submit all", "Soumettre toutes les annonces", 20)).toBe(false);
+    // Not translated: tried again later, never kept as the translation.
+    expect(keepsEssentials("Review listings", "Review listings", 20)).toBe(false);
+    expect(keepsEssentials("Review listings", "Review listings", 20, "ar")).toBe(false);
+    expect(keepsEssentials("Review listings", "مراجعة الإعلانات", 20, "ar")).toBe(true);
+    expect(keepsEssentials("✅", "✅", 20)).toBe(true);
   });
 
   it("finds every place in a list message", () => {

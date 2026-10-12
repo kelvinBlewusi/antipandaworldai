@@ -178,20 +178,21 @@ const LANGUAGE_FOR: Record<Foreign, string> = {
   ar: "Modern Standard Arabic",
 };
 
-export function translationPrompt(lang: Foreign, items: { text: string; max: number }[]): string {
+export function translationPrompt(lang: Foreign, items: { text: string; max: number; kind?: Slot["kind"] }[]): string {
   return [
     `You translate the messages of a WhatsApp assistant for online sellers on Jumia from English into ${LANGUAGE_FOR[lang]}.`,
     "Translate each item of the JSON array below. Rules:",
-    "- Keep WhatsApp formatting exactly: *bold*, _italic_, ~strike~, line breaks, bullets (•, -), numbering (\"1.\") and every emoji, in the same places.",
-    "- Keep unchanged: product names and titles, brand names, SKUs, order and product numbers, prices, amounts, currency codes and symbols, dates, every number, links, email addresses, codes, and anything in quotes.",
+    "- Every item is translated, including short ones: an item with \"kind\": \"label\" is a button, a list row or a column name (\"Submit all\", \"Sales today\"), never a command to keep.",
+    "- Keep WhatsApp formatting exactly: *bold*, _italic_, ~strike~, line breaks, bullets (•, -), numbering (\"1.\") and every emoji, in the same places. Text in *bold* is translated like the rest.",
+    "- Keep exactly as written, never translated: a product's name (the words after \"Product drafted:\", \"Product 2:\" and the like), brand names, SKUs, order and product numbers, prices, amounts, currency codes and symbols, dates, every number, links, email addresses, codes, and anything in quotes.",
     "- Keep these words as they are: Jumia, PandaWorld, Vendor Center, Seller Center, WhatsApp, ON, OFF, Client ID, token.",
-    "- When the message tells the seller to type, reply, say or send a word or phrase (e.g. Reply *done*, type *restart*, say *menu*), keep that word or phrase exactly as written, in English.",
-    ...(lang === "ar" ? ["- Write numbers with the digits 0-9, never Arabic-Indic digits."] : []),
+    "- Only when a message explicitly tells the seller to type, reply, say or send a word (Reply *done*, type *restart*, say *menu*), keep that one word or phrase in English.",
+    ...(lang === "ar" ? ["- Write numbers with the digits 0-9, never Arabic-Indic digits."] : ["- French punctuation: a space before : ; ! ?"]),
     "- Each item has \"max\": the translation must be at most that many characters; use shorter words if needed.",
     "- Natural, friendly and as short as the original; add nothing, leave nothing out.",
-    "Return JSON only: an array of strings, one translation per item, in the same order.",
+    "Return JSON only: an array of strings (just the translated text, not objects), one per item, in the same order.",
     "",
-    JSON.stringify(items),
+    JSON.stringify(items.map((i) => ({ text: i.text, max: i.max, kind: i.kind ?? "message" }))),
   ].join("\n");
 }
 
@@ -199,8 +200,11 @@ export function translationPrompt(lang: Foreign, items: { text: string; max: num
  * Whether a translation kept what mustn't change: every number and link, the
  * *bold* marks paired, and its place's length. Pure.
  */
-export function keepsEssentials(source: string, out: string, max: number): boolean {
+export function keepsEssentials(source: string, out: string, max: number, lang?: Foreign): boolean {
   if (!out.trim() || out.length > max) return false;
+  // Not translated at all: tried again next time rather than kept as the translation.
+  if (out.trim() === source.trim() && hasWords(source)) return false;
+  if (lang === "ar" && hasWords(source) && !/[\u0600-\u06FF]/.test(out)) return false;
   const urls = source.match(/https?:\/\/[^\s)]+/g) ?? [];
   if (urls.some((u) => !out.includes(u.replace(/[.,!?]+$/, "")))) return false;
   const numbers = source.match(/\d+(?:[.,]\d+)*/g) ?? [];
@@ -212,7 +216,7 @@ export function keepsEssentials(source: string, out: string, max: number): boole
 
 const hashOf = (text: string, max: number) => createHash("sha256").update(`${max}\n${text}`).digest("hex").slice(0, 40);
 
-async function askModel(lang: Foreign, items: { text: string; max: number }[], userId: string | null, onAnswer?: (raw: string) => void): Promise<(string | null)[]> {
+async function askModel(lang: Foreign, items: { text: string; max: number; kind?: Slot["kind"] }[], userId: string | null, onAnswer?: (raw: string) => void): Promise<(string | null)[]> {
   const call = withAiUsageContext({ feature: "translation", userId }, () =>
     callGeminiBackend(TRANSLATE_MODEL, [{ text: translationPrompt(lang, items) }], { json: true }));
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -225,7 +229,7 @@ async function askModel(lang: Foreign, items: { text: string; max: number }[], u
   if (!Array.isArray(list) || list.length !== items.length) throw new Error("answer isn't one line per item");
   // Each a string, or the item's own shape back ({ text }), as the model sometimes answers.
   const lines = list.map((v) => (typeof v === "string" ? v : typeof (v as { text?: unknown })?.text === "string" ? (v as { text: string }).text : "").trim());
-  const kept = lines.map((v, i) => (v && keepsEssentials(items[i].text, v, items[i].max) ? v : null));
+  const kept = lines.map((v, i) => (v && keepsEssentials(items[i].text, v, items[i].max, lang) ? v : null));
   const failed = kept.filter((v) => v == null).length;
   if (failed > 0) console.warn(`[bot-language] ${failed} of ${items.length} line(s) failed the checks for ${lang}; they stay English`);
   return kept;
@@ -236,7 +240,7 @@ async function askModel(lang: Foreign, items: { text: string; max: number }[], u
  * the call did): from bot_translations, else one AI call for the rest.
  */
 export async function translateLines(
-  lang: Foreign, items: { text: string; max: number }[], userId: string | null = null,
+  lang: Foreign, items: { text: string; max: number; kind?: Slot["kind"] }[], userId: string | null = null,
   /** The AI's raw answer, for /api/worker/translation-check. */
   onAnswer?: (raw: string) => void,
 ): Promise<(string | null)[]> {
@@ -292,7 +296,7 @@ async function localizeWith(to: string, body: Rec, mode: AsWritten | undefined):
     const slots = slotsOf(copy).filter((s) => !(mode === "body" && s.kind === "body") && hasWords(s.text) && !alreadyIn(lang, s.text));
     if (slots.length === 0) return null;
     const userId = isWebAddress(to) ? to.slice(WEB_PREFIX.length) : known.get(to)?.userId ?? null;
-    const done = await translateLines(lang, slots.map((s) => ({ text: s.text, max: s.max })), userId);
+    const done = await translateLines(lang, slots.map((s) => ({ text: s.text, max: s.max, kind: s.kind })), userId);
     let changed = false;
     slots.forEach((s, i) => {
       const t = done[i];
