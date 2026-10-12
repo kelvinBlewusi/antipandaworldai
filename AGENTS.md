@@ -1015,6 +1015,25 @@ only appear while billing is off.
   extension_latest_version set to "0.2.58" on 2026-10-06 (it had never been
   set, so no panel showed the update bar). Only 0.2.57 panels have the bar;
   0.2.56 and older update through Chrome on its own schedule.
+- **Extension 0.2.59 (built 2026-10-12, for the owner to upload; no new
+  permissions)**: the panel in English, French or Arabic (owner, 2026-10-11:
+  "a language switch button to the extension"). panel/i18n.js holds every
+  word (`PANEL_TEXT`, `t()`, `applyLanguage()`: data-i18n attributes in
+  panel.html, `dir="rtl"` for Arabic, logical CSS). The 🌐 switch sits in a
+  top row, connected or not; Advanced Options gains "Listing language"
+  (English / Français). A choice is kept on the device (`uiLang`) and, once
+  connected, with the account through POST /api/extension/language (API key,
+  CORS, in the middleware's public list), the same choice as Settings, the
+  web chat and WhatsApp. GET /api/extension/account returns `languages`
+  { ui, listing, chosen }: one the seller chose wins; a choice made on the
+  panel before connecting is sent up; else the account's market default.
+  Also: the connect screen says 12 free credits (it still said 20); Autofill
+  sends the account's country as `market` (it was always "GH"); the support
+  email is help@pandaworldai.site. **Server side for every panel version**:
+  /api/extension/fill takes the market from the seller's Jumia connection
+  (`sellerCountry`), whatever the panel sends, so older panels stop telling
+  the AI every shop is in Ghana. Once Google publishes 0.2.59:
+  `update app_settings set value = '"0.2.59"', updated_at = now() where key = 'extension_latest_version';`
 - **FAQ (2026-10-02)**: public at `/faq` (app/faq/page.tsx, content in
   lib/marketing/faq.tsx with a plain-text copy of each answer for its
   FAQPage structured data), linked from the extension sidebar and the

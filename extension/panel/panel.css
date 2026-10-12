@@ -37,8 +37,19 @@ body {
   color: var(--fg);
 }
 
-/* ── Status row (Plan · Credits · disconnect) ────────────────────────────── */
-.statusRow { display: flex; align-items: center; gap: 8px; margin: 10px 0 14px; }
+/* ── Top row: status (Plan · Credits · disconnect) and the language switch ── */
+.topRow { display: flex; align-items: center; gap: 8px; margin: 0 0 14px; }
+.statusRow { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
+.langPick {
+  display: inline-flex; align-items: center; gap: 4px; margin-inline-start: auto; flex-shrink: 0;
+  padding: 2px 4px 2px 8px; border: 1px solid var(--line); border-radius: 999px; font-size: 12px; color: var(--muted);
+}
+.langPick select {
+  border: 0; background: transparent; color: var(--fg); font: inherit; font-size: 12px; font-weight: 600;
+  padding: 3px 2px; width: auto; cursor: pointer;
+}
+.langPick select:focus { outline: none; }
+.langPick:focus-within { border-color: var(--pw-blue); }
 .pill {
   display: inline-flex; align-items: center; gap: 5px;
   font-size: 11px; font-weight: 700; padding: 4px 10px; border-radius: 999px;
@@ -47,7 +58,7 @@ body {
 .pill.credits { background: var(--card); color: var(--fg); border: 1px solid var(--line); }
 .pill.credits .dot { width: 6px; height: 6px; border-radius: 999px; background: var(--accent); display: inline-block; }
 .iconBtn {
-  margin-left: auto; width: 26px; height: 26px; border-radius: 999px;
+  margin-inline-start: auto; width: 26px; height: 26px; border-radius: 999px;
   background: transparent; border: 1px solid var(--line); color: var(--muted);
   display: flex; align-items: center; justify-content: center; font-size: 13px; cursor: pointer;
 }
@@ -67,7 +78,7 @@ body {
 .bannerIcon { font-size: 26px; line-height: 1; margin-bottom: 6px; }
 .bannerTitle { font-weight: 700; font-size: 14px; margin-bottom: 4px; }
 .bannerBody { color: var(--muted); font-size: 12px; margin-bottom: 12px; }
-.banner .fld { text-align: left; }
+.banner .fld { text-align: start; }
 .linkline {
   display: block; margin-top: 10px; font-size: 12px; color: var(--pw-blue);
   text-decoration: none; text-align: center;
@@ -113,7 +124,7 @@ select {
    visibility is driven purely by JS toggling `hidden`, nothing CSS-hover. */
 .helpIcon {
   display: inline-flex; align-items: center; justify-content: center;
-  vertical-align: middle; margin-left: 4px;
+  vertical-align: middle; margin-inline-start: 4px;
   width: 15px; height: 15px; padding: 0;
   border-radius: 999px; border: none;
   background: var(--line); color: var(--muted);
@@ -246,7 +257,7 @@ footer.linksFooter .sep { color: var(--line); font-size: 11px; }
 .secondary:disabled { opacity: .6; cursor: default; }
 .calc { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
 .calc summary { cursor: pointer; font-weight: 700; font-size: 14px; }
-.calcCountry { margin-left: 6px; font-weight: 500; font-size: 12px; color: var(--muted); }
+.calcCountry { margin-inline-start: 6px; font-weight: 500; font-size: 12px; color: var(--muted); }
 /* No border of its own: the calculator inside draws its card. Sized by the page (pandaworld:embed-height). */
 .calc iframe { display: block; width: 100%; height: 420px; margin-top: 10px; border: 0; background: #fff; }
 .polishGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
@@ -268,7 +279,7 @@ footer.linksFooter .sep { color: var(--line); font-size: 11px; }
 .noticeTitle { font-weight: 700; font-size: 13.5px; margin-bottom: 6px; }
 .notice p { margin: 0 0 8px; }
 .noticeOk {
-  display: block; margin-left: auto; padding: 5px 14px; border: 0; border-radius: 999px;
+  display: block; margin-inline-start: auto; padding: 5px 14px; border: 0; border-radius: 999px;
   background: var(--accent); color: var(--accent-fg); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer;
 }
 .noticeOk:hover { filter: brightness(.95); }
@@ -280,7 +291,7 @@ footer.linksFooter .sep { color: var(--line); font-size: 11px; }
 }
 .updateText { font-weight: 600; margin-bottom: 8px; }
 .updateBtn {
-  display: block; margin-left: auto; padding: 5px 14px; border: 0; border-radius: 999px;
+  display: block; margin-inline-start: auto; padding: 5px 14px; border: 0; border-radius: 999px;
   background: var(--pw-blue); color: #fff; font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer;
 }
 .updateBtn:disabled { opacity: .6; cursor: default; }

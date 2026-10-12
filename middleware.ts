@@ -78,6 +78,7 @@ import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server'
 //                            checked inside the route), same API key.
 //   /api/extension/notices/(.*) — the panel's "Got it" on a notice from us
 //                            (lib/notices.ts), same API key.
+//   /api/extension/language  — the panel's language switch, same API key.
 //   /api/whatsapp/webhook    — incoming WhatsApp Business Cloud API webhook,
 //                            called directly by Meta's servers with no Clerk
 //                            session. Verifies its own X-Hub-Signature-256
@@ -131,6 +132,7 @@ const isPublicRoute = createRouteMatcher([
   '/api/extension/account',
   '/api/extension/polish-images',
   '/api/extension/notices/(.*)',
+  '/api/extension/language',
   '/api/whatsapp/webhook',
   // SEO + crawler routes — keep these PUBLIC or Google rejects the
   // sitemap and the OG link previews render as broken images.
