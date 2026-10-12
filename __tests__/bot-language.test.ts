@@ -31,7 +31,7 @@ jest.mock("@/lib/jumia/credentials", () => ({ getJumiaConnectionKind: async () =
 jest.mock("@/lib/jumia/connect-token", () => ({ createConnectToken: async () => "tok" }));
 jest.mock("@/lib/whatsapp/assistant", () => ({ assistantEnabled: async () => true }));
 
-import { aiWritten, alreadyIn, forgetLanguage, keepsEssentials, languageOfNumber, localizeText, recipientLanguage, slotsOf } from "@/lib/i18n/bot";
+import { aiWritten, alreadyIn, answerLines, forgetLanguage, keepsEssentials, languageOfNumber, localizeText, recipientLanguage, slotsOf } from "@/lib/i18n/bot";
 import { sendButtonsIfConfigured, sendRichIfConfigured, sendTextIfConfigured } from "@/lib/whatsapp/client";
 import { assistantMessages } from "@/lib/whatsapp/listing-assistant";
 import { parseGlobalCommand } from "@/lib/whatsapp/commands";
@@ -217,6 +217,15 @@ describe("the checks on a translation", () => {
     expect(keepsEssentials("Review listings", "Review listings", 20, "ar")).toBe(false);
     expect(keepsEssentials("Review listings", "مراجعة الإعلانات", 20, "ar")).toBe(true);
     expect(keepsEssentials("✅", "✅", 20)).toBe(true);
+  });
+
+  it("reads the answer however the AI shaped it", () => {
+    for (const shape of [
+      ["a", "b"], [{ text: "a" }, { text: "b" }], [{ translations: ["a", "b"] }], { translations: ["a", "b"] }, { 1: "a", 2: "b" },
+    ]) expect(answerLines(shape, 2)).toEqual(["a", "b"]);
+    expect(answerLines(["a"], 2)).toBeNull();
+    expect(answerLines([{ translations: ["a"] }], 1)).toEqual(["a"]);
+    expect(answerLines("a", 1)).toBeNull();
   });
 
   it("finds every place in a list message", () => {

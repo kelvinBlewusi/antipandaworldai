@@ -193,6 +193,7 @@ export function translationPrompt(lang: Foreign, items: { text: string; max: num
     "- Every text is translated, including short ones: a text marked true in \"label\" is a button, a list row or a column name (\"Submit all\", \"Sales today\"), never a command to keep.",
     `- Use these words: ${GLOSSARY[lang]}`,
     "- Keep WhatsApp formatting exactly: *bold*, _italic_, ~strike~, line breaks, bullets (•, -), numbering (\"1.\") and every emoji, in the same places. Text in *bold* is translated like the rest.",
+    "- Numbers and amounts keep the English way of writing them (\"GHS 1,250.00\" stays \"GHS 1,250.00\", never \"1 250,00 GHS\").",
     "- Keep exactly as written, never translated: a product's name (the words after \"Product drafted:\", \"Product 2:\" and the like), brand names, SKUs, order and product numbers, prices, amounts, currency codes and symbols, dates, every number, links, email addresses, codes, and anything in quotes.",
     "- Keep these words as they are: Jumia, PandaWorld, Vendor Center, Seller Center, WhatsApp, ON, OFF, Client ID, token.",
     "- Only when a message explicitly tells the seller to type, reply, say or send a word (Reply *done*, type *restart*, say *menu*), keep that one word or phrase in English.",
@@ -235,15 +236,33 @@ async function askModel(lang: Foreign, items: { text: string; max: number; kind?
   const res = await Promise.race([call, timeout]).finally(() => clearTimeout(timer));
   if (!res) throw new Error(`no answer in ${TRANSLATE_TIMEOUT_MS / 1000} s`);
   onAnswer?.(res.text);
-  const parsed = JSON.parse(res.text.replace(/^```(?:json)?\s*|\s*```$/g, "")) as unknown;
-  const list = Array.isArray(parsed) ? parsed : (parsed as { translations?: unknown } | null)?.translations;
-  if (!Array.isArray(list) || list.length !== items.length) throw new Error("answer isn't one line per item");
-  // Each a string, or the item's own shape back ({ text }), as the model sometimes answers.
-  const lines = list.map((v) => (typeof v === "string" ? v : typeof (v as { text?: unknown })?.text === "string" ? (v as { text: string }).text : "").trim());
+  const lines = answerLines(JSON.parse(res.text.replace(/^```(?:json)?\s*|\s*```$/g, "")), items.length);
+  if (!lines) throw new Error("answer isn't one line per item");
   const kept = lines.map((v, i) => (v && keepsEssentials(items[i].text, v, items[i].max, lang) ? v : null));
   const failed = kept.filter((v) => v == null).length;
   if (failed > 0) console.warn(`[bot-language] ${failed} of ${items.length} line(s) failed the checks for ${lang}; they stay English`);
   return kept;
+}
+
+/**
+ * The translated lines in an answer, however the AI shaped it (all seen live,
+ * 2026-10-12): ["…"], [{ "text": "…" }], [{ "translations": ["…"] }],
+ * { "translations": ["…"] }, or { "1": "…", "2": "…" }. Null when it isn't
+ * one line per item. Pure.
+ */
+export function answerLines(parsed: unknown, n: number): string[] | null {
+  const line = (v: unknown) => (typeof v === "string" ? v : typeof (v as { text?: unknown })?.text === "string" ? (v as { text: string }).text : "").trim();
+  if (Array.isArray(parsed)) {
+    if (parsed.length === n && (n !== 1 || typeof parsed[0] === "string" || typeof (parsed[0] as { text?: unknown })?.text === "string")) return parsed.map(line);
+    if (parsed.length === 1 && parsed[0] && typeof parsed[0] === "object") return answerLines(parsed[0], n);
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object") return null;
+  const o = parsed as Record<string, unknown>;
+  const inner = Object.values(o).find((v) => Array.isArray(v) && v.length === n);
+  if (inner) return (inner as unknown[]).map(line);
+  const byNumber = Array.from({ length: n }, (_, i) => o[String(i + 1)] ?? o[String(i)]);
+  return byNumber.every((v) => v !== undefined) ? byNumber.map(line) : null;
 }
 
 /**
@@ -273,8 +292,12 @@ export async function translateLines(
   const todo = new Map<string, number>(); // hash → first item with it
   hashes.forEach((h, i) => { if (out[i] == null && !todo.has(h)) todo.set(h, i); });
   const firsts = Array.from(todo.values());
+  // Labels in batches of their own: mixed in with long messages, the AI left
+  // them in English (live check, 2026-10-12).
   const chunks: number[][] = [];
-  for (let at = 0; at < firsts.length; at += BATCH) chunks.push(firsts.slice(at, at + BATCH));
+  for (const group of [firsts.filter((i) => items[i].kind === "label"), firsts.filter((i) => items[i].kind !== "label")]) {
+    for (let at = 0; at < group.length; at += BATCH) chunks.push(group.slice(at, at + BATCH));
+  }
   await Promise.all(chunks.map(async (chunk) => {
     try {
       const fresh = await askModel(lang, chunk.map((i) => items[i]), userId, onAnswer);
