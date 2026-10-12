@@ -86,7 +86,8 @@ describe("a message on its way", () => {
     expect(shown.text).toBe("Bonjour : Your product is ready. Soumettre it?");
     expect(shown.payload).toEqual({ buttons: [{ id: "submit all", title: "Tout soumettre ✅" }] });
     expect(prompts[0]).toContain("into French");
-    expect(prompts[0]).toContain("keep that one word or phrase in English");
+    expect(prompts[0]).toContain("the bot only understands it in English");
+    expect(prompts[0]).toContain("Nasco Electric Kettle 1.8L - Stainless Steel.\" → \"✅ Produit rédigé : Nasco Electric Kettle");
     expect(prompts[0]).toContain("never a command to keep");
   });
 
