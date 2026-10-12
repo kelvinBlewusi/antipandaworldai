@@ -214,7 +214,9 @@ export function keepsEssentials(source: string, out: string, max: number, lang?:
   return true;
 }
 
-const hashOf = (text: string, max: number) => createHash("sha256").update(`${max}\n${text}`).digest("hex").slice(0, 40);
+/** Bumped when what makes a good translation changes, so older cached ones aren't read again (v2: 2026-10-12, labels). */
+const CACHE_VERSION = "v2";
+const hashOf = (text: string, max: number) => createHash("sha256").update(`${CACHE_VERSION}\n${max}\n${text}`).digest("hex").slice(0, 40);
 
 async function askModel(lang: Foreign, items: { text: string; max: number; kind?: Slot["kind"] }[], userId: string | null, onAnswer?: (raw: string) => void): Promise<(string | null)[]> {
   const call = withAiUsageContext({ feature: "translation", userId }, () =>
@@ -251,7 +253,11 @@ export async function translateLines(
   try {
     const { data } = await db.from("bot_translations").select("source_hash, translated").eq("lang", lang).in("source_hash", Array.from(new Set(hashes)));
     const cached = new Map(((data ?? []) as { source_hash: string; translated: string }[]).map((r) => [r.source_hash, r.translated]));
-    hashes.forEach((h, i) => { out[i] = cached.get(h) ?? null; });
+    // A cached line still has to pass the checks: a bad one is translated again (and replaced).
+    hashes.forEach((h, i) => {
+      const t = cached.get(h);
+      out[i] = t && keepsEssentials(items[i].text, t, items[i].max, lang) ? t : null;
+    });
   } catch {
     // Not cached: translated below.
   }
@@ -270,7 +276,7 @@ export async function translateLines(
         rows.push({ lang, source_hash: hashes[i], translated: t });
       });
       if (rows.length > 0) {
-        await db.from("bot_translations").upsert(rows, { onConflict: "lang,source_hash", ignoreDuplicates: true })
+        await db.from("bot_translations").upsert(rows, { onConflict: "lang,source_hash" })
           .then(({ error }) => { if (error) console.warn(`[bot-language] cache write failed: ${error.message}`); }, () => undefined);
       }
     } catch (e) {
