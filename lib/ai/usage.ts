@@ -17,7 +17,7 @@ import { randomUUID } from "node:crypto";
 import { createServerClient } from "@/lib/supabase/server";
 
 /** assistant_eval: the assistant's test set (lib/evals/assistant-eval.ts), never a seller's. */
-export type AiFeature = "extension_fill" | "listing_draft" | "category_refill" | "assistant" | "assistant_eval" | "other";
+export type AiFeature = "extension_fill" | "listing_draft" | "category_refill" | "assistant" | "assistant_eval" | "translation" | "other";
 
 interface UsageContext {
   feature:    AiFeature;

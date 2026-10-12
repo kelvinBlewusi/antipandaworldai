@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { isListingLanguage, isUiLanguage, sellerLanguages, setSellerLanguages } from "@/lib/preferences/language";
+import { forgetLanguage } from "@/lib/i18n/bot";
 
 export const dynamic = "force-dynamic";
 
@@ -29,5 +30,7 @@ export async function POST(req: NextRequest) {
   const listing = isListingLanguage(body.listing) ? body.listing : undefined;
   if (!ui && !listing) return NextResponse.json({ error: "That isn't a language PandaWorld offers." }, { status: 400 });
   await setSellerLanguages(userId, { ui, listing });
+  // The bot's next message is in it (lib/i18n/bot.ts).
+  forgetLanguage(userId);
   return NextResponse.json(await sellerLanguages(userId));
 }

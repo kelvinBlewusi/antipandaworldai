@@ -41,7 +41,10 @@ export type GlobalCommand =
   // "Change" or "edit" alone: what to say after it.
   | { type: "edit_help" }
   // "Put a stop to this product creation": start over? (asked, then restart).
-  | { type: "stop_ask" };
+  | { type: "stop_ask" }
+  // The seller's language (lib/whatsapp/language-command.ts): the menu, or a
+  // choice (a tapped row "lang:ui:fr", or "speak French").
+  | { type: "language"; set: { key: "ui" | "listing"; value: "en" | "fr" | "ar" } | null };
 
 /** What the menu's shop commands read. */
 export type ShopRead = "shop" | "out_of_stock" | "low_stock" | "sales_today" | "sales_week" | "payouts";
@@ -98,6 +101,22 @@ const KEEP_CHAT_RE = /^keep (the |my )?chat$/i;
 const STOP_ASK_RE = /^(?:please\s+)?(?:put a stop to|stop|cancel|abort|discard|scrap|delete|quit|end|terminate)\b(?!.*\b(?:orders?|sales?|alerts?|promo)\b).{0,40}\b(?:this|it|the|my)\b.{0,30}\b(?:products?|listings?|batch|creation|upload(?:ing)?|process|drafts?)\b[.!]*$/i;
 const EDIT_HELP_RE = /^(change|edit|edit (live )?on jumia|edit live|change a live product)[.!?]?$/i;
 const REPORT_RE = /^(report|shop report|health report|shop health(?: report| check)?|health check)[.!?]?$/i;
+// Never a bare language name: "English" can answer a book's language question.
+const LANGUAGE_RE = /^(?:languages?|langues?|change (?:the |my )?language|changer (?:de |la )?langue|لغة|اللغة|تغيير اللغة)[.!?]?$/i;
+const LANGUAGE_SET_RE = /^lang:(ui|listing):(en|fr|ar)$/;
+const SPEAK_EN_RE = /^(?:please )?(?:speak|talk|reply|answer|write)(?: to me)?(?: in)? (english|french|arabic)(?: please)?[.!]?$/i;
+const SPEAK_FR_RE = /^(?:parle|parlez|r[ée]ponds|r[ée]pondez|[ée]cris|[ée]crivez)(?:[- ]moi)? en (fran[çc]ais|anglais|arabe)(?: (?:s'il (?:te|vous) pla[iî]t|svp|stp))?[.!]?$/i;
+const SPEAK_AR_RE = /^(?:تحدث|تكلم|رد|اكتب)(?: معي)? (بالعربية|بالعربي|بالإنجليزية|بالانجليزية|بالفرنسية)[.!]?$/;
+const SPOKEN: Record<string, "en" | "fr" | "ar"> = {
+  english: "en", french: "fr", arabic: "ar", anglais: "en", "français": "fr", francais: "fr", arabe: "ar",
+  "بالعربية": "ar", "بالعربي": "ar", "بالإنجليزية": "en", "بالانجليزية": "en", "بالفرنسية": "fr",
+};
+
+/** The language a "speak French" asks for, if it is one. */
+function spokenLanguage(t: string): "en" | "fr" | "ar" | null {
+  const m = SPEAK_EN_RE.exec(t) ?? SPEAK_FR_RE.exec(t) ?? SPEAK_AR_RE.exec(t);
+  return m ? SPOKEN[m[1].toLowerCase()] ?? null : null;
+}
 const SHOP_READS: [RegExp, ShopRead][] = [
   [/^(my )?(shop|products)[.!?]?$/i, "shop"],
   [/^out of stock[.!?]?$/i, "out_of_stock"],
@@ -133,6 +152,11 @@ export function parseGlobalCommand(text: string): GlobalCommand | null {
   if (KEEP_CHAT_RE.test(t)) return { type: "clear", step: "keep" };
   if (CLEAR_RE.test(t)) return { type: "clear", step: "ask" };
   if (EDIT_HELP_RE.test(t)) return { type: "edit_help" };
+  const langSet = LANGUAGE_SET_RE.exec(t);
+  if (langSet) return { type: "language", set: { key: langSet[1] as "ui" | "listing", value: langSet[2] as "en" | "fr" | "ar" } };
+  if (LANGUAGE_RE.test(t)) return { type: "language", set: null };
+  const spoken = spokenLanguage(t);
+  if (spoken) return { type: "language", set: { key: "ui", value: spoken } };
   if (t.split(/\s+/).length <= 12 && STOP_ASK_RE.test(t)) return { type: "stop_ask" };
   for (const [re, what] of SHOP_READS) if (re.test(t)) return { type: "shop_read", what };
   return null;

@@ -39,11 +39,11 @@ describe("the language a market lists in", () => {
 describe("a seller's choice", () => {
   it("follows their Jumia market until they choose, then keeps each choice on its own", async () => {
     db.tables.jumia_connections = [{ user_id: "s1", country: "CI" }];
-    expect(await sellerLanguages("s1")).toEqual({ ui: "fr", listing: "fr", chosen: { ui: false, listing: false } });
+    expect(await sellerLanguages("s1")).toEqual({ ui: "fr", listing: "fr", chosen: { ui: false, listing: false }, country: "CI" });
     await setSellerLanguages("s1", { listing: "en" });
-    expect(await sellerLanguages("s1")).toEqual({ ui: "fr", listing: "en", chosen: { ui: false, listing: true } });
+    expect(await sellerLanguages("s1")).toEqual({ ui: "fr", listing: "en", chosen: { ui: false, listing: true }, country: "CI" });
     await setSellerLanguages("s1", { ui: "ar" });
-    expect(await sellerLanguages("s1")).toEqual({ ui: "ar", listing: "en", chosen: { ui: true, listing: true } });
+    expect(await sellerLanguages("s1")).toEqual({ ui: "ar", listing: "en", chosen: { ui: true, listing: true }, country: "CI" });
   });
 
   it("a Ghana seller can choose French listings; nonsense is ignored", async () => {

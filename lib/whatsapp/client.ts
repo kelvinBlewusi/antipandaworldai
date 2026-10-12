@@ -27,6 +27,7 @@
 
 import { logOutboundMessage, recordOutboundMessage } from "@/lib/whatsapp/message-log";
 import { isWebAddress } from "@/lib/whatsapp/channel";
+import { localizeOutbound } from "@/lib/i18n/bot";
 
 const GRAPH_API_VERSION = "v21.0";
 
@@ -99,11 +100,15 @@ function throttleCodeOf(body: string): number | null {
  * malformed — sending it again just fails again, more slowly.
  */
 async function callGraphApi(body: Record<string, unknown>): Promise<void> {
+  // In the seller's language (lib/i18n/bot.ts): `shown` is what they get; the
+  // log keeps the English, which the bot's own code reads back.
+  const shown = typeof body.to === "string" ? await localizeOutbound(body.to, body) : null;
+
   // The Listing Assistant (web:<userId>): the message is recorded, with its
   // buttons, rows or link, for the page to show. Nothing goes to Meta, so it
   // costs nothing and is never throttled. Awaited, so messages keep their order.
   if (typeof body.to === "string" && isWebAddress(body.to)) {
-    await recordOutboundMessage(body.to, body);
+    await recordOutboundMessage(body.to, body, shown);
     return;
   }
 
@@ -115,7 +120,7 @@ async function callGraphApi(body: Record<string, unknown>): Promise<void> {
   // before the retry loop, so a send that ultimately fails after retries
   // still leaves a record of what the bot tried to say.
   if (typeof body.to === "string") {
-    logOutboundMessage(body.to, body);
+    logOutboundMessage(body.to, body, shown);
   }
 
   for (let attempt = 0; ; attempt++) {
@@ -125,7 +130,7 @@ async function callGraphApi(body: Record<string, unknown>): Promise<void> {
         Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ messaging_product: "whatsapp", ...body }),
+      body: JSON.stringify({ messaging_product: "whatsapp", ...(shown ?? body) }),
     });
     if (res.ok) return;
 

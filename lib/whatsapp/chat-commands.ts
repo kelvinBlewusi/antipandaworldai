@@ -25,10 +25,11 @@ import { creditsReply } from "@/lib/whatsapp/assistant";
 import { answerPayouts, answerProducts, answerSales, answerStock } from "@/lib/whatsapp/shop";
 import { answerHealthReport } from "@/lib/whatsapp/shop-health";
 import { POLISH_COST, polishOnRequest } from "@/lib/whatsapp/chat-polish";
+import { runLanguageCommand } from "@/lib/whatsapp/language-command";
 
-type ChatCommand = Extract<GlobalCommand, { type: "menu" | "credits" | "polish" | "report" | "shop_read" | "clear" | "edit_help" }>;
+type ChatCommand = Extract<GlobalCommand, { type: "menu" | "credits" | "polish" | "report" | "shop_read" | "clear" | "edit_help" | "language" }>;
 
-const CHAT_COMMANDS = new Set<GlobalCommand["type"]>(["menu", "credits", "polish", "report", "shop_read", "clear", "edit_help"]);
+const CHAT_COMMANDS = new Set<GlobalCommand["type"]>(["menu", "credits", "polish", "report", "shop_read", "clear", "edit_help", "language"]);
 
 export const isChatCommand = (cmd: GlobalCommand): cmd is ChatCommand => CHAT_COMMANDS.has(cmd.type);
 
@@ -54,7 +55,8 @@ export const MENU_ROWS = [
 export function menuText(): string {
   return "📋 Here's what I can do. Tap one, or type its words any time.\n\n" +
     `To polish a product's photos, type *polish* and its number, e.g. *polish 2* (${POLISH_COST} credits for 4 photos, ${POLISH_CREDIT_COST} each). ` +
-    "To list, say how many products. *restart* starts over, *disconnect* disconnects Jumia.";
+    "To list, say how many products. *restart* starts over, *disconnect* disconnects Jumia, " +
+    "*language* changes my language (English, Français, العربية).";
 }
 
 const READS: Record<ShopRead, (userId: string, phone: string) => Promise<unknown>> = {
@@ -88,6 +90,9 @@ export async function runChatCommand(cmd: ChatCommand, userId: string, phone: st
       return;
     case "clear":
       await clearCommand(userId, phone, cmd.step);
+      return;
+    case "language":
+      await runLanguageCommand(userId, phone, cmd.set);
       return;
   }
 }

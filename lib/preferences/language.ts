@@ -27,6 +27,8 @@ export interface SellerLanguages {
   listing: ListingLanguage;
   /** Whether each was chosen by the seller (false: their market's). */
   chosen: { ui: boolean; listing: boolean };
+  /** Their Jumia market, when connected. */
+  country: string | null;
 }
 
 /** Their market's languages, before any choice. */
@@ -46,6 +48,7 @@ export async function sellerLanguages(userId: string): Promise<SellerLanguages> 
     ui: isUiLanguage(row.ui_language) ? row.ui_language : market.ui,
     listing: isListingLanguage(row.listing_language) ? row.listing_language : market.listing,
     chosen: { ui: isUiLanguage(row.ui_language), listing: isListingLanguage(row.listing_language) },
+    country: country ?? null,
   };
 }
 

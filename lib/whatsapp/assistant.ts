@@ -83,6 +83,7 @@ import { sellerLanguages } from "@/lib/preferences/language";
 import { blankCodes, noteSellerMessage, sellerMemory } from "@/lib/whatsapp/seller-memory";
 import { isWebAddress } from "@/lib/whatsapp/channel";
 import { chatClearedAt } from "@/lib/whatsapp/chat-clear";
+import { aiWritten, localizeText } from "@/lib/i18n/bot";
 import { handleOrderMessage } from "@/lib/whatsapp/orders";
 import { resetSession, updateSession, type AssistantPending, type LiveValueAsk, type PhotoSwap, type WhatsAppSession } from "@/lib/whatsapp/session";
 import { matchOption, parseVariations, saveVariations, sizeNamedIn, variationOptions, VARIATION_FIELD } from "@/lib/whatsapp/variation-question";
@@ -372,8 +373,10 @@ export async function sellerFacts(userId: string): Promise<{ lines: string[]; co
     // Their languages (lib/preferences/language.ts): one they chose is the one to answer in.
     const langs = await sellerLanguages(userId).catch(() => null);
     if (langs) {
+      // The bot's own messages reach them in `ui` too (lib/i18n/bot.ts).
       if (langs.chosen.ui) lines.push(`- Language: they chose ${LANGUAGE_IN_ENGLISH[langs.ui]}; always answer in ${LANGUAGE_IN_ENGLISH[langs.ui]}.`);
-      lines.push(`- Their listings are written in ${LANGUAGE_IN_ENGLISH[langs.listing]} (Settings → Language changes it, and the language PandaWorld talks to them in).`);
+      else if (langs.ui !== "en") lines.push(`- Language: PandaWorld talks to them in ${LANGUAGE_IN_ENGLISH[langs.ui]} (their market's); answer in ${LANGUAGE_IN_ENGLISH[langs.ui]} unless they write in another language.`);
+      lines.push(`- Their listings are written in ${LANGUAGE_IN_ENGLISH[langs.listing]}. Typing *language* (or Settings → Language) changes it, and the language PandaWorld talks to them in: English, French or Arabic.`);
     }
     const { data: conn } = await createServerClient().from("jumia_connections").select("store_name, seller_name").eq("user_id", userId).maybeSingle();
     const shopName = (conn as { store_name?: string | null; seller_name?: string | null } | null)?.store_name
@@ -2547,8 +2550,10 @@ async function carryOut(
       // reply keeps the step's own two buttons. Starting a batch, where
       // they are goes in the same message (one message, not two).
       const link = action.link ? links[action.link] : null;
-      const text = stage === "starting" ? `${action.text}\n\n${startingNudge(session)}`
-        : stage === "collecting" ? `${action.text}\n\n${collectingNudge(session)}` : action.text;
+      // The AI's words are already in the seller's language; the bot's own
+      // nudge is put in it (lib/i18n/bot.ts) before it's added.
+      const nudge = stage === "starting" ? startingNudge(session) : stage === "collecting" ? collectingNudge(session) : null;
+      const text = nudge ? `${action.text}\n\n${await localizeText(phone, nudge)}` : action.text;
       if (action.awaiting) {
         const ask: LiveValueAsk = {
           kind: "live_value", field: action.awaiting.field, products: action.awaiting.products,
@@ -2556,9 +2561,11 @@ async function carryOut(
         };
         await updateSession(phone, { assistantPending: ask });
       }
-      if (link) await sendCtaUrlIfConfigured(phone, text, link.label, link.url);
-      else if (stage === "review") await sendButtonsIfConfigured(phone, text, [SUBMIT_ALL, REVIEW]);
-      else await sendTextIfConfigured(phone, text);
+      await aiWritten(async () => {
+        if (link) await sendCtaUrlIfConfigured(phone, text, link.label, link.url);
+        else if (stage === "review") await sendButtonsIfConfigured(phone, text, [SUBMIT_ALL, REVIEW]);
+        else await sendTextIfConfigured(phone, text);
+      });
       return link ? `replied with ${action.link}` : action.awaiting ? `asked for ${action.awaiting.field}` : "replied";
     }
     case "not_yet": {
