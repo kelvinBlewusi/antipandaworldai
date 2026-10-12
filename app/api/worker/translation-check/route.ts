@@ -17,19 +17,19 @@ export const maxDuration = 60;
 // Security: the same Bearer CRON_SECRET contract as the other workers.
 
 /** Real lines of the bot's, with WhatsApp's length for their place. */
-const LINES: { text: string; max: number }[] = [
+const LINES: { text: string; max: number; kind?: "body" | "label" }[] = [
   { text: menuText(), max: 1024 },
   { text: EDIT_HELP, max: 4096 },
   { text: CLEAR_ON_WHATSAPP, max: 4096 },
   { text: "🎉 Jumia connected!\n\nHow many products are you listing today? Reply with a number to get started, or ask me about your shop.", max: 1024 },
   { text: "✅ Product drafted: Nasco Electric Kettle 1.8L - Stainless Steel, Auto Shut-Off.\n\n*What variation(s) do you have?* Reply with them, e.g. *Small, Medium*.", max: 1024 },
   { text: "📦 Order 355926919: 2 items, GHS 1,250.00. Pack it, then tap *Ready to ship*. Details: https://pandaworldai.site/extension/orders", max: 1024 },
-  { text: "Submit all ✅", max: 20 },
-  { text: "Review listings", max: 20 },
-  { text: "Start another ➕", max: 20 },
-  { text: "OR Choose one", max: 20 },
-  { text: "Edit product", max: 20 },
-  ...MENU_ROWS.slice(0, 4).flatMap((r) => [{ text: r.title, max: 24 }, { text: r.description, max: 72 }]),
+  { text: "Submit all ✅", max: 20, kind: "label" },
+  { text: "Review listings", max: 20, kind: "label" },
+  { text: "Start another ➕", max: 20, kind: "label" },
+  { text: "OR Choose one", max: 20, kind: "label" },
+  { text: "Edit product", max: 20, kind: "label" },
+  ...MENU_ROWS.slice(0, 4).flatMap((r) => [{ text: r.title, max: 24, kind: "label" as const }, { text: r.description, max: 72, kind: "label" as const }]),
 ];
 
 export async function POST(req: NextRequest) {
