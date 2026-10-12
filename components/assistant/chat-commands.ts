@@ -43,6 +43,7 @@ export const PALETTE: PaletteCommand[] = [
   { slash: "status",     title: "Where am I",         hint: "Your batch and what's next",                send: "status" },
   { slash: "restart",    title: "Restart",            hint: "Start a new batch",                         send: "restart" },
   { slash: "help",       title: "How it works",       hint: "Listing step by step",                      send: "how it works" },
+  { slash: "language",   aliases: ["langue"], title: "Language", hint: "English, Français or العربية",    send: "language" },
   { slash: "clear",      title: "Clear chat",         hint: "Start fresh, like the first time",          action: "clear" },
   { slash: "disconnect", title: "Disconnect Jumia",   hint: "Asks you to confirm first",                 send: "disconnect" },
 ];

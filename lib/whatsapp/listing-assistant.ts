@@ -55,10 +55,17 @@ export async function assistantMessages(
   return ((data ?? []) as { id: string; direction: string; message_type: string | null; body_text: string | null; payload: Record<string, unknown> | null; created_at: string; wamid: string | null }[])
     .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)))
     .slice(-limit)
-    .map((r) => ({
-      id: String(r.id), clientId: r.wamid ?? null, direction: r.direction === "inbound" ? "inbound" : "outbound", type: r.message_type ?? "text",
-      text: r.body_text, payload: r.payload, at: r.created_at,
-    }));
+    .map((r) => {
+      // In the seller's language when it was translated (lib/i18n/bot.ts); the log's own text is the English.
+      const { shown, ...payload } = (r.payload ?? {}) as Record<string, unknown> & { shown?: Record<string, unknown> };
+      const { text: shownText, ...shownPayload } = shown ?? {};
+      return {
+        id: String(r.id), clientId: r.wamid ?? null, direction: r.direction === "inbound" ? "inbound" : "outbound", type: r.message_type ?? "text",
+        text: shown && typeof shownText === "string" ? shownText : r.body_text,
+        payload: shown ? { ...payload, ...shownPayload } : r.payload,
+        at: r.created_at,
+      };
+    });
 }
 
 /**

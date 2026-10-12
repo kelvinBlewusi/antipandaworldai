@@ -1003,6 +1003,7 @@ async function handleGlobalCommand(
     case "shop_read":
     case "clear":
     case "edit_help":
+    case "language":
       await runChatCommand(cmd, userId, phoneNumber, session);
       return;
     case "reconnect_jumia": {

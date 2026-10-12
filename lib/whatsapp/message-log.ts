@@ -148,9 +148,21 @@ export function describeOutboundMessage(
  * POST to the Graph API — one call site covers every send helper in
  * client.ts (text, image, buttons, list, cta_url) with no per-caller wiring.
  */
-export function logOutboundMessage(to: string, body: Record<string, unknown>): void {
-  const fields = describeOutboundMessage(to, body);
+export function logOutboundMessage(to: string, body: Record<string, unknown>, shown?: Record<string, unknown> | null): void {
+  const fields = withShown(describeOutboundMessage(to, body), to, shown);
   if (fields) void insertLog(fields);
+}
+
+/**
+ * The message as the seller got it, in their language (lib/i18n/bot.ts), kept
+ * beside the English as payload.shown: its words, and its buttons, rows, link
+ * words or tables. The web chat shows it (lib/whatsapp/listing-assistant.ts).
+ */
+function withShown(fields: Omit<LogFields, "wamid"> | null, to: string, shown?: Record<string, unknown> | null): Omit<LogFields, "wamid"> | null {
+  if (!fields || !shown) return fields;
+  const s = describeOutboundMessage(to, shown);
+  if (!s) return fields;
+  return { ...fields, payload: { ...(fields.payload ?? {}), shown: { text: s.bodyText ?? null, ...(s.payload ?? {}) } } };
 }
 
 /**
@@ -158,8 +170,8 @@ export function logOutboundMessage(to: string, body: Record<string, unknown>): v
  * channel.ts) the record IS the delivery, read back by its page, so it must
  * be written, and in order, before the next message.
  */
-export async function recordOutboundMessage(to: string, body: Record<string, unknown>): Promise<void> {
-  const fields = describeOutboundMessage(to, body);
+export async function recordOutboundMessage(to: string, body: Record<string, unknown>, shown?: Record<string, unknown> | null): Promise<void> {
+  const fields = withShown(describeOutboundMessage(to, body), to, shown);
   if (fields) await insertLog(fields);
 }
 

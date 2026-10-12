@@ -489,6 +489,10 @@ export function ListingAssistant({ firstName, productForm, languages }: {
   const tap = (b: Button, m?: Message) => {
     const form = /^form(?:\s+(\d{1,2}))?$/i.exec(b.id);
     if (form) { openForm(form[1] ? Number(form[1]) : 1, m ? messages.indexOf(m) : undefined, messages); return; }
+    // A language chosen from the bot's list (lib/whatsapp/language-command.ts): the page follows at once; the bot saves it.
+    const lang = /^lang:(ui|listing):(en|fr|ar)$/.exec(b.id);
+    if (lang) setLangs((prev) => (lang[1] === "ui" ? { ...prev, ui: lang[2] as ChatLanguages["ui"] }
+      : lang[2] === "ar" ? prev : { ...prev, listing: lang[2] as ChatLanguages["listing"] }));
     void send({ text: b.id, label: b.title });
   };
   const waiting = waitingSince != null;
