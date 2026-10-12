@@ -182,8 +182,20 @@ const LANGUAGE_FOR: Record<Foreign, string> = {
 
 /** The words the chat itself uses (lib/i18n/chat.ts), so the bot says them the same way. */
 const GLOSSARY: Record<Foreign, string> = {
-  fr: "draft / drafted = « brouillon » / « rédigé » (a listing written and saved, not yet sent to Jumia); listing = « annonce »; credits = « crédits »; batch = « lot »; polish photos = « retoucher les photos »; submit = « soumettre »; payout = « paiement »; stock = « stock ».",
-  ar: "draft / drafted = « مسودة » / « تمت صياغته » (a listing written and saved, not yet sent to Jumia; never « سحب »); listing = « إعلان »; credits = « رصيد »; batch = « مجموعة »; polish photos = « تحسين الصور »; submit = « إرسال »; payout = « دفعة مالية »; stock = « المخزون ».",
+  fr: "draft / drafted = « brouillon » / « rédigé » (a listing written and saved, not yet sent to Jumia); listing = « annonce »; credits = « crédits »; batch = « lot »; the phrase \"polish photos\" in a sentence = « retoucher les photos »; submit = « soumettre »; payout = « paiement »; stock = « stock ».",
+  ar: "draft / drafted = « مسودة » / « تمت صياغته » (a listing written and saved, not yet sent to Jumia; never « سحب »); listing = « إعلان »; credits = « رصيد »; batch = « مجموعة »; the phrase \"polish photos\" in a sentence = « تحسين الصور »; submit = « إرسال »; payout = « دفعة مالية »; stock = « المخزون ».",
+};
+
+/** Worked examples: a product's name and a word to type stay as they are (French translated both, live, 2026-10-12). */
+const EXAMPLES: Record<Foreign, string[]> = {
+  fr: [
+    "\"✅ Product drafted: Nasco Electric Kettle 1.8L - Stainless Steel.\" → \"✅ Produit rédigé : Nasco Electric Kettle 1.8L - Stainless Steel.\"",
+    "\"Type *polish* and its number, e.g. *polish 2*.\" → \"Tapez *polish* et son numéro, par ex. *polish 2*.\"",
+  ],
+  ar: [
+    "\"✅ Product drafted: Nasco Electric Kettle 1.8L - Stainless Steel.\" → \"✅ تمت صياغة المنتج: Nasco Electric Kettle 1.8L - Stainless Steel.\"",
+    "\"Type *polish* and its number, e.g. *polish 2*.\" → \"اكتب *polish* ورقمه، مثلًا *polish 2*.\"",
+  ],
 };
 
 export function translationPrompt(lang: Foreign, items: { text: string; max: number; kind?: Slot["kind"] }[]): string {
@@ -196,7 +208,8 @@ export function translationPrompt(lang: Foreign, items: { text: string; max: num
     "- Numbers and amounts keep the English way of writing them (\"GHS 1,250.00\" stays \"GHS 1,250.00\", never \"1 250,00 GHS\").",
     "- Keep exactly as written, never translated: a product's name (the words after \"Product drafted:\", \"Product 2:\" and the like), brand names, SKUs, order and product numbers, prices, amounts, currency codes and symbols, dates, every number, links, email addresses, codes, and anything in quotes.",
     "- Keep these words as they are: Jumia, PandaWorld, Vendor Center, Seller Center, WhatsApp, ON, OFF, Client ID, token.",
-    "- Only when a message explicitly tells the seller to type, reply, say or send a word (Reply *done*, type *restart*, say *menu*), keep that one word or phrase in English.",
+    "- When a message tells the seller to type, reply, say or send a word (Reply *done*, type *restart*, *polish 2*), keep that word or phrase in English: the bot only understands it in English.",
+    `- Examples: ${EXAMPLES[lang].join("  ")}`,
     ...(lang === "ar" ? ["- Write numbers with the digits 0-9, never Arabic-Indic digits."] : ["- French punctuation: a space before : ; ! ?"]),
     "- \"max\" gives each text's most characters, in the same order: use shorter words if needed.",
     "- Natural, friendly and as short as the original; add nothing, leave nothing out.",
@@ -225,7 +238,7 @@ export function keepsEssentials(source: string, out: string, max: number, lang?:
 }
 
 /** Bumped when what makes a good translation changes, so older cached ones aren't read again (v2: 2026-10-12, labels). */
-const CACHE_VERSION = "v3";
+const CACHE_VERSION = "v4";
 const hashOf = (text: string, max: number) => createHash("sha256").update(`${CACHE_VERSION}\n${max}\n${text}`).digest("hex").slice(0, 40);
 
 async function askModel(lang: Foreign, items: { text: string; max: number; kind?: Slot["kind"] }[], userId: string | null, onAnswer?: (raw: string) => void): Promise<(string | null)[]> {
