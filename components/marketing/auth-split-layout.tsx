@@ -31,7 +31,9 @@ export function AuthSplitLayout({
 }) {
   return (
     <div className="grid min-h-screen bg-white lg:grid-cols-2">
-      <div className="flex flex-col justify-center px-6 py-12 sm:px-12 lg:px-16 xl:px-24">
+      {/* px-5 on a phone: Clerk's card is as wide as the screen less 2.5rem,
+          so with px-6 it stuck out 8px and the page scrolled sideways. */}
+      <div className="flex flex-col justify-center px-5 py-12 sm:px-12 lg:px-16 xl:px-24">
         <div className="mx-auto w-full max-w-sm">
           <Link href="/extension" aria-label="pandaworld home">
             <Wordmark size={24} />

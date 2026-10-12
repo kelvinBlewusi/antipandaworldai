@@ -102,7 +102,10 @@ const config: Config = {
       },
     },
   },
-  plugins: [require("tailwindcss-animate")],
+  // typography: the `prose` classes on /terms and /privacy (and the
+  // description preview in the WhatsApp editor) did nothing without it, so
+  // the legal pages showed their headings and lists as plain run-on text.
+  plugins: [require("tailwindcss-animate"), require("@tailwindcss/typography")],
 };
 
 export default config;

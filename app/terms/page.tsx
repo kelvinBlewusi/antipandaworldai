@@ -310,10 +310,12 @@ export default function TermsPage() {
 function SimpleNav({ active }: { active: "terms" | "privacy" }) {
   return (
     <header className="sticky top-0 z-20 border-b border-zinc-100 bg-white/80 backdrop-blur">
-      <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
+      <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-4 sm:px-6">
         <Link href="/" aria-label="pandaworld home">
           <Wordmark size={28} />
         </Link>
+        {/* On a phone only Get started shows: Terms, Privacy and Pricing ran
+            the row past the screen, and the footer links all three. */}
         <nav className="flex items-center gap-1 sm:gap-4">
           {(["terms", "privacy"] as const).map((page) => (
             <Link
@@ -322,8 +324,8 @@ function SimpleNav({ active }: { active: "terms" | "privacy" }) {
               aria-current={active === page ? "page" : undefined}
               className={
                 active === page
-                  ? "rounded-md px-3 py-1.5 text-sm font-semibold text-zinc-900"
-                  : "rounded-md px-3 py-1.5 text-sm font-medium text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900"
+                  ? "hidden rounded-md px-3 py-1.5 text-sm font-semibold text-zinc-900 sm:inline-block"
+                  : "hidden rounded-md px-3 py-1.5 text-sm font-medium text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900 sm:inline-block"
               }
             >
               {page === "terms" ? "Terms" : "Privacy"}
@@ -331,13 +333,13 @@ function SimpleNav({ active }: { active: "terms" | "privacy" }) {
           ))}
           <Link
             href="/pricing"
-            className="rounded-md px-3 py-1.5 text-sm font-medium text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900"
+            className="hidden rounded-md px-3 py-1.5 text-sm font-medium text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900 sm:inline-block"
           >
             Pricing
           </Link>
           <Link
             href="/sign-up"
-            className="rounded-md bg-orange-500 px-3 py-1.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-orange-600"
+            className="shrink-0 rounded-md bg-orange-500 px-3 py-1.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-orange-600"
           >
             Get started
           </Link>
