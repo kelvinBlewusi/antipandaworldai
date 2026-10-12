@@ -18,9 +18,9 @@ jest.mock("@/lib/ai/gemini-client", () => ({
     const prompt = parts.map((p) => p.text ?? "").join("\n");
     prompts.push(prompt);
     if (translate instanceof Error) throw translate;
-    const items = JSON.parse(prompt.slice(prompt.lastIndexOf("\n[") + 1)) as { text: string }[];
+    const { texts } = JSON.parse(prompt.slice(prompt.lastIndexOf("\n{") + 1)) as { texts: string[] };
     const t = translate;
-    return { text: JSON.stringify(items.map((i) => t(i.text))) };
+    return { text: JSON.stringify(texts.map((x) => t(x))) };
   },
 }));
 
@@ -137,8 +137,8 @@ describe("a message on its way", () => {
     const real = mock.callGeminiBackend;
     mock.callGeminiBackend = async (_m, parts) => {
       const prompt = parts.map((p) => p.text ?? "").join("\n");
-      const items = JSON.parse(prompt.slice(prompt.lastIndexOf("\n[") + 1)) as { text: string; max: number }[];
-      return { text: JSON.stringify(items.map((i) => ({ text: `Bonjour : ${i.text}`, max: i.max }))) };
+      const { texts, max } = JSON.parse(prompt.slice(prompt.lastIndexOf("\n{") + 1)) as { texts: string[]; max: number[] };
+      return { text: JSON.stringify(texts.map((x, i) => ({ text: `Bonjour : ${x}`, max: max[i] }))) };
     };
     try {
       await sendTextIfConfigured("web:u1", "Your listing is live.");
