@@ -58,6 +58,8 @@ export interface ActionDef {
   lineIn?: Partial<Record<Area, string[]>>;
   /** Agent mode: what it does, its fields, and the ones it needs. */
   tool: { does: string; fields?: Record<string, Schema>; required?: string[] };
+  /** Agent mode's tool where the switch assistant_followup is on, when it differs. */
+  followupTool?: { does: string; fields?: Record<string, Schema>; required?: string[] };
   /** The tool's arguments as the chat's JSON, where they differ from {type, ...args}. */
   toJson?: (args: Args) => Args;
   /** A message and the tool's arguments for it, carried out by the chat's checks (not for clarify: the readers ask it themselves). */
@@ -523,6 +525,16 @@ export const ACTION_DEFS: ActionDef[] = [
       fields: { question: str("The question, ending with ?"), options: arr(str("An answer they can tap, up to 20 characters, clear on its own."), "2 or 3 answers.") },
       required: ["question", "options"],
     },
+    // Owner, 2026-10-13 (plan step 4): a weight, a brand or a number is
+    // typed, not tapped, so the question can come without buttons.
+    followupTool: {
+      does: "Only when you can't tell which action or which product, or a change has no value: one short question. Give 2 or 3 answers to tap when the answer is a choice; leave options out when the answer is a value or a name (a weight, a brand, a number).",
+      fields: {
+        question: str("The question, ending with ?"),
+        options: arr(str("An answer they can tap, up to 20 characters, clear on its own."), "2 or 3 answers to tap; left out when the answer is a value or a name (a weight, a brand, a number)."),
+      },
+      required: ["question"],
+    },
   },
 ];
 
@@ -543,9 +555,12 @@ export function actionLines(names: string[], area?: Area): string[] {
   });
 }
 
-/** Every action as agent mode's tool, in the registry's order. */
-export function actionTools(): GeminiTool[] {
-  return ACTION_DEFS.map((d) => ({ name: d.name, description: d.tool.does, parameters: obj(d.tool.fields ?? {}, d.tool.required ?? []) }));
+/** Every action as agent mode's tool, in the registry's order; `followup`: as offered where the switch assistant_followup is on. */
+export function actionTools(followup = false): GeminiTool[] {
+  return ACTION_DEFS.map((d) => {
+    const t = (followup && d.followupTool) || d.tool;
+    return { name: d.name, description: t.does, parameters: obj(t.fields ?? {}, t.required ?? []) };
+  });
 }
 
 /**

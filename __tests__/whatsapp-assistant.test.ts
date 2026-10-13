@@ -37,6 +37,8 @@ const toolReplies: { name: string; args: Record<string, unknown> }[][] = [];
 const toolAllowed: (string[] | null)[] = [];
 // What each agent turn was given, as JSON: the conversation and the lookups' answers.
 const toolTurns: string[] = [];
+// What each agent turn's clarify tool required (step 4: the switch picks the tools).
+const toolClarifyRequired: (string[] | null)[] = [];
 // The front door's sorting calls, answered "chat" unless a test scripts the area.
 const routerPrompts: string[] = [];
 jest.mock("@/lib/ai/gemini-client", () => ({
@@ -52,9 +54,10 @@ jest.mock("@/lib/ai/gemini-client", () => ({
     if (text == null) throw new Error("no AI reply scripted");
     return { text, model, backend: "vertex" };
   },
-  callGeminiWithTools: async (_model: string, turns: unknown[], opts: { system: string; allowed?: string[] }) => {
+  callGeminiWithTools: async (_model: string, turns: unknown[], opts: { system: string; allowed?: string[]; tools?: { name: string; parameters: { required?: string[] } }[] }) => {
     aiCalls++;
     aiPrompts.push(opts.system);
+    toolClarifyRequired.push(opts.tools?.find((t) => t.name === "clarify")?.parameters.required ?? null);
     toolTurns.push(JSON.stringify(turns));
     toolAllowed.push(opts.allowed ?? null);
     const calls = toolReplies.shift();
@@ -523,11 +526,14 @@ describe("agent mode (the pilot, owner 2026-10-10)", () => {
     expect(await runAssistant("seller", "233", session(), "update the weight of the collagen boosters", "idle")).toBe("handled");
     expect(sent).toEqual([expect.objectContaining({ kind: "text", body: "What does the collagen weigh, packed as it ships?" })]);
     expect(toolTurns.at(-1)).toContain("not sent: no value for weight");
+    // Its clarify may come without buttons (step 4); elsewhere it still needs them.
+    expect(toolClarifyRequired.slice(-2)).toEqual([["question"], ["question"]]);
 
     sent.length = 0;
     toolReplies.push([{ name: "content_change", args: { product: "Collagen Boosters", details: [{ detail: "weight", value: "0.2 kg" }] } }]);
     expect(await runAssistant("other", "234", { ...session(), userId: "other", phoneNumber: "234" }, "update the weight of the collagen boosters", "idle")).toBe("handled");
     expect(sent.at(-1)?.body).toContain("What should I change on it?");
+    expect(toolClarifyRequired.at(-1)).toEqual(["question", "options"]);
   });
 
   it("the front door reads what it found nothing to do with", async () => {

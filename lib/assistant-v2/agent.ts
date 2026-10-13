@@ -80,6 +80,8 @@ export const DONE_TOOL: GeminiTool = {
 };
 /** Every tool, declared on every call (earlier turns call the lookups). */
 export const AGENT_TOOLS: GeminiTool[] = [...LOOKUP_TOOLS, ...ACTION_TOOLS, DONE_TOOL];
+/** The same, as offered where the switch assistant_followup is on (clarify may ask without buttons). Same names, same order. */
+export const AGENT_TOOLS_FOLLOWUP: GeminiTool[] = [...LOOKUP_TOOLS, ...actionTools(true), DONE_TOOL];
 const ACTION_NAMES = ACTION_TOOLS.map((t) => t.name);
 /** A first turn: anything but done. */
 const FIRST_NAMES = [...LOOKUP_TOOLS.map((t) => t.name), ...ACTION_NAMES];
@@ -243,10 +245,10 @@ export function agentModelSpec(spec: string): { model: string; thinking?: Thinki
 }
 
 /** `system` is agentSystem(): the same for every seller, so it's cached. `spec` as agentModelSpec reads it. */
-export function geminiAgentCall(spec: string, system: string, usage: FrontDoorUsage): AgentCall {
+export function geminiAgentCall(spec: string, system: string, usage: FrontDoorUsage, tools: GeminiTool[] = AGENT_TOOLS): AgentCall {
   const { model, thinking } = agentModelSpec(spec) ?? { model: spec };
   return (turns, onlyAct, noReply, checking) => withAiUsageContext(usage, () => callGeminiWithTools(model, turns, {
-    system, tools: AGENT_TOOLS, mode: "ANY",
+    system, tools, mode: "ANY",
     allowed: checking ? CHECK_NAMES : noReply ? ACTION_NAMES_NO_REPLY : onlyAct ? ACTION_NAMES : FIRST_NAMES,
     // AI Studio for every model: Vertex refuses these tools for 2.5 Flash
     // ("too much branching for serving", the model comparison of 11 Oct),

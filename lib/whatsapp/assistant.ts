@@ -92,7 +92,7 @@ import type { ListingRow } from "@/lib/supabase/types";
 import {
   FRONT_DOOR_LIMITS, FRONT_DOOR_ROUTER, frontDoor, namesInMessage, type Clarify, type FrontDoorInput,
 } from "@/lib/assistant-v2/front-door";
-import { agentModelSpec, agentRead, agentSystem, catalogLookups, geminiAgentCall } from "@/lib/assistant-v2/agent";
+import { AGENT_TOOLS, AGENT_TOOLS_FOLLOWUP, agentModelSpec, agentRead, agentSystem, catalogLookups, geminiAgentCall } from "@/lib/assistant-v2/agent";
 
 /** Small and quick, like the review step's older fallback (lib/whatsapp/intent.ts). */
 export const ASSISTANT_MODEL = "gemini-2.5-flash-lite";
@@ -1898,7 +1898,8 @@ export async function interpretThroughAgent(
     seller: seller.lines, links, currency, web: opts.web ?? false, shopNames: shop.map((p) => p.name).filter(Boolean), listingCost,
     position: opts.position, memory, ...(opts.answered ? { answered: opts.answered } : {}),
   };
-  const read = await agentRead(input, geminiAgentCall(model, agentSystem(listingCost), { feature: "assistant", userId }), {
+  const tools = opts.followup ? AGENT_TOOLS_FOLLOWUP : AGENT_TOOLS;
+  const read = await agentRead(input, geminiAgentCall(model, agentSystem(listingCost), { feature: "assistant", userId }, tools), {
     ...catalogLookups(shop), productDetails: productDetailsLookup(userId),
   }, {}, { followup: opts.followup === true });
   return { actions: read.actions, clarify: read.clarify, links, raw: `[agent ${model}] ${read.raw}` };

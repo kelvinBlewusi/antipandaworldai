@@ -15,7 +15,7 @@ jest.mock("@/lib/ai/gemini-client", () => ({
 }));
 
 import {
-  ACTION_TOOLS, AGENT_TOOLS, LOOKUP_TOOLS, NO_MATCH, actionJson, agentContext, agentModelSpec, agentPrompt, agentRead, agentSystem, catalogLookups, lookupLine, type AgentCall,
+  ACTION_TOOLS, AGENT_TOOLS, AGENT_TOOLS_FOLLOWUP, LOOKUP_TOOLS, NO_MATCH, actionJson, agentContext, agentModelSpec, agentPrompt, agentRead, agentSystem, catalogLookups, lookupLine, type AgentCall,
 } from "@/lib/assistant-v2/agent";
 import type { FrontDoorInput } from "@/lib/assistant-v2/front-door";
 import { assistantLinks, parseAction } from "@/lib/whatsapp/assistant";
@@ -161,6 +161,28 @@ describe("its lookups", () => {
     const look = catalogLookups([KETTLE, FAN, GONE]);
     expect(await look.findProducts("the kettle")).toEqual([lookupLine(KETTLE)]);
     expect(await look.findProducts("blender")).toEqual([]);
+  });
+});
+
+// docs/plan-2026-10-13-ask-what-jumia-needs.md step 4.
+describe("asking without buttons (switch assistant_followup)", () => {
+  const clarifyOf = (tools: typeof AGENT_TOOLS) => tools.find((t) => t.name === "clarify")!;
+
+  it("where it's on, clarify needs only the question, and is told to leave options out for a value", () => {
+    expect((clarifyOf(AGENT_TOOLS_FOLLOWUP).parameters as { required?: string[] }).required).toEqual(["question"]);
+    expect(clarifyOf(AGENT_TOOLS_FOLLOWUP).description).toContain("leave options out when the answer is a value or a name (a weight, a brand, a number)");
+  });
+
+  it("elsewhere it's as before, and every other tool is the same in both", () => {
+    expect((clarifyOf(AGENT_TOOLS).parameters as { required?: string[] }).required).toEqual(["question", "options"]);
+    expect(AGENT_TOOLS_FOLLOWUP.map((t) => t.name)).toEqual(AGENT_TOOLS.map((t) => t.name));
+    expect(AGENT_TOOLS_FOLLOWUP.filter((t) => t.name !== "clarify")).toEqual(AGENT_TOOLS.filter((t) => t.name !== "clarify"));
+  });
+
+  it("a question with no options comes back with none", async () => {
+    const { call } = scripted([{ calls: [{ name: "clarify", args: { question: "What does it weigh, packed as it ships?" } }] }]);
+    const r = await agentRead(input("the weight is wrong"), call, noLookups);
+    expect(r.clarify).toEqual({ type: "clarify", question: "What does it weigh, packed as it ships?", options: [] });
   });
 });
 
