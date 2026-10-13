@@ -120,6 +120,14 @@ are still `pending`, and their old Yes buttons still work.
 
 ## Open work, most important first
 
+0. **Build next: docs/plan-2026-10-13-ask-what-jumia-needs.md**, as the
+   owner asked on 13 Oct. Follow it step by step, behind the
+   `assistant_followup` switch. In it:
+   - the weight sent as "0.1kg" bug;
+   - keeping a rejected product's question open;
+   - a failed check going back to the model once;
+   - learning what each category's quality check needs, and asking it
+     before submit.
 1. **Before inviting sellers.** The owner decides each of these; advise
    only:
    - **Supabase Pro**, for backups.
