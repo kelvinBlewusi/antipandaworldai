@@ -3,12 +3,14 @@ import { sendTextIfConfigured, sendCtaUrlIfConfigured, sendButtonsIfConfigured, 
 import { INTERACTIVE_BODY_MAX, splitForText } from "@/lib/whatsapp/text-limits";
 import { VARIATION_FIELD, isVariationBlock, variationOptions, variationMayBlock, variationQuestion, parseVariations, saveVariations, optionsShown } from "@/lib/whatsapp/variation-question";
 import { ingestWhatsAppImage } from "@/lib/whatsapp/media";
-import { recordInboundMessage } from "@/lib/whatsapp/message-log";
+import { lastBotMessage, recordInboundMessage } from "@/lib/whatsapp/message-log";
 import {
   getOrCreateSession,
   updateSession,
   resetSession,
   claimMessageId,
+  openKeptQc,
+  type QcLiveAsk,
   type QcQuestion,
   type ValueQuestion,
   type WhatsAppSession,
@@ -24,7 +26,7 @@ import { columnFor, readAttributeValue } from "@/lib/jumia/attribute-mapping";
 import { refillAttributesForCategory } from "@/lib/jumia/refill-attributes";
 import { classifyJumiaRejection, isAutoFixable, extractRejectionText, rejectionFingerprint, shouldBlockRepeatedAutoFix, extractNotVisibleAttributeNames, isStaleCategoryError, type Remedy, isPriceRejection, priceLimitInRejection } from "@/lib/jumia/rejection-remedy";
 import { decideQcAction, type QcContext } from "@/lib/jumia/qc-remedy";
-import { answerQcLive, fixRejected, parseFixTap } from "@/lib/whatsapp/fix-rejected";
+import { answerQcLive, fixRejected, keptQc, parseFixTap } from "@/lib/whatsapp/fix-rejected";
 import { escapeHtml, parseWeightKg } from "@/lib/jumia/qc-answers";
 import { answerAddPhotos } from "@/lib/whatsapp/live-photos";
 import { featureAccess, featureMinPackName } from "@/lib/billing/features";
@@ -660,6 +662,11 @@ function batchPosition(session: WhatsAppSession): string | undefined {
   return `product ${session.batchSeq ?? 1}${size > 1 ? ` of ${size}` : ""}`;
 }
 
+/** A rejected product's question held under the one just answered or dropped, while it's open (session.ts withHeldQc). */
+function heldQcOf(pending: WhatsAppSession["assistantPending"]): QcLiveAsk | null {
+  return pending && "heldQc" in pending ? openKeptQc(pending.heldQc) : null;
+}
+
 /** The bot's question still waiting for the seller, in a few words for the AI. */
 function openQuestion(session: WhatsAppSession): string | undefined {
   if (session.awaitingPriceFor) return "the selling price of a drafted product";
@@ -671,7 +678,19 @@ function openQuestion(session: WhatsAppSession): string | undefined {
   if (session.awaitingCategoryFor) return "the right category for a product Jumia rejected";
   if (session.awaitingQcAnswer) return `what Jumia's quality check needs for a rejected product (${session.awaitingQcAnswer.kind})`;
   if (session.assistantPending && "kind" in session.assistantPending && session.assistantPending.kind === "qc_live") {
-    return `what Jumia's quality check needs for their rejected product ${session.assistantPending.name} (${session.assistantPending.fieldLabel.toLowerCase()})`;
+    const q = session.assistantPending;
+    if (q.keep) {
+      // Everything the agent needs to follow it up (switch assistant_followup).
+      const field = q.ask === "brand" ? "brand" : q.about === "weight" ? "weight (in kg, packed as it ships)" : q.fieldLabel;
+      return [
+        `Jumia's quality check rejected their product "${q.name}" (SKU ${q.sku}) and needs its ${field}`,
+        q.current ? `; Jumia has ${q.current} for it now` : "",
+        q.jumiaSaid ? `; Jumia said: "${q.jumiaSaid}"` : "",
+        `. While this is open, "it", "this" and "the product" mean this product`,
+        `; the change it needs is content_change for this product with its ${q.ask === "brand" ? "brand" : q.field ? `${q.fieldLabel} detail` : `${q.fieldLabel} in the description`}`,
+      ].join("");
+    }
+    return `what Jumia's quality check needs for their rejected product ${q.name} (${q.fieldLabel.toLowerCase()})`;
   }
   if (session.assistantPending) return "which product they meant";
   return undefined;
@@ -777,23 +796,26 @@ export async function handleLinkedMessage(
   // kept, "done" offers them for the tap; anything else lets the question go.
   if (session.assistantPending && "kind" in session.assistantPending && session.assistantPending.kind === "add_photos") {
     if (await answerAddPhotos(userId, phoneNumber, session.assistantPending, content)) return;
-    session = { ...session, assistantPending: null };
+    session = { ...session, assistantPending: heldQcOf(session.assistantPending) };
   }
   // A product picked from the assistant's "which one?" list (whichOf): what
   // they asked for is carried out on it.
   if (session.assistantPending && "kind" in session.assistantPending && session.assistantPending.kind === "product_pick") {
     if (await answerProductPick(userId, phoneNumber, session, content.imageMediaId ? undefined : content.text)) return;
-    session = { ...session, assistantPending: null };
+    session = { ...session, assistantPending: heldQcOf(session.assistantPending) };
   }
   // What Jumia's quality check asked for a rejected product on Jumia
   // (lib/whatsapp/fix-rejected.ts): the reply is the answer.
+  // One that stays open (switch assistant_followup) goes on with the message.
   if (session.assistantPending && "kind" in session.assistantPending && session.assistantPending.kind === "qc_live") {
-    if (await answerQcLive(userId, phoneNumber, session.assistantPending, content.imageMediaId ? undefined : content.text)) return;
-    session = { ...session, assistantPending: null };
+    const q = session.assistantPending;
+    const said = content.imageMediaId ? undefined : content.text;
+    if (await answerQcLive(userId, phoneNumber, q, said)) return;
+    session = { ...session, assistantPending: keptQc(q, said) ? q : null };
   }
-  if (session.assistantPending && "kind" in session.assistantPending) {
+  if (session.assistantPending && "kind" in session.assistantPending && session.assistantPending.kind !== "qc_live") {
     if (await answerLiveValue(userId, phoneNumber, session, content.imageMediaId ? undefined : content.text)) return;
-    session = { ...session, assistantPending: null };
+    session = { ...session, assistantPending: heldQcOf(session.assistantPending) };
   }
 
   // Global commands (restart/cancel, disconnect, status, help) work in ANY
@@ -869,8 +891,11 @@ export async function handleLinkedMessage(
   const readable = await aiReadable(userId, phoneNumber, session, content);
   if (readable && (await assistantFor(userId, phoneNumber))) {
     const stage = aiStage(session)!;
+    const pending = session.assistantPending;
+    const stays = !!pending && "kind" in pending && pending.kind === "qc_live" && pending.keep === true;
     const outcome = await runAssistant(userId, phoneNumber, session, readable.text, stage, stage === "review" ? readable.hintSeq : undefined, {
-      position: batchPosition(session), waitingFor: openQuestion(session), ...(readable.answered ? { answered: readable.answered } : {}),
+      position: batchPosition(session), waitingFor: openQuestion(session), ...(stays ? { waitingStays: true } : {}),
+      ...(readable.answered ? { answered: readable.answered } : {}),
     });
     if (outcome === "handled") return;
     // A tapped answer goes on as its words, like typed text.
@@ -1093,24 +1118,6 @@ async function startAnotherWithCount(userId: string, phoneNumber: string, count:
   if (kept) await replyText(phoneNumber, kept.trim());
   const fresh = await getOrCreateSession(userId, phoneNumber);
   await handleAwaitingCount(userId, phoneNumber, fresh, { text: String(count) });
-}
-
-/** The bot's last message here, when it's the newest row or just before this message. */
-async function lastBotMessage(phoneNumber: string): Promise<{ type: string | null; body: string } | null> {
-  try {
-    const { data } = await createServerClient()
-      .from("whatsapp_message_log")
-      .select("direction, message_type, body_text")
-      .eq("phone_number", phoneNumber)
-      .order("created_at", { ascending: false })
-      .limit(2);
-    const rows = (data ?? []) as { direction: string; message_type: string | null; body_text: string | null }[];
-    // The newest row can be this very message, logged as it arrived.
-    const bot = rows[0]?.direction === "outbound" ? rows[0] : rows[0]?.direction === "inbound" ? rows[1] : undefined;
-    return bot && bot.direction === "outbound" ? { type: bot.message_type, body: (bot.body_text ?? "").trim() } : null;
-  } catch {
-    return null;
-  }
 }
 
 /** The assistant's offer in review (lib/whatsapp/assistant.ts), which a typed count answers. */
@@ -3849,7 +3856,7 @@ async function handleAwaitingBatchConfirmation(
   // The answer to the assistant's "Which product do you mean?" (a tap, a
   // number, "both"). Above the bare number below, which would otherwise
   // submit the product named. Anything else drops the question.
-  if (session.assistantPending) {
+  if (session.assistantPending && !("kind" in session.assistantPending && session.assistantPending.kind === "qc_live")) {
     if (await answerPendingQuestion(userId, phoneNumber, session, text)) return;
     await updateSession(phoneNumber, { assistantPending: null });
   }

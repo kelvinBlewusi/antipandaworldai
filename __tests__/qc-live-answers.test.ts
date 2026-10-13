@@ -9,7 +9,7 @@ jest.mock("@/lib/ai/gemini-client", () => ({ callGeminiBackend: async () => { th
 import { qcActionFromTable, type QcContext } from "@/lib/jumia/qc-remedy";
 import { parseBrandAnswer, parseWeightKg, warrantyAnswer } from "@/lib/jumia/qc-answers";
 import { htmlToWhatsApp } from "@/lib/whatsapp/html-text";
-import { fixPlan, withoutWords } from "@/lib/whatsapp/fix-rejected";
+import { askedAbout, chatOnly, fixPlan, isAgreement, isTheQuestion, withoutWords } from "@/lib/whatsapp/fix-rejected";
 import type { JumiaCategoryAttribute } from "@/lib/jumia/categories";
 
 const fields = [
@@ -100,6 +100,58 @@ describe("fixes", () => {
       .toMatchObject({ kind: "remove", words: ["Nivea"], intro: expect.stringContaining("I've taken it out and changed nothing else.") });
     expect(fixPlan({ kind: "rename", start: "Kinky Curly", why: "" }, "Kinky Curly Wig", ""))
       .toMatchObject({ kind: "rewrite", fields: ["name"], instructions: expect.stringContaining('must NOT begin with "Kinky Curly"') });
+  });
+});
+
+// Owner's web chat, 2026-10-12 17:10: "Update it for me on my JUMIA shop"
+// after the weight question meant "send what Jumia has" (switch assistant_followup).
+describe("agreeing with what Jumia has now", () => {
+  it("yes, that's right, update it: typos and filler words too", () => {
+    for (const t of ["yes", "Yess", "yeah", "ok", "that's right", "That is correct", "it is correct", "correct", "corect", "same",
+      "it's the same", "keep it", "keep it as it is", "update it", "updte it", "Update it for me on my JUMIA shop", "send it", "yes update it please", "resend it"]) {
+      expect({ t, agrees: isAgreement(t) }).toEqual({ t, agrees: true });
+    }
+  });
+
+  it("anything with its own content isn't agreeing", () => {
+    for (const t of ["That is the weight listed", "That is the weight of the collagen booster", "yes but 0.1", "0.1kg", "no", "stop",
+      "it is", "show me today's sales", "the brand is Pro", "Pro", "change the weight to 0.1kg",
+      // Reviewing step 2: questions, and words one letter from "right".
+      "is that correct?", "Is it right?", "is it the same?", "ok?", "right?", "good night", "it is light", "eight"]) {
+      expect({ t, agrees: isAgreement(t) }).toEqual({ t, agrees: false });
+    }
+  });
+
+  it("a question back is about it when it asks for its field, never just for naming the product", () => {
+    const q = { ask: "value" as const, about: "weight" as const, fieldLabel: "Weight (kg)" };
+    expect(askedAbout(q, "Jumia has 0.2 kg for it. Is the packed weight different?")).toBe(true);
+    expect(askedAbout(q, "How many products are you listing now?")).toBe(false);
+    expect(askedAbout(q, "Which Enhancement Dietary Supplement - Collagen Boosters do you mean?")).toBe(false);
+    expect(askedAbout({ ...q, ask: "brand", about: null, fieldLabel: "Brand" }, "What brand is printed on it?")).toBe(true);
+    expect(askedAbout({ ...q, about: null, fieldLabel: "FDA" }, "What is its FDA registration number?")).toBe(true);
+    expect(askedAbout({ ...q, about: null, fieldLabel: "FDA" }, "Here are today's sales.")).toBe(false);
+  });
+
+  it("the bot's last message is the question when it carries the question's own words", () => {
+    const asked = "🔍 *Collagen Boosters*: Jumia's quality check needs something only you have. What does it weigh, packed as it ships?";
+    expect(isTheQuestion({ asked }, asked)).toBe(true);
+    expect(isTheQuestion({ asked }, asked.replace(/\*/g, "").replace(/ /g, "  "))).toBe(true);
+    expect(isTheQuestion({ asked }, "Collagen Boosters has 10 in stock on Jumia.")).toBe(false);
+    expect(isTheQuestion({}, asked)).toBe(false);
+  });
+
+  it("chat words are never a value or a brand", () => {
+    for (const t of ["ok thanks", "thank you so much", "ok noted", "No", "That's the brand", "it's wrong", "ok"]) expect({ t, chat: chatOnly(t) }).toEqual({ t, chat: true });
+    for (const t of ["Pro", "Nasco", "0.1", "FDA/SD.255-112170", "12 months replacement"]) expect({ t, chat: chatOnly(t) }).toEqual({ t, chat: false });
+  });
+
+  it("the question names what Jumia has now, when it's known", () => {
+    const weight = { kind: "ask_value" as const, field: "product_weight", fieldLabel: "Weight (kg)", about: "weight" as const, question: "What does it weigh, packed as it ships?" };
+    expect(fixPlan(weight, "Collagen Boosters", "", undefined, null, "0.2 kg"))
+      .toMatchObject({ kind: "say", text: expect.stringContaining("Jumia has 0.2 kg as its weight now and turned that down. What does it weigh") });
+    expect(fixPlan(weight, "Collagen Boosters", "")).toMatchObject({ kind: "say", text: expect.not.stringContaining("Jumia has") });
+    expect(fixPlan({ ...weight, field: "fda", fieldLabel: "FDA", about: undefined, question: "What is its FDA registration number?" }, "Shower Cream", "", undefined, null, "FDA/123"))
+      .toMatchObject({ text: expect.stringContaining("Jumia has FDA/123 as its FDA now") });
   });
 });
 

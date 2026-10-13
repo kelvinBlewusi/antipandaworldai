@@ -55,7 +55,8 @@ import { answerProductPhotos, productDetailsLookup, productFactsText, whereLine 
 import { answerProductText, answerProducts, answerStock, bulkTargets, handleShopTap, htmlToText, proposeAddSize, proposeBulkChange, proposeContentChange } from "@/lib/whatsapp/shop";
 import { runApiChecks } from "@/lib/jumia/api-checks";
 import { answerLiveValue } from "@/lib/whatsapp/assistant";
-import { answerQcLive, fixRejected } from "@/lib/whatsapp/fix-rejected";
+import { answerQcLive, fixRejected, keptQc, markQcAsked } from "@/lib/whatsapp/fix-rejected";
+import { resetSession, updateSession } from "@/lib/whatsapp/session";
 import type { QcLiveAsk } from "@/lib/whatsapp/session";
 import {
   answerBrand, answerLinkedShops, answerPayoutDetail, answerReport, answerWarehouseStock, daysLeft, handleWarehouseTap, proposeWarehouseOrder,
@@ -689,5 +690,159 @@ describe("rejected products, fixed from what Jumia's quality check said", () => 
     expect(await answerQcLive(USER, PHONE, pending(), "FDA number is FDA/CS/24-1234")).toBe(true);
     await handleShopTap(USER, PHONE, last().ids![0]);
     expect(updated().attributes).toContainEqual({ name: "fda", value: "FDA/CS/24-1234" });
+  });
+
+  // A seller, 2026-10-11: "FDA/SD.255-112170" is the number itself; its "FDA" isn't a lead-in to strip.
+  it("an FDA number that starts with FDA keeps it", async () => {
+    reject(2, "Kindly Provide Product's Health/Food Regulation Registration Number. (Mandatory FDA registration number is missing.)");
+    await fixRejected(USER, PHONE, "wellington boot");
+    expect(await answerQcLive(USER, PHONE, pending(), "FDA/SD.255-112170")).toBe(true);
+    await handleShopTap(USER, PHONE, last().ids![0]);
+    expect(updated().attributes).toContainEqual({ name: "fda", value: "FDA/SD.255-112170" });
+  });
+
+  // Owner's web chat, 2026-10-12 17:05–17:11 (docs/plan-2026-10-13-ask-what-jumia-needs.md step 2).
+  describe("the question stays open (switch assistant_followup)", () => {
+    const WEIGHT_REASON = "Please confirm and update the actual weight of the product, as the current weight information appears to be inaccurate or missing.";
+    const botSaid = (body: string) => { db.tables.whatsapp_message_log = [{ phone_number: PHONE, direction: "outbound", message_type: "text", body_text: body }]; };
+    beforeEach(() => {
+      db.tables.app_settings = [{ key: "assistant_followup", value: "all" }];
+      (catalog[2] as { attributes: { name: string; value: string }[] }).attributes.push({ name: "product_weight", value: "0.2" });
+      reject(2, WEIGHT_REASON);
+    });
+
+    it("the question says what Jumia has now, and keeps Jumia's words", async () => {
+      expect(await fixRejected(USER, PHONE, "wellington boot")).toBe("fix: ask_value");
+      expect(last().body).toContain("Jumia has 0.2 kg as its weight now and turned that down. What does it weigh, packed as it ships?");
+      expect(pending()).toMatchObject({ kind: "qc_live", sku: "WEL-B", keep: true, current: "0.2 kg", jumiaSaid: expect.stringContaining("current weight information appears to be inaccurate") });
+    });
+
+    it("17:06 \"That is the weight listed\": not an answer, and the question stays", async () => {
+      await fixRejected(USER, PHONE, "wellington boot");
+      botSaid(last().body);
+      const before = sent.length;
+      expect(await answerQcLive(USER, PHONE, pending(), "That is the weight listed")).toBe(false);
+      expect(pending()).toMatchObject({ kind: "qc_live", sku: "WEL-B", about: "weight" });
+      expect(sent.length).toBe(before);
+    });
+
+    it("17:10 \"Update it for me on my JUMIA shop\": what Jumia has now, offered again for the tap", async () => {
+      await fixRejected(USER, PHONE, "wellington boot");
+      botSaid(last().body);
+      expect(await answerQcLive(USER, PHONE, pending(), "That is the weight listed")).toBe(false);
+      expect(await answerQcLive(USER, PHONE, pending(), "Update it for me on my JUMIA shop")).toBe(true);
+      expect(last().body).toContain("weight → 0.2");
+      expect(db.tables.whatsapp_sessions[0].assistant_pending).toBeNull();
+      await handleShopTap(USER, PHONE, last().ids![0]);
+      expect(updated().attributes).toContainEqual({ name: "product_weight", value: "0.2" });
+    });
+
+    it("a new weight right after the question is its answer, in kg", async () => {
+      await fixRejected(USER, PHONE, "wellington boot");
+      botSaid(last().body);
+      expect(await answerQcLive(USER, PHONE, pending(), "0.1")).toBe(true);
+      expect(last().body).toContain("weight → 0.1");
+      expect(db.tables.whatsapp_sessions[0].assistant_pending).toBeNull();
+    });
+
+    it("another request in between is left to the chat, and the question stays; once the chat has moved on, nothing is read as its answer", async () => {
+      await fixRejected(USER, PHONE, "wellington boot");
+      botSaid(last().body);
+      expect(await answerQcLive(USER, PHONE, pending(), "show me today's sales")).toBe(false);
+      expect(pending()).toMatchObject({ kind: "qc_live", sku: "WEL-B" });
+      // The chat answered something else (reviewing step 2: each of these was
+      // taken as the boot's answer while the question stayed open).
+      for (const [bot, said] of [
+        ["How many products are you listing now?", "5"],
+        ["Wellington Rain Boot has 10 in stock on Jumia.", "make it 5"],
+        ["Update *Nasco Electric Kettle 1.7L* on Jumia: price → GHS 120? Tap Yes to send it.", "yes"],
+        ["Here are today's sales.", "change the weight of the Nasco kettle to 1.5 kg"],
+        ["Here are today's sales.", "it weighs 150 g"],
+        ["Here are today's sales.", "stop the sale on the Nasco kettle"],
+        ["Here are today's sales.", "stop"],
+      ]) {
+        botSaid(bot);
+        expect({ said, read: await answerQcLive(USER, PHONE, pending(), said) }).toEqual({ said, read: false });
+      }
+      expect(pending()).toMatchObject({ kind: "qc_live", sku: "WEL-B" });
+      expect(sent.filter((m) => m.body.includes("Wellington Rain Boot") && m.body.includes("weight →"))).toHaveLength(0);
+      // The agent's own question about the weight is the question again: its reply is read.
+      await markQcAsked(PHONE, pending(), "Jumia has 0.2 kg for it and turned that down. What does it weigh, packed as it ships?");
+      botSaid("Jumia has 0.2 kg for it and turned that down. What does it weigh, packed as it ships?");
+      expect(await answerQcLive(USER, PHONE, pending(), "150 g")).toBe(true);
+      expect(last().body).toContain("weight → 0.15");
+    });
+
+    it("on the question itself: a question back, or chat words, are left to the chat", async () => {
+      await fixRejected(USER, PHONE, "wellington boot");
+      botSaid(last().body);
+      for (const said of ["is that correct?", "Is it right?", "ok?", "ok thanks", "No", "it's wrong"]) {
+        expect({ said, read: await answerQcLive(USER, PHONE, pending(), said) }).toEqual({ said, read: false });
+      }
+      expect(pending()).toMatchObject({ kind: "qc_live", sku: "WEL-B" });
+      expect(sent.filter((m) => m.body.includes("weight →"))).toHaveLength(0);
+    });
+
+    it("a question the chat asks about something else holds it, and it comes back after", async () => {
+      await fixRejected(USER, PHONE, "wellington boot");
+      const q = pending();
+      await updateSession(PHONE, { assistantPending: { kind: "live_value", field: "stock", products: ["kettle"], preferSid: null, at: new Date().toISOString() } });
+      expect(db.tables.whatsapp_sessions[0].assistant_pending).toMatchObject({ kind: "live_value", heldQc: { kind: "qc_live", sku: "WEL-B" } });
+      await updateSession(PHONE, { assistantPending: null });
+      expect(db.tables.whatsapp_sessions[0].assistant_pending).toEqual(q);
+      // Clearing it itself clears it; a restart clears both.
+      await updateSession(PHONE, { assistantPending: null });
+      expect(db.tables.whatsapp_sessions[0].assistant_pending).toBeNull();
+      await updateSession(PHONE, { assistantPending: q });
+      await updateSession(PHONE, { assistantPending: { kind: "live_value", field: "stock", products: ["kettle"], preferSid: null, at: new Date().toISOString() } });
+      await resetSession(PHONE);
+      expect(db.tables.whatsapp_sessions[0].assistant_pending).toBeNull();
+    });
+
+    it("stop, a tapped button or 2 hours close it; a photo or the agent's own question back don't", async () => {
+      await fixRejected(USER, PHONE, "wellington boot");
+      const q = pending();
+      expect(await answerQcLive(USER, PHONE, q, undefined)).toBe(false);
+      expect(keptQc(q, undefined)).toBe(true);
+      expect(await answerQcLive(USER, PHONE, q, "answer:@live_changes:Send 0.2 kg again")).toBe(false);
+      expect(keptQc(q, "answer:@live_changes:Send 0.2 kg again")).toBe(true);
+      expect(pending()).toMatchObject({ kind: "qc_live" });
+
+      expect(await answerQcLive(USER, PHONE, q, "lchgno:abc")).toBe(false);
+      expect(keptQc(q, "lchgno:abc")).toBe(false);
+      expect(db.tables.whatsapp_sessions[0].assistant_pending).toBeNull();
+
+      const old = { ...q, at: new Date(Date.now() - 121 * 60_000).toISOString() };
+      expect(keptQc(old, "0.1")).toBe(false);
+      expect(await answerQcLive(USER, PHONE, old, "0.1")).toBe(false);
+      expect(db.tables.whatsapp_sessions[0].assistant_pending).toBeNull();
+      // Within the 2 hours it's still open (an hour was the limit before).
+      expect(keptQc({ ...q, at: new Date(Date.now() - 90 * 60_000).toISOString() }, "0.1")).toBe(true);
+
+      db.tables.whatsapp_sessions[0].assistant_pending = q;
+      botSaid(q.asked!);
+      expect(await answerQcLive(USER, PHONE, q, "stop")).toBe(true);
+      expect(last().body).toContain("I've left");
+      expect(db.tables.whatsapp_sessions[0].assistant_pending).toBeNull();
+    });
+
+    it("a brand: \"ok\" or \"thanks\" is never the brand; agreeing doesn't send back the brand Jumia refused", async () => {
+      reject(2, "Brand 'Generic' is not a recognized brand for a rain boot. Please list this product under a genuine, specific brand name.");
+      expect(await fixRejected(USER, PHONE, "wellington boot")).toBe("fix: ask_brand");
+      expect(last().body).toContain("Its brand on Jumia now is \"Lattafa\".");
+      botSaid(last().body);
+      for (const t of ["ok", "thanks", "yes that's right", "ok thanks", "thank you so much", "No", "That's the brand"]) expect(await answerQcLive(USER, PHONE, pending(), t)).toBe(false);
+      expect(pending()).toMatchObject({ kind: "qc_live", ask: "brand" });
+      expect(sent.filter((m) => m.body.includes("isn't a brand on Jumia"))).toHaveLength(0);
+    });
+
+    it("switched off: asked and let go as before", async () => {
+      db.tables.app_settings = [];
+      await fixRejected(USER, PHONE, "wellington boot");
+      expect(last().body).not.toContain("Jumia has 0.2 kg");
+      expect(pending().keep).toBeUndefined();
+      expect(await answerQcLive(USER, PHONE, pending(), "That is the weight listed")).toBe(false);
+      expect(db.tables.whatsapp_sessions[0].assistant_pending).toBeNull();
+    });
   });
 });

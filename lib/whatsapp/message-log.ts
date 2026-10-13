@@ -181,3 +181,21 @@ export async function recordInboundMessage(
 ): Promise<void> {
   await insertLog({ phoneNumber: address, direction: "inbound", messageType, bodyText, wamid: id, payload: payload ?? null });
 }
+
+/** The bot's last message here, when it's the newest row or just before this message. */
+export async function lastBotMessage(phoneNumber: string): Promise<{ type: string | null; body: string } | null> {
+  try {
+    const { data } = await createServerClient()
+      .from("whatsapp_message_log")
+      .select("direction, message_type, body_text")
+      .eq("phone_number", phoneNumber)
+      .order("created_at", { ascending: false })
+      .limit(2);
+    const rows = (data ?? []) as { direction: string; message_type: string | null; body_text: string | null }[];
+    // The newest row can be this very message, logged as it arrived.
+    const bot = rows[0]?.direction === "outbound" ? rows[0] : rows[0]?.direction === "inbound" ? rows[1] : undefined;
+    return bot && bot.direction === "outbound" ? { type: bot.message_type, body: (bot.body_text ?? "").trim() } : null;
+  } catch {
+    return null;
+  }
+}

@@ -51,6 +51,8 @@ export interface FrontDoorInput {
   /** The products the bot last listed for them; `items`, one line each with where it is (on/off, quality check, stock). */
   listed:       { count: number; what: string; items?: string[] } | null;
   waitingFor?:  string;
+  /** The open question stays open while other requests come in (a rejected product's, switch assistant_followup). */
+  waitingStays?: boolean;
   seller:       string[];
   links:        Record<string, AssistantLink>;
   currency:     string;
@@ -94,6 +96,9 @@ const STAGES: Record<Stage, string> = {
   sent:       "They have just submitted their batch to Jumia.",
 };
 
+/** What the AI is told about a question that stays open (switch assistant_followup). */
+export const WAITING_STAYS = "It stays open until they answer it or say stop: do what any other request asks, and when their words answer it, or agree with what Jumia has now, call the change it needs for that product. If you can't tell which, ask them with clarify, saying what Jumia has now.";
+
 const ASKING_RE = /\b(please (?:provide|send|give|share|tell|write|type)|send me|tell me|let me know|reply with|what should)\b/i;
 
 /** The bot's question still open, and what kind of answer fits it; null when none. Pure. */
@@ -131,7 +136,7 @@ export function contextText(input: FrontDoorInput): string {
   const named = namesInMessage(input.message, input.shopNames ?? []);
   return [
     `Where they are: ${STAGES[input.stage]}${input.position ? ` (${input.position})` : ""}`,
-    `The bot's open question: ${q ? `${q.about}. What answers it: ${q.fits}. Anything else is a new request and closes the question.` : "none"}`,
+    `The bot's open question: ${q ? `${q.about}. What answers it: ${q.fits}. ${input.waitingStays ? WAITING_STAYS : "Anything else is a new request and closes the question."}` : "none"}`,
     `Drafts in their batch: ${input.drafts.length ? `\n${input.drafts.map((p) => draftLine(p, input.currency)).join("\n")}` : "none"}`,
     `Products you last listed for them: ${input.listed ? `${input.listed.count} (${input.listed.what}). "Those", "them", "all of them" and "the last N" mean these; "the approved ones", "the rejected ones", "the first one" pick among them.${input.listed.items?.length ? `\n${input.listed.items.slice(0, 30).map((l, i) => `${i + 1}. ${l}`).join("\n")}` : ""}` : "none"}`,
     ...(named.length ? [`Products in their Jumia shop the message names: ${named.map((n) => `"${n}"`).join(", ")}`] : []),

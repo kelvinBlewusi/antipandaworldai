@@ -3996,6 +3996,36 @@ describe("the assistant, on the pilot's accounts", () => {
       expect(session()).toMatchObject({ state: "awaiting_photos", batch_size: 2 });
     });
 
+    // docs/plan-2026-10-13-ask-what-jumia-needs.md step 2 (switch assistant_followup, set on the question when asked).
+    it("a rejected product's question that stays open is read with the message, and stays", async () => {
+      const q = {
+        kind: "qc_live", sku: "PA-MUTE4CYI", name: "Collagen Boosters", ask: "value", field: "product_weight", fieldLabel: "Weight (kg)",
+        about: "weight", category: 1018796, at: new Date().toISOString(), keep: true,
+        jumiaSaid: "the current weight information appears to be inaccurate or missing", current: "0.2 kg",
+      };
+      idle({ assistant_pending: q });
+      aiReplies.push('{"type":"reply","text":"Here are today\'s sales."}');
+
+      await handleLinkedMessage(USER, PHONE, "m1", { text: "show me today's sales" });
+
+      const read = aiPrompts.find((p) => p.includes("The bot's open question:")) ?? "";
+      expect(read).toContain("Jumia's quality check rejected their product \"Collagen Boosters\" (SKU PA-MUTE4CYI) and needs its weight (in kg, packed as it ships); Jumia has 0.2 kg for it now");
+      expect(read).toContain("\"it\", \"this\" and \"the product\" mean this product");
+      expect(read).toContain("It stays open until they answer it or say stop");
+      expect(read).not.toContain("closes the question");
+      expect(session().assistant_pending).toMatchObject({ kind: "qc_live", sku: "PA-MUTE4CYI", keep: true });
+    });
+
+    it("one asked with the switch off is let go by the next message, as before", async () => {
+      idle({ assistant_pending: { kind: "qc_live", sku: "PA-MUTE4CYI", name: "Collagen Boosters", ask: "value", field: "product_weight", fieldLabel: "Weight (kg)", about: "weight", category: 1018796, at: new Date().toISOString() } });
+      aiReplies.push('{"type":"reply","text":"Here are today\'s sales."}');
+
+      await handleLinkedMessage(USER, PHONE, "m1", { text: "show me today's sales" });
+
+      expect(session().assistant_pending ?? null).toBeNull();
+      expect(aiPrompts.find((p) => p.includes("The bot's open question:")) ?? "").not.toContain("Collagen Boosters");
+    });
+
     it("is unchanged for everyone else", async () => {
       idle({}, false);
 

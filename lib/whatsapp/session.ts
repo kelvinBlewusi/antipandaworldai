@@ -20,6 +20,8 @@ export type ValueQuestion = { listingId: string; field: string; resubmit?: boole
  * (a sale price is read from it again when applied).
  */
 export interface AssistantPending {
+  /** A rejected product's question that stays open, held while this one is asked (updateSession). */
+  heldQc?: QcLiveAsk;
   batchId: string;
   seqs:    number[];
   changes: Record<string, unknown>;
@@ -46,6 +48,8 @@ export interface ListedProducts {
 }
 
 export interface LiveValueAsk {
+  /** A rejected product's question that stays open, held while this one is asked (updateSession). */
+  heldQc?: QcLiveAsk;
   kind:      "live_value";
   field:     "stock" | "price";
   products:  string[];
@@ -66,6 +70,8 @@ export interface LiveValueAsk {
  * the one they pick, by SKU in the list's order.
  */
 export interface ProductPickAsk {
+  /** A rejected product's question that stays open, held while this one is asked (updateSession). */
+  heldQc?: QcLiveAsk;
   kind:   "product_pick";
   action: Record<string, unknown>;
   skus:   string[];
@@ -77,6 +83,8 @@ export interface ProductPickAsk {
  * change they go in, its product's name, and how many more it can take.
  */
 export interface AddPhotosAsk {
+  /** A rejected product's question that stays open, held while this one is asked (updateSession). */
+  heldQc?: QcLiveAsk;
   kind:     "add_photos";
   changeId: string;
   name:     string;
@@ -91,7 +99,9 @@ export interface AddPhotosAsk {
  * lib/whatsapp/fix-rejected.ts (owner, 2026-10-12: "change the brand to pro"
  * got the brand question back three times): the reply is the answer, put in
  * the product and offered for its tap. Anything that isn't an answer lets it
- * go.
+ * go, unless it was asked with the switch assistant_followup on (`keep`):
+ * then it stays open until it's answered, stopped, a button is tapped, its
+ * change is offered, or two hours pass (fix-rejected.ts answerKeptQc).
  */
 export interface QcLiveAsk {
   kind:       "qc_live";
@@ -105,6 +115,32 @@ export interface QcLiveAsk {
   /** Its category, for the warranty fields' options. */
   category:   number | null;
   at:         string;
+  /**
+   * The question stays open until it's answered, stopped, a button is
+   * tapped or QC_LIVE_KEEP_MS passes; another request in between is handled
+   * and the question stays (switch `assistant_followup`, set when asked).
+   */
+  keep?:      boolean;
+  /** Jumia's reason as it said it, up to 200 characters (keep only). */
+  jumiaSaid?: string | null;
+  /** What Jumia has in that field now ("0.2 kg", the brand), read when asked (keep only). */
+  current?:   string | null;
+  /**
+   * The words of the bot's question it answers (keep only): a reply is read
+   * as its answer only while the bot's last message is this question (or
+   * the agent's own question back about it); anything else goes to the agent.
+   */
+  asked?:     string;
+}
+
+/** How long a rejected product's question that stays open (`keep`) waits. */
+export const QC_KEEP_MS = 2 * 60 * 60_000;
+
+/** A rejected product's question that stays open and hasn't expired. Pure. */
+export function openKeptQc(p: unknown, now = Date.now()): QcLiveAsk | null {
+  const q = p as QcLiveAsk | null;
+  if (!q || typeof q !== "object" || q.kind !== "qc_live" || !q.keep) return null;
+  return now - new Date(q.at).getTime() <= QC_KEEP_MS ? q : null;
 }
 
 /** Which of a live product's photos to swap for new ones: by number (the main one is 1), the last few, or all but the main one. */
@@ -393,8 +429,11 @@ export async function updateSession(
     assistantPending: AssistantPending | LiveValueAsk | AddPhotosAsk | ProductPickAsk | QcLiveAsk | null;
     lastListed: ListedProducts | null;
   }>,
+  /** Drop a rejected product's question held under the one being cleared too (a restart, a cleared chat). */
+  opts: { dropHeld?: boolean } = {},
 ): Promise<void> {
   const db = createServerClient();
+  if (patch.assistantPending !== undefined) patch = { ...patch, assistantPending: await withHeldQc(phoneNumber, patch.assistantPending, opts.dropHeld === true) };
   const update: Record<string, unknown> = { updated_at: new Date().toISOString() };
   if (patch.state         !== undefined) update.state           = patch.state;
   if (patch.listingId     !== undefined) update.listing_id      = patch.listingId;
@@ -415,6 +454,33 @@ export async function updateSession(
   if (patch.lastListed !== undefined) update.last_listed = patch.lastListed;
   await db.from("whatsapp_sessions").update(update).eq("phone_number", phoneNumber);
 }
+
+/**
+ * A rejected product's question that stays open (switch assistant_followup)
+ * isn't lost to the chat's next question (reviewing step 2: "What should its
+ * stock be?" wrote over it): a new question holds it, and clearing that
+ * question brings it back while it's open. A new qc_live question replaces
+ * it; `dropHeld` (a restart) clears both.
+ */
+async function withHeldQc(phoneNumber: string, next: AssistantPendingValue, dropHeld: boolean): Promise<AssistantPendingValue> {
+  if (next && "kind" in next && next.kind === "qc_live") return next;
+  if (next && next.heldQc) return next;
+  if (!next && dropHeld) return null;
+  let current: unknown = null;
+  try {
+    const { data } = await createServerClient().from("whatsapp_sessions").select("assistant_pending").eq("phone_number", phoneNumber).maybeSingle();
+    current = (data as { assistant_pending?: unknown } | null)?.assistant_pending ?? null;
+  } catch {
+    return next;
+  }
+  const isQc = (current as { kind?: unknown } | null)?.kind === "qc_live";
+  // Clearing the question itself clears it; a new question holds it.
+  const held = isQc ? (next ? openKeptQc(current) : null) : openKeptQc((current as { heldQc?: unknown } | null)?.heldQc);
+  if (!held) return next;
+  return next ? { ...next, heldQc: held } : held;
+}
+
+type AssistantPendingValue = AssistantPending | LiveValueAsk | AddPhotosAsk | ProductPickAsk | QcLiveAsk | null;
 
 /**
  * Win the right to send ONE "got it (N photos)" confirmation for the burst
@@ -510,5 +576,5 @@ export async function resetSession(phoneNumber: string): Promise<void> {
     // the next one before the seller ever gets asked again. Unpicked, the
     // next batch falls back to preferredBatchQuiet, which is kept.
     batchQuiet: null,
-  });
+  }, { dropHeld: true });
 }

@@ -41,7 +41,7 @@
  */
 
 import { createServerClient } from "@/lib/supabase/server";
-import { isAdmin } from "@/lib/auth/is-admin";
+import { switchedOnFor } from "@/lib/whatsapp/switches";
 import { availableCredits, isUnmetered, listingCreditCost } from "@/lib/billing/extension-credits";
 import { LABEL_CREDIT_COST, LIVE_CHANGE_CREDIT_COST, LIVE_LISTING_CREDIT_COST, NOTICE_CREDIT_COST, POLISH_CREDIT_COST, REPORT_CREDIT_COST } from "@/lib/billing/credit-packs";
 
@@ -69,7 +69,7 @@ import {
   answerProductPhotos, productDetailsLookup, proposeAddSize, proposeBulkChange, proposeContentChange, proposeLiveChange, shorten, whereLine,
   type AddSizeRequest, type BulkOnly, type BulkScope, type ContentRequest, type WhichProduct,
 } from "@/lib/whatsapp/shop";
-import { fixRejected } from "@/lib/whatsapp/fix-rejected";
+import { fixRejected, markQcAsked } from "@/lib/whatsapp/fix-rejected";
 import {
   answerBrand, answerCategoryNeeds, answerLinkedShops, answerPayoutDetail, answerReport, answerWarehouseStock, proposeWarehouseOrder,
   proposeWarehouseShipped, type ReportKind,
@@ -137,19 +137,6 @@ export async function assistantFor(userId: string, _phone: string): Promise<bool
  */
 export async function agentFor(userId: string): Promise<boolean> {
   return switchedOnFor("assistant_agent", userId);
-}
-
-/** An app_settings switch: "all", "admins", or a list of user ids. Off without the row or on error. */
-async function switchedOnFor(key: string, userId: string): Promise<boolean> {
-  try {
-    const { data } = await createServerClient().from("app_settings").select("value").eq("key", key).maybeSingle();
-    const v = data?.value as unknown;
-    if (v === "all") return true;
-    if (v === "admins") return isAdmin(userId);
-    return Array.isArray(v) && v.includes(userId);
-  } catch {
-    return false;
-  }
 }
 
 // ─── What the AI is told ──────────────────────────────────────────────────
@@ -1828,7 +1815,7 @@ export async function interpretThroughFrontDoor(
   products: ProductFacts[],
   message: string,
   opts: {
-    batchId?: string | null; conversation?: string[]; web?: boolean; position?: string; waitingFor?: string;
+    batchId?: string | null; conversation?: string[]; web?: boolean; position?: string; waitingFor?: string; waitingStays?: boolean;
     listed?: { count: number; what: string } | null; listedSids?: string[]; answered?: { area?: string };
   } = {},
 ): Promise<{ area: string; action: AssistantAction | Clarify; links: Record<string, AssistantLink>; raw: string }> {
@@ -1839,6 +1826,7 @@ export async function interpretThroughFrontDoor(
   const links = assistantLinks({ batchId: opts.batchId, countrySlug: seller.countrySlug });
   const { area, action, raw } = await frontDoor({
     stage, message, conversation: opts.conversation ?? [], drafts: products, waitingFor: opts.waitingFor,
+    ...(opts.waitingStays ? { waitingStays: true } : {}),
     listed: opts.listed ? { ...opts.listed, items: shop.listed } : null,
     seller: seller.lines, links, currency, web: opts.web ?? false, shopNames: shop.names, listingCost, position: opts.position, memory,
     ...(opts.answered ? { answered: opts.answered } : {}),
@@ -1858,7 +1846,7 @@ export async function interpretThroughAgent(
   products: ProductFacts[],
   message: string,
   opts: {
-    batchId?: string | null; conversation?: string[]; web?: boolean; position?: string; waitingFor?: string;
+    batchId?: string | null; conversation?: string[]; web?: boolean; position?: string; waitingFor?: string; waitingStays?: boolean;
     listed?: { count: number; what: string } | null; listedSids?: string[]; answered?: { area?: string };
   } = {},
 ): Promise<{ actions: AssistantAction[]; clarify: Clarify | null; links: Record<string, AssistantLink>; raw: string }> {
@@ -1873,6 +1861,7 @@ export async function interpretThroughAgent(
     : [];
   const input: FrontDoorInput = {
     stage, message, conversation: opts.conversation ?? [], drafts: products, waitingFor: opts.waitingFor,
+    ...(opts.waitingStays ? { waitingStays: true } : {}),
     listed: opts.listed ? { ...opts.listed, items: listedItems } : null,
     seller: seller.lines, links, currency, web: opts.web ?? false, shopNames: shop.map((p) => p.name).filter(Boolean), listingCost,
     position: opts.position, memory, ...(opts.answered ? { answered: opts.answered } : {}),
@@ -2228,7 +2217,7 @@ export async function runAssistant(
   text: string,
   stage: Stage,
   hintSeq?: number,
-  opts: { position?: string; waitingFor?: string; answered?: { area?: string } } = {},
+  opts: { position?: string; waitingFor?: string; waitingStays?: boolean; answered?: { area?: string } } = {},
 ): Promise<AssistantOutcome> {
   // A button id from an older message ("apick:2", "value:3") isn't words to understand.
   if (/^[a-z_]+:\S+$/i.test(text.trim())) return "default";
@@ -2271,6 +2260,7 @@ export async function runAssistant(
     products = batchId ? await productFacts(await batchListings(batchId, userId)) : [];
     const facts = {
       batchId, hintSeq, conversation, web: isWebAddress(phone), position, waitingFor: opts.waitingFor,
+      ...(opts.waitingStays ? { waitingStays: true } : {}),
       listed: listedFresh(session),
     };
     const more = { ...facts, listedSids: session.lastListed?.sids, ...(opts.answered ? { answered: opts.answered } : {}) };
@@ -2282,6 +2272,7 @@ export async function runAssistant(
         const agent = await interpretThroughAgent(userId, stage, products, text, more);
         if (agent.clarify) {
           await sendClarify(phone, agent.clarify);
+          await markQcAsked(phone, session.assistantPending, agent.clarify.question);
           await logTurn(userId, stage, text, agent.clarify as unknown as AssistantAction, `asked: ${agent.clarify.question}`.slice(0, 300), agent.raw);
           return "handled";
         }
@@ -2305,6 +2296,7 @@ export async function runAssistant(
       const door = await interpretThroughFrontDoor(userId, stage, products, text, more);
       if (door.action.type === "clarify") {
         await sendClarify(phone, door.action, door.area || undefined);
+        await markQcAsked(phone, session.assistantPending, door.action.question);
         await logTurn(userId, stage, text, door.action as unknown as AssistantAction, `asked: ${door.action.question}`.slice(0, 300), agentNote + door.raw);
         return "handled";
       }
@@ -2520,8 +2512,11 @@ async function carryOut(
       return answerReport(userId, phone, action.kind, action.period);
     case "bulk":
       return proposeBulkChange(userId, phone, action.scope, action.words, action.change, action.scope === "listed" ? session.lastListed?.sids ?? [] : [], action.only ?? null);
-    case "content_change":
-      return proposeContentChange(userId, phone, action.product, action.request, whichOf(userId, phone, action));
+    case "content_change": {
+      const outcome = await proposeContentChange(userId, phone, action.product, action.request, whichOf(userId, phone, action));
+      await closeOfferedQc(phone, session, outcome);
+      return outcome;
+    }
     case "brand_check":
       return answerBrand(userId, phone, action.brand, action.product);
     case "category_info":
@@ -2613,6 +2608,19 @@ const startingNudge = (session: WhatsAppSession) =>
 
 /** A "What should its stock be?" older than this is no longer what a number answers. */
 const LIVE_VALUE_TTL_MS = 10 * 60_000;
+
+/**
+ * A rejected product's question that stays open (switch assistant_followup)
+ * closes once its change is offered for the tap: a typed "yes" after that is
+ * about the offer, never "keep what Jumia has". Its sizes count as it.
+ */
+async function closeOfferedQc(phone: string, session: WhatsAppSession, outcome: string): Promise<void> {
+  const q = session.assistantPending;
+  if (!q || !("kind" in q) || q.kind !== "qc_live" || !q.keep) return;
+  const sku = /^offered content \(.*\) for (\S+)$/.exec(outcome)?.[1];
+  if (!sku) return;
+  if (sku === q.sku || sku.startsWith(`${q.sku}-`) || q.sku.startsWith(`${sku}-`)) await updateSession(phone, { assistantPending: null });
+}
 
 /**
  * The answer to the assistant's "What should its stock be?" about live
