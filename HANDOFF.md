@@ -1,8 +1,9 @@
-# Handoff: where things stand (2026-10-12, 12:05 UTC)
+# Handoff: where things stand (2026-10-13)
 
 Read this first. Then use AGENTS.md (about 3,900 lines) as the reference:
 search it, don't read it top to bottom. Its newest sections are near the
-bottom, under "Outstanding work / known gaps". Among them: "Rejected products
+bottom, under "Outstanding work / known gaps". Among them: "The chat asks
+what Jumia needs, and keeps the question open" (13 Oct), "Rejected products
 fixed from Jumia's words…", "A batch Jumia turned down", "Autopilot", "Agent
 mode for everyone" and the language sections.
 
@@ -21,9 +22,13 @@ mode for everyone" and the language sections.
 
 ## State right now
 
-- `main` = `staging` = production at **1ed56a9**. 2,143 jest tests pass, and
-  `npm run build` and `npx tsc --noEmit -p .` are clean. Nothing is
-  uncommitted.
+- `main` = `staging` = production at **c84b885** (the plan; code as at
+  1ed56a9).
+- Branch `claude/cool-brown-jjq19c`: the plan's 7 steps, one commit each,
+  **not merged or deployed**. 2,202 jest tests pass, and `npm run build`
+  and `npx tsc --noEmit -p .` are clean.
+- The table `jumia_qc_required` is already live: the migration was applied
+  and 22 rows seeded on 13 Oct.
 - **Site:** https://pandaworldai.site.
 - **Vercel:** project `prj_IrXq67lWrE27mqqkftA5Rq0k8MN0`, team
   `team_0gS0hzDkeGPYYv2b8Wwdemqj`, Pro **trial**, region arn1 (Stockholm).
@@ -111,23 +116,35 @@ mode for everyone" and the language sections.
 | 4b113bd, ae4507f | Camera in the web chat, phones and tablets only | — |
 | ef73e36 | Autopilot: owner alerts by email, AI budget guard, Stockholm region | — |
 
-**Old offers from the owner's 05:30 chat:** two `jumia_product_changes` rows
-are still `pending`, and their old Yes buttons still work.
+**Old offers from the owner's 12 Oct chats:** three `jumia_product_changes`
+rows are still `pending`, and their old Yes buttons still work. The owner
+decides whether to cancel them.
 
 - `3b86a10f…`: the collagen rewrite. Wrong fix (it was a weight rejection).
 - `74ce675b…`: the creatine rewrite. It names "Nutricost", which Jumia
   would reject.
+- `321da3a5…` (17:07): a description rewrite of the *other* collagen
+  product (Collagen Peptides), offered for "That is the weight of the
+  collagen booster". It names "Nutricost" too.
 
 ## Open work, most important first
 
-0. **Build next: docs/plan-2026-10-13-ask-what-jumia-needs.md**, as the
-   owner asked on 13 Oct. Follow it step by step, behind the
-   `assistant_followup` switch. In it:
-   - the weight sent as "0.1kg" bug;
-   - keeping a rejected product's question open;
-   - a failed check going back to the model once;
-   - learning what each category's quality check needs, and asking it
-     before submit.
+0. **docs/plan-2026-10-13-ask-what-jumia-needs.md: built** on
+   `claude/cool-brown-jjq19c`, behind `assistant_followup` (AGENTS.md, "The
+   chat asks what Jumia needs…"). For the owner to decide, in order:
+   - merge and deploy (then sync staging);
+   - set app_settings `assistant_followup` = "admins" and test:
+     - fix a rejected product, replying in their own words;
+     - change the subject mid-question;
+     - draft a cosmetic and see the FDA question before submit;
+   - run the test set's live_changes area in agent mode (about $0.30);
+   - then "all".
+
+   Two fixes go to every seller with the deploy:
+   - a live weight is sent as kg;
+   - an FDA number never goes into a certifications list.
+
+   Not done: the optional thinking "low" for turns with an open question.
 1. **Before inviting sellers.** The owner decides each of these; advise
    only:
    - **Supabase Pro**, for backups.

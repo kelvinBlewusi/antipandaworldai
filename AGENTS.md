@@ -3245,7 +3245,9 @@ What changed:
 - **The reply is the answer** (lib/whatsapp/fix-rejected.ts):
   - Asking sets `assistantPending` to a `QcLiveAsk` (session.ts). intake
     routes the next message to `answerQcLive` before anything else reads it.
-    A tap, a question back or "stop" lets it go.
+    A tap, a question back or "stop" lets it go. Where assistant_followup is
+    on it stays open instead: see "The chat asks what Jumia needs, and keeps
+    the question open" (2026-10-13).
   - `fixRejected` also reads the answer from the seller's own message, so
     "change the brand to X" is put in, never asked again.
   - Each answer is offered with `proposeContentChange` for one tap:
@@ -3291,6 +3293,204 @@ What changed:
 - Still open from that chat: the collagen and creatine rewrites from that
   morning are still pending rows. Tapping their old Yes still sends them, and
   the collagen one is the wrong fix.
+
+### The chat asks what Jumia needs, and keeps the question open (owner, 2026-10-13: "build the plan step by step… behind the assistant_followup switch")
+
+The plan is docs/plan-2026-10-13-ask-what-jumia-needs.md. It came from the
+owner's web chat of 12 Oct 17:05–17:11: six messages to fix one weight, and
+a wrong rewrite offered on the way. The agent's own calls
+(`whatsapp_assistant_log.raw`) showed three failures:
+
+- the bot's weight question was thrown away by the next message;
+- a failed check sent the fixed "What should I change on it?" in place of
+  what the model understood;
+- the weight Jumia already had couldn't be agreed to.
+
+Separately, 7 of the owner's 11 rejected products failed on something
+Jumia's category data calls optional (FDA number, warranty, real brand),
+so drafting never asked.
+
+**The switch:** app_settings `assistant_followup` ("all", "admins" or a list
+of user ids, read by `followupFor` in the new lib/whatsapp/switches.ts,
+where `switchedOnFor` moved). Off without the row, and behaviour is then as
+before, except the fixes marked "every seller" below. Not set yet.
+
+What changed, one commit per step:
+
+1. **A weight goes to Jumia as kg** (every seller, 4535319).
+   - Jumia's `product_weight` is a text field, "Weight (kg)", in all 1,251
+     categories we hold, so "Change the weight to 0.1kg" went out as
+     "0.1kg".
+   - `checkDetailValue` (lib/whatsapp/live-details.ts) now runs a shipping
+     weight through `parseWeightKg`: "0.1kg" → 0.1, "200g" → 0.2, and a
+     bare "350" asks "Is that 350 g or 350 kg?".
+   - The draft push still sends "N kg" (lib/jumia/api.ts `buildAttributes`).
+     Jumia has approved those for months, so it's left as it is.
+2. **A rejected product's question stays open** (fcd986d).
+   - `fixRejected` asks with what Jumia has now ("Jumia has 0.2 kg as its
+     weight now and turned that down"). It stores `keep`, `current`,
+     `jumiaSaid` and its own words (`asked`) on the `QcLiveAsk`.
+   - The question stays open 2 hours (`QC_KEEP_MS`). It closes on an answer,
+     stop, a tapped button, its change being offered (`closeOfferedQc`, also
+     when the agent offers it) or expiry.
+   - **A message is read word by word as its answer only while the bot's last
+     message is the question itself, or the agent's own question back about
+     its field** (`isTheQuestion`, `markQcAsked`). Then:
+     - "yes", "that's right", "update it for me on my Jumia shop" (typos
+       too, never a question) offer what Jumia has now, never for a brand;
+     - "0.1" is the weight;
+     - chat words ("ok thanks", "No") and questions are left to the chat.
+   - Anything else goes to the agent with the question open. The agent is
+     told the product, SKU, field, value now, Jumia's words and that "it"
+     means this product (`qcOpenQuestion`, lib/whatsapp/qc-open-question.ts).
+     The context says it stays open instead of "anything else closes the
+     question" (`WAITING_STAYS`).
+   - That rule came from a review of the first version, which read every
+     later message: "yes" to another offer, "make it 5" about another
+     product and "stop the sale on the kettle" were all taken as the
+     answer.
+   - Another question the chat asks ("What should its stock be?") holds it,
+     and it comes back once that one is answered or dropped (`withHeldQc`
+     in `updateSession`). A restart clears both.
+   - intake used to null it in three places, so the qc_live open-question
+     text never reached the AI. It now keeps it.
+   - Every seller: "FDA/SD.255-112170" keeps its "FDA" (`valueFromReply`,
+     lib/jumia/qc-answers.ts).
+3. **A failed check goes back to the model once** (42ea535).
+   - `contentAction`'s "Which product?" and "What should I change on it?"
+     come back as a new action, `needs {text, why}`, when `parseAction` is
+     given `needs`. The model can't choose it.
+   - `agentRead(…, { followup })`: a single `content_change` that comes back
+     as needs is answered with `why` (`NEEDS_PRODUCT`, `needsValue`: what's
+     missing, ask with clarify quoting what Jumia has now, or call it again
+     with the value as written). Then one more call is made, only to act.
+   - Out of time, an error, or no value again: today's question. The bot's
+     open question counts as naming a product for the checks.
+4. **clarify without buttons** (310eb73).
+   - `ActionDef.followupTool`. `AGENT_TOOLS_FOLLOWUP` has clarify needing
+     only the question, "leave options out when the answer is a value or a
+     name".
+   - `interpretThroughAgent` picks the list per seller. Every other tool is
+     byte for byte the same.
+5. **What each category's quality check needs is learned** (b73f115).
+   - Migration 2026-10-13_jumia-qc-required.sql (table
+     `jumia_qc_required`). **Applied to production and seeded on 13 Oct.**
+   - lib/jumia/qc-required.ts `requirementsIn` reads a rejection's fix and
+     each of its reasons on its own. Jumia often gives several in one:
+     "Wrong Category…; forbidden word 'Hot'; Kindly Provide … Registration
+     Number".
+   - What counts:
+     - an FDA number: the category's field, or `fda` for the description
+       where it has none;
+     - a warranty;
+     - a real brand ("use the actual brand name", "not a recognized brand",
+       a name read as a brand).
+   - Never the weight, and never a brand when the rejection's fix is a
+     placeholder ("instead use Generic/Fashion"; the whole rejection
+     decides, not one part of it).
+   - `learnQcRequirement` is called where every rejection is read:
+     `fixRejected` and intake `fixQcRejection`. Every seller: it only
+     records.
+   - **Seed** (scripts/seed-qc-required.ts, or the same reading run through
+     the connector): 44 distinct live rejection texts gave 22 rows:
+     - an FDA number in 15 categories (4 with an `fda` field: 1001090,
+       1005104, 1018810 and 1029504; 11 in the description, among them
+       1019709, 1016875 and 1000844);
+     - the warranty in 1002300;
+     - a real brand in 1000279, 1001422, 1003018, 1017155, 1018743 and
+       1029495.
+   - None of the 9 "use Generic/Fashion" categories was recorded. The seed
+     reads deleted products too: 126 of the 160 rejected rows are deleted,
+     and what Jumia asked still holds for the category.
+   - Every seller: an FDA number no longer goes into a `certifications`
+     field (`regulatoryField`, lib/jumia/qc-remedy.ts). In 1019709, 1016875
+     and 1000844 that's a list of eco labels that refuses a number.
+6. **Asked before a draft is sent** (b55b4e9).
+   - lib/whatsapp/qc-asks.ts `qcMissingFields`. A draft lacks a need when:
+     - the field is empty or a placeholder ("N/A", "None");
+     - for a warranty, it's anything the seller didn't give: drafting
+       writes one, and Jumia turned the Galaxy A15 down with it;
+     - an FDA number with no field of its own hasn't been given yet
+       (`field_sources["qc_given.fda"]`);
+     - the brand is Generic, Fashion or empty.
+
+     Skipped ones don't count (`field_sources["qc_skipped.<field>"]`).
+   - Readiness adds each need as a Held reason ("FDA registration number:
+     Jumia's quality check asks for it in this category") and a missing
+     field carrying `qc` (`MissingField`).
+   - `missingValueQuestion` asks it with why, where to find it, and "Don't
+     have it? Tap *Skip for now*: it's sent as it is, but Jumia will likely
+     turn it down." `answerQcValue` (intake) handles the answer:
+     - an FDA number needs digits;
+     - a brand must be one Jumia has, with close ones offered;
+     - a warranty or a field-less FDA number also goes in the description;
+     - Skip is kept, and the draft goes.
+   - Autofill reads only an FDA number in its own field (off a label),
+     never a brand or a warranty.
+7. **The test set** (b0a82b5).
+   - EvalCase fields: `waitingStays` (read as where the switch is on),
+     `asks` (a question back passes when it says this), `never` (answers
+     that fail the case) and `details`.
+   - Cases `qc-weight-listed`, `qc-weight-of-booster`, `qc-what-weight` and
+     `qc-update-it`, from the 12 Oct chat. Never: the other collagen
+     product, a description rewrite, the fixed "What should I change on
+     it?", "Drafts & Listings" for a live product.
+   - assistant-replay.test.ts replays the agent's own 12 Oct calls: as they
+     ran, each fails; where the switch is on, the question back passes.
+   - **Not run live yet:** the worker runs the deployed code.
+
+Tests:
+- jumia-capabilities ("a weight goes in as the number in kg");
+- jumia-shop-more ("the question stays open (switch assistant_followup)");
+- qc-live-answers ("agreeing with what Jumia has now");
+- whatsapp-intake-flow:
+  - "a rejected product's question that stays open…";
+  - "what the category's quality check asks for, before a draft is sent";
+- assistant-agent:
+  - "a change the checks can't send goes back to the model once";
+  - "asking without buttons";
+- whatsapp-assistant (the switch end to end);
+- qc-required (new);
+- whatsapp-readiness ("what the category's quality check asks for");
+- assistant-eval and assistant-replay ("…12 Oct weight chat").
+
+2,202 tests pass; tsc and the build are clean.
+
+Where it differs from the plan, and why:
+- **The plan expected `fda` for 1019709, 1016875 and 1000844, and a test
+  "the answer goes in `dynamic_attributes.fda`".** Those categories have no
+  `fda` field, so their FDA number goes in the description and is
+  recorded as given in field_sources.
+- **Placeholders count as missing:** a warranty "N/A", a brand Generic or
+  Fashion. Drafting never leaves those empty, so a plain empty check
+  would never ask.
+- **Brand:** asked while Generic or Fashion (the wig in 1018743 was
+  rejected with Fashion).
+- **The kept question is read word by word only as the reply to itself.**
+  The plan said "anything else that isn't an answer goes to the agent";
+  the first version read every message for 2 hours.
+
+Still open:
+- Owner decides:
+  - deploy;
+  - `assistant_followup` = "admins", then "all";
+  - the test-set run on live_changes (about $0.30);
+  - cancelling the stale offers `321da3a5…`, `3b86a10f…` and `74ce675b…`;
+  - resending the collagen weight. PA-MUTE4CYI now shows "waiting for
+    quality check" after the 0.1kg resend.
+- A typed "yes" after the agent's own clarify ("Send 0.2 kg again?") is
+  agreement only while the rejected product's question is open. Elsewhere,
+  a value from the bot's question still has to be typed.
+- **Not fixed (seen while building).**
+  - The causes:
+    - "Generic brand is not allowed for core electronics — use the actual
+      brand name" is classified as `cannot_fix` ("your shop can't sell
+      this brand") in `qcActionFromTable`;
+    - "COLOR column is required…" isn't recognised at all.
+  - The learning reads both correctly. The live fix of those rejections
+    doesn't yet.
+- Plan step 7's optional thinking "low" on turns with an open question:
+  not done. Run the set first.
 
 ### What sellers can and can't ask of Jumia (owner, 2026-10-09)
 
