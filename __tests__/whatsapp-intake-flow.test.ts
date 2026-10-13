@@ -3287,6 +3287,8 @@ describe("fixing a quality-check rejection", () => {
 
     expect(lastBody()).toContain("What is the product's FDA registration number?");
     expect(question()).toEqual({ listingId: QC_ID, kind: "value", field: "fda", fieldLabel: "FDA" });
+    // Learned for drafts in its category (plan step 5).
+    expect(db.tables.jumia_qc_required).toEqual([expect.objectContaining({ category_code: 5000001, field: "fda", kind: "value", seen: 1 })]);
     expect(pushCallCount).toBe(0);
     expect(autoAnalyzeCalls).toHaveLength(0);
 

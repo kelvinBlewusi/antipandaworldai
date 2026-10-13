@@ -685,6 +685,8 @@ describe("rejected products, fixed from what Jumia's quality check said", () => 
     reject(2, "Kindly Provide Product's Health/Food Regulation Registration Number. (Mandatory FDA registration number is missing.)");
     expect(await fixRejected(USER, PHONE, "wellington boot")).toBe("fix: ask_value");
     expect(last().body).toContain("No number? Jumia won't approve it until the product is registered.");
+    // Learned for drafts in its category (plan step 5).
+    expect(db.tables.jumia_qc_required).toEqual([expect.objectContaining({ category_code: 1000844, field: "fda", label: "FDA", kind: "value", seen: 1 })]);
     expect(await answerQcLive(USER, PHONE, pending(), "where do I find it?")).toBe(false);
     db.tables.whatsapp_sessions[0].assistant_pending = { kind: "qc_live", sku: "WEL-B", name: "Wellington Rain Boot", ask: "value", field: "fda", fieldLabel: "FDA", about: null, category: 1000844, at: new Date().toISOString() };
     expect(await answerQcLive(USER, PHONE, pending(), "FDA number is FDA/CS/24-1234")).toBe(true);

@@ -19,6 +19,7 @@
 import { createServerClient } from "@/lib/supabase/server";
 import { sendButtonsIfConfigured, sendCtaUrlIfConfigured, sendListIfConfigured, sendTextIfConfigured } from "@/lib/whatsapp/client";
 import { decideQcAction, type QcAction } from "@/lib/jumia/qc-remedy";
+import { learnQcRequirement } from "@/lib/jumia/qc-required";
 import { escapeHtml, parseBrandAnswer, parseWeightKg, warrantyAnswer } from "@/lib/jumia/qc-answers";
 import { fetchProductSet, findProducts, type ShopProduct } from "@/lib/jumia/shop";
 import { getCategoryAttributes, getCategoryByCode } from "@/lib/jumia/categories";
@@ -263,6 +264,8 @@ export async function fixRejected(userId: string, phone: string, query: string |
     reason, comment: null, title: product.name, brand: product.brand, categoryPath: category?.path ?? null,
     fields: attrs.map((a) => ({ name: a.name, label: a.label ?? null })),
   });
+  // What this category's quality check needs, for drafts in it (plan step 5; never throws).
+  await learnQcRequirement(Number.isFinite(code) ? code : null, decided.action, product.qcReason ?? null, attrs.map((a) => ({ name: a.name, label: a.label ?? null })));
   // Jumia sent no reason, but the seller says what to rewrite: their words are the fix.
   const action: QcAction = decided.action.kind === "ask_details" && said && namedFields(said).length > 0
     ? { kind: "redraft", why: "Jumia didn't send its reason with the product, so I went by what you said." }

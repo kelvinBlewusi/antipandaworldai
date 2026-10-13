@@ -13,7 +13,8 @@
     "snapshot-brands": "node --env-file=.env.local --import=tsx scripts/snapshot-brands.ts",
     "rotate-extension-key-pepper": "node --env-file=.env.local --import=tsx scripts/rotate-extension-key-pepper.ts",
     "print-unfixed-rejects": "node --env-file=.env.local --import=tsx scripts/print-unfixed-rejects.ts",
-    "backfill-not-visible-attributes": "node --env-file=.env.local --import=tsx scripts/backfill-not-visible-attributes.ts"
+    "backfill-not-visible-attributes": "node --env-file=.env.local --import=tsx scripts/backfill-not-visible-attributes.ts",
+    "seed-qc-required": "node --env-file=.env.local --import=tsx scripts/seed-qc-required.ts"
   },
   "dependencies": {
     "@clerk/nextjs": "^6.12.0",

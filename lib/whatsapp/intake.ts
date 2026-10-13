@@ -28,6 +28,7 @@ import { classifyJumiaRejection, isAutoFixable, extractRejectionText, rejectionF
 import { decideQcAction, type QcContext } from "@/lib/jumia/qc-remedy";
 import { answerQcLive, fixRejected, keptQc, parseFixTap } from "@/lib/whatsapp/fix-rejected";
 import { escapeHtml, parseWeightKg } from "@/lib/jumia/qc-answers";
+import { learnQcRequirement } from "@/lib/jumia/qc-required";
 import { answerAddPhotos } from "@/lib/whatsapp/live-photos";
 import { featureAccess, featureMinPackName } from "@/lib/billing/features";
 import { removeAttributesFromCache, getCategoryByCode, getCategoryAttributes, type JumiaCategoryAttribute } from "@/lib/jumia/categories";
@@ -5103,6 +5104,8 @@ async function fixQcRejection(
 
   const ctx = await qcContextFor(row, rejectionText);
   const decided = await decideQcAction(ctx);
+  // What this category's quality check needs, for drafts in it (plan step 5; never throws).
+  await learnQcRequirement(parseInt(String(row.category_code ?? ""), 10), decided.action, [ctx.reason, ctx.comment].filter(Boolean).join(": ") || null, ctx.fields);
   // The seller already pasted Vendor Center's reason: never ask again.
   const action = decided.action.kind === "ask_details" && opts.noDetailsAsk
     ? { kind: "redraft" as const, why: "Jumia's quality check rejected it." }
