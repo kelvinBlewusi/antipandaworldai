@@ -27,6 +27,7 @@ import { refillAttributesForCategory } from "@/lib/jumia/refill-attributes";
 import { classifyJumiaRejection, isAutoFixable, extractRejectionText, rejectionFingerprint, shouldBlockRepeatedAutoFix, extractNotVisibleAttributeNames, isStaleCategoryError, type Remedy, isPriceRejection, priceLimitInRejection } from "@/lib/jumia/rejection-remedy";
 import { decideQcAction, type QcContext } from "@/lib/jumia/qc-remedy";
 import { answerQcLive, fixRejected, keptQc, parseFixTap } from "@/lib/whatsapp/fix-rejected";
+import { qcOpenQuestion } from "@/lib/whatsapp/qc-open-question";
 import { escapeHtml, parseWeightKg, valueFromReply } from "@/lib/jumia/qc-answers";
 import { qcFieldLabel, qcMayAsk, type MissingField } from "@/lib/whatsapp/qc-asks";
 import { learnQcRequirement } from "@/lib/jumia/qc-required";
@@ -681,17 +682,8 @@ function openQuestion(session: WhatsAppSession): string | undefined {
   if (session.awaitingQcAnswer) return `what Jumia's quality check needs for a rejected product (${session.awaitingQcAnswer.kind})`;
   if (session.assistantPending && "kind" in session.assistantPending && session.assistantPending.kind === "qc_live") {
     const q = session.assistantPending;
-    if (q.keep) {
-      // Everything the agent needs to follow it up (switch assistant_followup).
-      const field = q.ask === "brand" ? "brand" : q.about === "weight" ? "weight (in kg, packed as it ships)" : q.fieldLabel;
-      return [
-        `Jumia's quality check rejected their product "${q.name}" (SKU ${q.sku}) and needs its ${field}`,
-        q.current ? `; Jumia has ${q.current} for it now` : "",
-        q.jumiaSaid ? `; Jumia said: "${q.jumiaSaid}"` : "",
-        `. While this is open, "it", "this" and "the product" mean this product`,
-        `; the change it needs is content_change for this product with its ${q.ask === "brand" ? "brand" : q.field ? `${q.fieldLabel} detail` : `${q.fieldLabel} in the description`}`,
-      ].join("");
-    }
+    // Everything the agent needs to follow it up (switch assistant_followup).
+    if (q.keep) return qcOpenQuestion(q);
     return `what Jumia's quality check needs for their rejected product ${q.name} (${q.fieldLabel.toLowerCase()})`;
   }
   if (session.assistantPending) return "which product they meant";

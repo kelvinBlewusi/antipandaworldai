@@ -81,3 +81,42 @@ describe("agent mode's recorded answers (test runs of 11 Oct)", () => {
     }
   });
 });
+
+// The owner's web chat, 2026-10-12 17:05-17:11, with the agent's own calls
+// from whatsapp_assistant_log.raw (docs/plan-2026-10-13-ask-what-jumia-needs.md
+// step 7). These cases are read as where assistant_followup is on.
+describe("agent mode's answers in the owner's 12 Oct weight chat", () => {
+  const COLLAGEN = "Enhancement Dietary Supplement - Collagen Boosters, Lifts Buttocks";
+  async function readOn(id: string, turns: Call[][], followup = true) {
+    const c = ASSISTANT_CASES.find((x) => x.id === id);
+    if (!c) throw new Error(`no case ${id}`);
+    const r = await agentRead(agentInput(c), replay(turns), caseLookups(c), {}, { followup });
+    return { ...scoreAgent(c, r), actions: r.actions, clarify: r.clarify };
+  }
+  const asksBack: Call[] = [{ name: "clarify", args: { question: "Jumia has 0.2 kg for it and turned that down. Send 0.2 kg again, or what does it weigh, packed as it ships?" } }];
+
+  it("17:06 \"That is the weight listed\": the call it made gave the fixed question; told why, its question back passes", async () => {
+    const call: Call[] = [{ name: "content_change", args: { product: COLLAGEN, details: [{ value: "That is the weight listed" }], rewrite: ["description"] } }];
+    expect(await readOn("qc-weight-listed", [call], false)).toMatchObject({ pass: false, actions: [{ type: "reply", text: expect.stringContaining("What should I change on it?") }] });
+    expect(await readOn("qc-weight-listed", [call, asksBack])).toMatchObject({ pass: true, asked: true });
+  });
+
+  it("17:07 \"…of the collagen booster\": a rewrite of the other collagen product never passes", async () => {
+    const call: Call[] = [{ name: "content_change", args: { product: "Collagen Peptides Powder 1LB (454 G) – Grass Fed Bovine Collagen Hydrolysate (Unflavored)", asked: { description: "That is the weight of the collagen booster" }, rewrite: ["description"] } }];
+    expect(await readOn("qc-weight-of-booster", [call])).toMatchObject({ pass: false, bare: false });
+  });
+
+  it("17:10 \"Update it for me…\": the right call with Jumia's 0.2 kg was dropped for not being said; told why, it asks", async () => {
+    const call: Call[] = [{ name: "content_change", args: { product: COLLAGEN, details: [{ detail: "weight", value: "0.2 kg" }] } }];
+    expect(await readOn("qc-update-it", [call], false)).toMatchObject({ pass: false });
+    expect(await readOn("qc-update-it", [call, asksBack])).toMatchObject({ pass: true });
+    // The same call again: no value said still, so today's question, and the case fails.
+    expect(await readOn("qc-update-it", [call, call])).toMatchObject({ pass: false });
+  });
+
+  it("17:09 \"…what is the weight ?\": never sent to Drafts & Listings for a live product", async () => {
+    const said: Call[] = [{ name: "reply", args: { text: `The weight currently on Jumia for *${COLLAGEN}* is *0.2 kg* (200 g). If you need to update it, you can check and edit it directly from your Drafts & Listings page.` } }];
+    expect(await readOn("qc-what-weight", [said])).toMatchObject({ pass: false });
+    expect(await readOn("qc-what-weight", [[{ name: "product_info", args: { product: COLLAGEN } }]])).toMatchObject({ pass: true });
+  });
+});

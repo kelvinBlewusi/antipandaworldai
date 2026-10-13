@@ -20,6 +20,7 @@
  */
 
 import type { Stage } from "@/lib/whatsapp/assistant";
+import { qcOpenQuestion } from "@/lib/whatsapp/qc-open-question";
 
 export type Area = "listing" | "drafts" | "live_changes" | "shop_info" | "orders" | "money" | "account_help" | "chat";
 
@@ -44,12 +45,44 @@ export interface EvalCase {
   web?: boolean;
   /** The bot's open question, as intake describes it. */
   waitingFor?: string;
+  /**
+   * The open question stays open while other requests come in (a rejected
+   * product's, switch assistant_followup): the case is read the way it is
+   * where the switch is on (its tools, the failed check sent back once).
+   */
+  waitingStays?: boolean;
+  /** A question back passes when it says this ("0.2": the weight Jumia has now). */
+  asks?: string;
+  /** Answers that fail the case whatever else it does (another product's rewrite, the fixed "What should I change on it?"). */
+  never?: Shape[];
+  /** What a product read (product_details) says for these catalog products, in place of the stand-in. */
+  details?: Record<string, string>;
   msg: string;
   ok: Shape[];
   note?: string;
 }
 
 // ─── Shared context ───────────────────────────────────────────────────────────
+
+/** The owner's collagen supplement that Jumia's check rejected for its weight, and the other collagen product in the shop. */
+const COLLAGEN = "Enhancement Dietary Supplement - Collagen Boosters, Lifts Buttocks";
+const PEPTIDES = "Collagen Peptides Powder 1LB (454 G) – Grass Fed Bovine Collagen Hydrolysate (Unflavored)";
+const WEIGHT_REASON = "Please confirm and update the actual weight of the product, as the current weight information appears to be inaccurate or missing. For example, a T-shirt listed as 15 kg instead of 150 g is incorrect and can lead to ship";
+/** The weight question that stays open (lib/whatsapp/fix-rejected.ts), and what's right while it is. */
+const QC_WEIGHT: Omit<EvalCase, "id" | "src" | "msg"> = {
+  area: "live_changes", stage: "idle", catalog: [COLLAGEN, PEPTIDES],
+  ctx: [`Bot: 🔍 *Enhancement Dietary Supplement - Collagen Boosters, Lifts B…*: Jumia's quality check needs something only you have. Jumia has 0.2 kg as its weight now and turned that down. What does it weigh, packed as it ships? Send it in kg or g, e.g. "0.35 kg" or "350 g". Reply with it here and I'll put it in and send it back to Jumia.`],
+  waitingFor: qcOpenQuestion({ name: COLLAGEN, sku: "PA-MUTE4CYI", ask: "value", about: "weight", field: "product_weight", fieldLabel: "Weight (kg)", current: "0.2 kg", jumiaSaid: WEIGHT_REASON }),
+  waitingStays: true,
+  details: { [COLLAGEN]: `Name: ${COLLAGEN}\nSKU PA-MUTE4CYI · OFF · rejected by Jumia's quality check: ${WEIGHT_REASON} · price GHS 150 · stock 0\nDetails: product_weight=0.2 kg` },
+  ok: [{ type: "content_change", product: "~Boosters", "request.details": "~0.2" }],
+  asks: "0.2",
+  never: [
+    { type: "content_change", product: "~Peptides" },
+    { type: "content_change", "request.rewrite": "~description" },
+    { type: "reply", text: "~What should I change on it" },
+  ],
+};
 
 const SIZES = ["XS", "S", "M", "L", "XL", "XXL", "3XL", "One Size"];
 const NECK_FAN = "Portable USB Rechargeable Neck Fan – 360° Adjustable Hands-Free Wearable Sports Fan with 3 Speeds";
@@ -423,4 +456,14 @@ export const ASSISTANT_CASES: EvalCase[] = [
   { id: "rewrite-after-not-found", src: "log 10-11 12:04", area: "live_changes", stage: "idle", catalog: ["Wireless Eyewear Audio Glasses - Bluetooth 5.0, Built-in Speaker", "Amino Acids Original BCAA 2:1:1 (Blue Pineapple)", "Clip File – Professional Document Organizer (Blue)"], ctx: ["Seller: I have a spectacle product i want to rewrite the description", "Bot: I couldn't find \"spectacle\" in your shop. Tell me its name as it shows on Jumia."], msg: "it is a bluetooth lens", ok: [{ type: "content_change", product: "~bluetooth", "request.rewrite": ["description"] }], note: "Answered \"What should I change on it?\": the rewrite was asked the message before." },
   { id: "photos-earing-typo", src: "log 10-11 11:38", area: "shop_info", stage: "idle", catalog: ["Gold Hoop Earrings for Women - Lightweight", "Silver Stud Earrings Set (3 Pairs)", NECK_FAN], msg: "okay i have an earing in the shop show it to me if it is more than one so i can begin working on one", ok: [{ type: "product_photos", product: "~ear" }, info("ear")], note: "\"earing\" found nothing." },
   { id: "chat-questions-remembered", src: "log 10-11 web", area: "chat", stage: "idle", ctx: ["Seller: what is my shop name", "Bot: Your Jumia shop is GEM MALL.", "Seller: how many orders today", "Bot: 📦 No orders today yet."], msg: "send me all the questions you remember i ever ask you", ok: [{ type: "reply", text: "~shop name" }], note: "Was \"I don't keep a record\": it sees the conversation." },
+  // The owner's web chat, 2026-10-12 17:05-17:11: six messages to fix one
+  // weight (docs/plan-2026-10-13-ask-what-jumia-needs.md step 7). The bot's
+  // weight question stays open; the right answer is the weight change for
+  // the collagen boosters, or a question back that says what Jumia has now.
+  { ...QC_WEIGHT, id: "qc-weight-listed", src: "log 10-12 17:06", msg: "That is the weight listed", note: "Got the fixed \"What should I change on it?\": the question had been dropped, and the agent's call had no value." },
+  { ...QC_WEIGHT, id: "qc-weight-of-booster", src: "log 10-12 17:07", msg: "That is the weight of the collagen booster", note: "Rewrote the description of the other collagen product (Nutricost)." },
+  { ...QC_WEIGHT, id: "qc-update-it", src: "log 10-12 17:10", ctx: [...QC_WEIGHT.ctx!, "Seller: That is the weight listed", "Bot: Jumia has 0.2 kg for it and turned that down. Send 0.2 kg again, or what does it weigh, packed as it ships?"], msg: "Update it for me on my JUMIA shop", note: "The agent called the change with 0.2 kg; the checks dropped it (not in the message) and the fixed question went out." },
+  { ...QC_WEIGHT, id: "qc-what-weight", src: "log 10-12 17:09", msg: "🔍 Enhancement Dietary Supplement - Collagen Boosters Is a rejected product what is the weight ?",
+    ok: [...QC_WEIGHT.ok, { type: "product_info", product: "~Boosters" }, { type: "product_text", product: "~Boosters" }, { type: "reply", text: "~0.2" }],
+    never: [...QC_WEIGHT.never!, { type: "reply", text: "~Drafts & Listings" }], note: "Answered 0.2 kg, then sent them to Drafts & Listings for a live product." },
 ];

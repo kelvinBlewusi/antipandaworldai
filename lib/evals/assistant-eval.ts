@@ -36,7 +36,7 @@ import { notifyOwner } from "@/lib/ops/notify-owner";
 import { testBudgetToday } from "@/lib/ops/budget-guard";
 import { ASSISTANT_CASES, type EvalCase, type Shape } from "@/lib/evals/assistant-cases";
 import { frontDoor, type FrontDoorInput } from "@/lib/assistant-v2/front-door";
-import { agentRead, agentSystem, catalogLookups, geminiAgentCall, type AgentLookups } from "@/lib/assistant-v2/agent";
+import { AGENT_TOOLS, AGENT_TOOLS_FOLLOWUP, agentRead, agentSystem, catalogLookups, geminiAgentCall, type AgentLookups } from "@/lib/assistant-v2/agent";
 import { findProducts, fromRow } from "@/lib/jumia/shop";
 import type { ListingRow } from "@/lib/supabase/types";
 
@@ -140,7 +140,8 @@ function facts(c: EvalCase): ProductFacts[] {
 export async function understandFrontDoor(c: EvalCase, models: { router: string; reader: string }) {
   return frontDoor({
     stage: c.stage, message: c.msg, conversation: c.ctx ?? [], drafts: facts(c), listed: c.listed ?? null,
-    waitingFor: c.waitingFor, seller: SELLER, links: assistantLinks(), currency: "GHS", web: c.web ?? true, shopNames: c.catalog,
+    waitingFor: c.waitingFor, ...(c.waitingStays ? { waitingStays: true } : {}),
+    seller: SELLER, links: assistantLinks(), currency: "GHS", web: c.web ?? true, shopNames: c.catalog,
   }, models);
 }
 
@@ -151,14 +152,17 @@ export async function understandFrontDoor(c: EvalCase, models: { router: string;
  * chat does with them, not the facts.
  */
 export async function understandAgent(c: EvalCase, model: string) {
-  return agentRead(agentInput(c), geminiAgentCall(model, agentSystem(2), { feature: "assistant_eval" }), caseLookups(c));
+  // A case with a question that stays open is read as where assistant_followup is on.
+  const followup = c.waitingStays === true;
+  return agentRead(agentInput(c), geminiAgentCall(model, agentSystem(2), { feature: "assistant_eval" }, followup ? AGENT_TOOLS_FOLLOWUP : AGENT_TOOLS), caseLookups(c), {}, { followup });
 }
 
 /** What agent mode is given for the case: its stage, conversation, drafts and the products just listed. */
 export function agentInput(c: EvalCase): FrontDoorInput {
   return {
     stage: c.stage, message: c.msg, conversation: c.ctx ?? [], drafts: facts(c), listed: c.listed ?? null,
-    waitingFor: c.waitingFor, seller: SELLER, links: assistantLinks(), currency: "GHS", web: c.web ?? true, shopNames: c.catalog, listingCost: 2,
+    waitingFor: c.waitingFor, ...(c.waitingStays ? { waitingStays: true } : {}),
+    seller: SELLER, links: assistantLinks(), currency: "GHS", web: c.web ?? true, shopNames: c.catalog, listingCost: 2,
   };
 }
 
@@ -169,6 +173,7 @@ export function caseLookups(c: EvalCase): AgentLookups {
     const hits = findProducts(shop, words, 5);
     if (hits.length !== 1) return hits.map((p) => `- ${p.name} (SKU ${p.sellerSku})`);
     const p = hits[0];
+    if (c.details?.[p.name]) return [c.details[p.name]];
     return [`Name: ${p.name}\nSKU ${p.sellerSku} · ON · approved · price GHS 100 · stock 5\nPhotos: 3 (the main one first)\nDetails: color=Black; material=Plastic; what_is_in_the_box=1 x ${p.name}`];
   };
   return { ...catalogLookups(shop), productDetails };
@@ -177,13 +182,24 @@ export function caseLookups(c: EvalCase): AgentLookups {
 /** Whether agent mode's reading passes the case, as a run scores it. Pure. */
 export function scoreAgent(c: EvalCase, read: { actions: unknown[]; clarify: unknown }): { pass: boolean; bare: boolean; asked: boolean } {
   const asked = read.clarify != null;
-  const reply = c.ok.some((shape) => shape.type === "reply" && Object.keys(shape).length === 1);
+  const askedRight = asked && askedWell(c, read.clarify);
+  const wrong = read.actions.some((a) => never(a, c));
   return {
-    pass: asked ? reply : read.actions.every((a) => passes(a, c)),
-    bare: asked ? reply : read.actions.some((a) => passes(a, c)),
+    pass: !wrong && (asked ? askedRight : read.actions.every((a) => passes(a, c))),
+    bare: !wrong && (asked ? askedRight : read.actions.some((a) => passes(a, c))),
     asked,
   };
 }
+
+/** A question back is right where any reply is, or where it says what the case `asks`. Pure. */
+export function askedWell(c: EvalCase, clarify: unknown): boolean {
+  if (c.ok.some((shape) => shape.type === "reply" && Object.keys(shape).length === 1)) return true;
+  const question = String((clarify as { question?: unknown } | null)?.question ?? "").toLowerCase();
+  return c.asks != null && question.includes(c.asks.toLowerCase());
+}
+
+/** An answer the case never takes. Pure. */
+export const never = (action: unknown, c: EvalCase) => (c.never ?? []).some((shape) => matchesShape(action, shape));
 
 const summary = (a: unknown) => JSON.stringify(a).slice(0, 400);
 
@@ -199,9 +215,9 @@ export async function runCase(c: EvalCase, model: string, opts: { pipeline?: Pip
         return { id: c.id, area: c.area, pass, bare, asked, got: summary(clarify ?? (actions.length === 1 ? actions[0] : actions)), raw: raw.slice(0, 600), ms: Date.now() - t0 };
       }
       const { area, action, raw } = await understandFrontDoor(c, { router: opts.router || model, reader: model });
-      // A question back is a reply with buttons: right where any reply is.
+      // A question back is a reply with buttons: right where any reply is, or where it says what the case asks.
       const asked = action.type === "clarify";
-      const pass = asked ? c.ok.some((shape) => shape.type === "reply" && Object.keys(shape).length === 1) : passes(action, c);
+      const pass = asked ? askedWell(c, action) : passes(action, c) && !never(action, c);
       return { id: c.id, area: c.area, pass, bare: pass, asked, routed: area, got: summary(action), raw: raw.slice(0, 600), ms: Date.now() - t0 };
     } catch (e) {
       lastError = (e as Error).message.slice(0, 200);

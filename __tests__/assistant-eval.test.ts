@@ -20,7 +20,7 @@ jest.mock("@/lib/ai/gemini-client", () => ({
 }));
 
 import { ASSISTANT_CASES, type EvalCase } from "@/lib/evals/assistant-cases";
-import { byArea, matchesShape, passes, queueRun, routing, runCase, workOnRuns } from "@/lib/evals/assistant-eval";
+import { askedWell, byArea, matchesShape, never, passes, queueRun, routing, runCase, scoreAgent, workOnRuns } from "@/lib/evals/assistant-eval";
 import { contextText, frontDoor, namesInMessage, openQuestion } from "@/lib/assistant-v2/front-door";
 import { ACTION_TYPES, agentModel } from "@/lib/whatsapp/assistant";
 
@@ -49,12 +49,29 @@ describe("the test set", () => {
       expect(STAGES.has(c.stage)).toBe(true);
       expect(c.msg.trim().length).toBeGreaterThan(0);
       expect(c.ok.length).toBeGreaterThan(0);
-      for (const shape of c.ok) expect({ id: c.id, type: ACTIONS.has(shape.type) }).toEqual({ id: c.id, type: true });
+      for (const shape of [...c.ok, ...(c.never ?? [])]) expect({ id: c.id, type: ACTIONS.has(shape.type) }).toEqual({ id: c.id, type: true });
+      // A case read as where the switch is on says what its open question is.
+      if (c.waitingStays) expect({ id: c.id, waitingFor: !!c.waitingFor }).toEqual({ id: c.id, waitingFor: true });
       // An edit can only be right where there are drafts to edit.
       if (c.ok.every((s) => s.type === "edit")) expect({ id: c.id, drafts: (c.drafts ?? []).length > 0 }).toEqual({ id: c.id, drafts: true });
       // "Those" only means something after a list.
       if (c.ok.some((s) => s.scope === "listed")) expect({ id: c.id, listed: !!c.listed }).toEqual({ id: c.id, listed: true });
     }
+  });
+
+  // docs/plan-2026-10-13-ask-what-jumia-needs.md step 7: the owner's 12 Oct weight chat.
+  it("a question back passes where it says what the case asks; an answer it never takes fails it", () => {
+    const c = ASSISTANT_CASES.find((x) => x.id === "qc-weight-listed")!;
+    expect(c).toMatchObject({ waitingStays: true, asks: "0.2" });
+    expect(c.waitingFor).toContain("Jumia has 0.2 kg for it now");
+    expect(scoreAgent(c, { actions: [], clarify: { type: "clarify", question: "Send 0.2 kg again, or what does it weigh?", options: [] } })).toMatchObject({ pass: true, asked: true });
+    expect(scoreAgent(c, { actions: [], clarify: { type: "clarify", question: "Which product?", options: [] } })).toMatchObject({ pass: false });
+    expect(scoreAgent(c, { actions: [{ type: "content_change", product: "Enhancement Dietary Supplement - Collagen Boosters", request: { details: { weight: "0.2 kg" } } }], clarify: null })).toMatchObject({ pass: true });
+    expect(scoreAgent(c, { actions: [{ type: "reply", text: "What should I change on it? Write the new name…", link: null }], clarify: null })).toMatchObject({ pass: false });
+    expect(never({ type: "content_change", product: "Collagen Peptides Powder 1LB", request: { rewrite: ["description"] } }, c)).toBe(true);
+    // Elsewhere, as before: a question back is right where a reply is.
+    const old: EvalCase = { id: "x", src: "variant", area: "chat", stage: "idle", msg: "hi", ok: [{ type: "reply" }] };
+    expect(askedWell(old, { question: "What would you like?" })).toBe(true);
   });
 
   it("covers every area", () => {
