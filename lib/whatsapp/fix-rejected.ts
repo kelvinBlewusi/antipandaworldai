@@ -20,7 +20,7 @@ import { createServerClient } from "@/lib/supabase/server";
 import { sendButtonsIfConfigured, sendCtaUrlIfConfigured, sendListIfConfigured, sendTextIfConfigured } from "@/lib/whatsapp/client";
 import { decideQcAction, type QcAction } from "@/lib/jumia/qc-remedy";
 import { learnQcRequirement } from "@/lib/jumia/qc-required";
-import { escapeHtml, parseBrandAnswer, parseWeightKg, warrantyAnswer } from "@/lib/jumia/qc-answers";
+import { escapeHtml, parseBrandAnswer, parseWeightKg, valueFromReply, warrantyAnswer } from "@/lib/jumia/qc-answers";
 import { fetchProductSet, findProducts, type ShopProduct } from "@/lib/jumia/shop";
 import { getCategoryAttributes, getCategoryByCode } from "@/lib/jumia/categories";
 import { removeWordsFromText } from "@/lib/ai/restricted-words";
@@ -388,9 +388,7 @@ async function applyQcAnswer(userId: string, phone: string, q: QcLiveAsk, text: 
   // only from the reply, never guessed out of another message.
   if (!reply || t.length < 2 || t.length > 300) return "not an answer";
   if (/fda|registration/i.test(q.fieldLabel) && !/\d/.test(t)) return "not an answer";
-  // "FDA number is …" loses its lead-in; "FDA/SD.255-112170" (a seller's,
-  // 2026-10-11) is the number itself and keeps its "FDA".
-  const value = t.replace(/^(?:(?:the|its|it'?s|my)\s+)?(?:fda\b(?!\s*[/.-])\s*)?(?:reg(?:istration)?\.?\s*)?(?:no\.?|number|num)?\s*(?:is|:|=)?\s*/i, "").trim() || t;
+  const value = valueFromReply(t);
   return proposeContentChange(userId, phone, q.sku, q.field
     ? { details: { [q.field]: value.slice(0, 200) } }
     : { appendDescription: `<p><strong>${escapeHtml(q.fieldLabel)}:</strong> ${escapeHtml(value.slice(0, 200))}</p>` });

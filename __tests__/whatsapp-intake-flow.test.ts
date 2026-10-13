@@ -142,7 +142,11 @@ jest.mock("@/lib/jumia/push-listing", () => ({
 const needsReconnectFor = new Set<string>();
 // Settable per test — fields a listing's category requires, reported as
 // missing (readiness.ts's missingFields) until the listing has a value.
-type TestAttr = { name: string; label: string; type: string; allowed_values: string[]; required: boolean; is_variant: boolean };
+type TestAttr = {
+  name: string; label: string; type: string; allowed_values: string[]; required: boolean; is_variant: boolean;
+  // What the category's quality check asks for (lib/whatsapp/qc-asks.ts): skipped or given on the draft, it isn't missing.
+  qc?: { kind: "value" | "brand"; where: string; inCategory: boolean; description: boolean };
+};
 const requiredFieldsFor = new Map<string, TestAttr[]>();
 const WEIGHT: TestAttr = { name: "product_weight", label: "Weight (kg)", type: "string", allowed_values: [], required: true, is_variant: false };
 // Settable per test — Held reasons to report verbatim for a listing.
@@ -199,6 +203,9 @@ jest.mock("@/lib/whatsapp/readiness", () => ({
     if (missing.length > 0) return { ready: false, reasons: missing.map((m: string) => `needs ${m}`) };
     const { columnFor } = jest.requireActual("@/lib/jumia/attribute-mapping");
     const missingFields = (requiredFieldsFor.get(listingId) ?? []).filter((a) => {
+      const sources = (row.field_sources ?? {}) as Record<string, string>;
+      if (a.qc && (sources[`qc_skipped.${a.name}`] === "user" || sources[`qc_given.${a.name}`] === "user")) return false;
+      if (a.qc?.kind === "brand") return /^(generic|fashion|)$/i.test(String(row.brand ?? ""));
       const col = columnFor(a.name);
       const value = col ? row[col] : (row.dynamic_attributes as Record<string, unknown> | undefined)?.[a.name];
       return value == null || String(value).trim() === "";
@@ -246,7 +253,8 @@ jest.mock("@/lib/jumia/categories", () => ({
     const axis = variationHeld.size > 0
       ? [{ name: "variation", label: "Variation", type: "enum", allowed_values: VARIATION_OPTIONS, required: false, is_variant: true }]
       : [];
-    return [...(fields.length > 0 && code === 1015907 ? fields : []), ...axis];
+    // A quality-check field the category has no field for (an FDA number for the description) isn't one of its fields.
+    return [...(fields.length > 0 && code === 1015907 ? fields.filter((f) => !f.qc || f.qc.inCategory) : []), ...axis];
   },
   getListableCategories: async () => CATEGORY_ROWS,
   getCategoryByCode:     async (code: number) => CATEGORY_ROWS.find((c) => c.code === code) ?? null,
@@ -1009,6 +1017,96 @@ describe("a field the category requires, filled or asked for in chat", () => {
     const reply = sent.find((m) => m.body.includes("Price set to 240"))!;
     expect(reply.body).toContain("Jumia needs its *Weight (kg)*");
     expect(session().awaiting_value_for).toEqual({ listingId: "listing-1", field: "product_weight" });
+  });
+});
+
+// docs/plan-2026-10-13-ask-what-jumia-needs.md step 6 (switch assistant_followup;
+// readiness, mocked here, reports these fields with `qc` only where it's on).
+describe("what the category's quality check asks for, before a draft is sent", () => {
+  const SHOWER = {
+    id: "listing-1", user_id: USER, whatsapp_batch_id: "batch-1", whatsapp_seq: 1,
+    title: "Olive & Milk Shower Cream", selling_price: 240, status: "draft", weight_kg: 0.3,
+    description: "<p>A long enough description to clear the fifty-character minimum check.</p>",
+    category_code: "1015907", brand: "Palmolive", images: ["https://cdn.test/a.jpg"],
+    dynamic_attributes: {}, field_sources: {}, field_confidence: {},
+  };
+  const FDA: TestAttr = {
+    name: "fda", label: "FDA", type: "string", allowed_values: [], required: false, is_variant: false,
+    qc: { kind: "value", where: "it's on the label or the pack", inCategory: true, description: false },
+  };
+  const FDA_DESCRIPTION: TestAttr = { ...FDA, label: "FDA registration number", qc: { ...FDA.qc!, inCategory: false, description: true } };
+  const BRAND: TestAttr = {
+    name: "brand", label: "Brand", type: "string", allowed_values: [], required: false, is_variant: false,
+    qc: { kind: "brand", where: "the brand printed on the product or its box", inCategory: false, description: false },
+  };
+  async function drafted(field: TestAttr, patch: Record<string, unknown> = {}) {
+    db.tables.listings = [{ ...SHOWER, ...patch }];
+    requiredFieldsFor.set("listing-1", [field]);
+    seedSession({ state: "awaiting_confirmation", batch_size: 1, batch_seq: null });
+    sent.length = 0;
+    autoFillCalls.length = 0;
+    const { finalizeBatch } = await import("@/lib/whatsapp/intake");
+    await finalizeBatch("batch-1", PHONE, 1);
+  }
+  afterEach(() => { requiredFieldsFor.clear(); db.tables.jumia_brands = []; });
+
+  it("an FDA number: read off the label if it can be, else asked with why and Skip; the answer goes in its field", async () => {
+    await drafted(FDA);
+    expect(autoFillCalls).toEqual([["fda"]]);
+    const ask = sent.find((m) => m.body.includes("Jumia's quality check turns down products in this category without its *FDA registration number*"))!;
+    expect(ask.body).toContain("Reply with it (it's on the label or the pack).");
+    expect(ask.body).toContain("Don't have it? Tap *Skip for now*: it's sent as it is, but Jumia will likely turn it down.");
+    expect(ask.rows).toEqual(["skip value"]);
+    expect(session().awaiting_value_for).toEqual({ listingId: "listing-1", field: "fda", qc: true });
+
+    sent.length = 0;
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "it's FDA/SD.255-112170" });
+    expect(listings()[0].dynamic_attributes).toMatchObject({ fda: "FDA/SD.255-112170" });
+    expect(listings()[0].field_sources).toMatchObject({ "dynamic_attributes.fda": "user" });
+    expect(sent[0].body).toBe("✅ FDA registration number set to FDA/SD.255-112170 for Olive & Milk Shower Cream — ready to submit.");
+    expect(session().awaiting_value_for).toBeNull();
+  });
+
+  it("words without a number get a hint and the question stays; Skip sends it as it is", async () => {
+    await drafted(FDA);
+    sent.length = 0;
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "I don't have one" });
+    expect(sent[0].body).toContain("An FDA registration number has digits");
+    expect(session().awaiting_value_for).toEqual({ listingId: "listing-1", field: "fda", qc: true });
+
+    sent.length = 0;
+    await handleLinkedMessage(USER, PHONE, "m2", { text: "skip value" });
+    expect(listings()[0].field_sources).toMatchObject({ "qc_skipped.fda": "user" });
+    expect(sent[0].body).toBe("OK, Olive & Milk Shower Cream goes without its FDA registration number: Jumia's quality check will likely turn it down — ready to submit.");
+    expect(sent[0].rows).toEqual(["submit all"]);
+  });
+
+  it("an FDA number with no field of its own goes in the description", async () => {
+    await drafted(FDA_DESCRIPTION);
+    expect(autoFillCalls).toEqual([]);
+    sent.length = 0;
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "FDA number is FDA/CS/24-1234" });
+    expect(listings()[0].description).toBe(`${SHOWER.description}<p><strong>FDA registration number:</strong> FDA/CS/24-1234</p>`);
+    expect(listings()[0].field_sources).toMatchObject({ "qc_given.fda": "user" });
+    expect(sent[0].body).toContain("ready to submit");
+  });
+
+  it("a real brand: one Jumia has, or the close ones; never filled by the AI", async () => {
+    db.tables.jumia_brands = [{ code: 7, name: "Oraimo" }, { code: 8, name: "Oraimo Pro" }];
+    await drafted(BRAND, { brand: "Generic" });
+    expect(autoFillCalls).toEqual([]);
+    expect(sent.find((m) => m.body.includes("without a real brand. What brand is it? Reply with the brand printed on the product or its box."))).toBeDefined();
+
+    sent.length = 0;
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "Oraim" });
+    expect(sent[0].body).toContain('"Oraim" isn\'t in Jumia\'s brand list');
+    expect(sent[0].body).toContain("Close ones: Oraimo, Oraimo Pro");
+    expect(listings()[0].brand).toBe("Generic");
+
+    sent.length = 0;
+    await handleLinkedMessage(USER, PHONE, "m2", { text: "the brand is oraimo" });
+    expect(listings()[0].brand).toBe("Oraimo");
+    expect(sent[0].body).toBe("✅ Brand set to Oraimo for Olive & Milk Shower Cream — ready to submit.");
   });
 });
 

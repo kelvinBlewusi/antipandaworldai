@@ -31,6 +31,7 @@ import type { JumiaCategoryAttribute } from "@/lib/jumia/categories";
 import { columnFor } from "@/lib/jumia/attribute-mapping";
 import type { ListingRow } from "@/lib/supabase/types";
 import { priceMinimumForUser, isBelowMinimum, belowMinimumText } from "@/lib/jumia/price-minimums";
+import { qcAsksFor, qcFieldLabel, type MissingField } from "@/lib/whatsapp/qc-asks";
 
 export interface ListingReadinessResult {
   /** True only when a real push, as the seller currently has the listing,
@@ -48,8 +49,9 @@ export interface ListingReadinessResult {
    *  drifting if the wording here ever changes. */
   needsReconnect?: boolean;
   /** Fields the category requires that have no value — the ones the bot
-   *  can fill itself or ask the seller for (lib/whatsapp/missing-value.ts). */
-  missingFields?: JumiaCategoryAttribute[];
+   *  can fill itself or ask the seller for (lib/whatsapp/missing-value.ts) —
+   *  then what its quality check asks for (`qc`, lib/whatsapp/qc-asks.ts). */
+  missingFields?: MissingField[];
 }
 
 /**
@@ -303,7 +305,7 @@ export async function assessListingPushReadiness(
   if (preview.missingRequired.length > 0) {
     reasons.push(`this category also needs ${preview.missingRequired.join(", ")}`);
   }
-  const missingFields = preview.missingRequiredAttributes ?? [];
+  const missingFields: MissingField[] = [...(preview.missingRequiredAttributes ?? [])];
 
   const categoryCode = row.category_code ? parseInt(row.category_code as string, 10) : NaN;
   const variantAxes = categoryCode && !isNaN(categoryCode) ? await getVariantAxes(categoryCode) : [];
@@ -369,6 +371,14 @@ export async function assessListingPushReadiness(
     isFashionCategory(row.category_path)
   ) {
     reasons.push(`brand: this looks like a fashion item with no real brand set — open Edit to set one, or confirm "Fashion" as a placeholder`);
+  }
+
+  // What this category's quality check has turned products down without
+  // (an FDA number, a warranty, a real brand): asked before it's sent
+  // (switch assistant_followup; lib/whatsapp/qc-asks.ts).
+  for (const f of await qcAsksFor(userId, listingId, categoryCode, builtBrandName)) {
+    reasons.push(`${qcFieldLabel({ field: f.name, label: f.label, kind: f.qc!.kind })}: Jumia's quality check asks for it in this category`);
+    missingFields.push(f);
   }
 
   return { ready: reasons.length === 0, reasons, ...(missingFields.length > 0 ? { missingFields } : {}) };

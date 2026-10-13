@@ -39,6 +39,7 @@ jest.mock("@/lib/jumia/push-listing", () => ({
 
 import { assessListingPushReadiness } from "@/lib/whatsapp/readiness";
 import { _resetPriceMinimumCache } from "@/lib/jumia/price-minimums";
+import { _resetQcRequiredCache } from "@/lib/jumia/qc-required";
 
 const FULL_FIELDS = {
   description: "A long enough description to clear the fifty-character minimum check.",
@@ -726,5 +727,83 @@ describe("assessListingPushReadiness — Jumia's lowest price for the country", 
   it("is Ready at or above it", async () => {
     seedListing({ selling_price: 8.81 });
     expect(await assessListingPushReadiness("user_1", "listing-1")).toMatchObject({ ready: true, reasons: [] });
+  });
+});
+
+// docs/plan-2026-10-13-ask-what-jumia-needs.md step 6: what a category's quality
+// check has turned products down without is asked before a draft is sent.
+describe("assessListingPushReadiness — what the category's quality check asks for (switch assistant_followup)", () => {
+  const attr = (name: string, label: string) => ({ category_code: 1234, name, label, type: "string", allowed_values: [], required: false, is_variant: false, sort_order: 1 });
+  const need = (field: string, kind = "value", label: string | null = null) => ({ category_code: 1234, field, label, kind, seen: 2 });
+  beforeEach(() => {
+    _resetQcRequiredCache();
+    db.tables.app_settings = [{ key: "assistant_followup", value: "all" }];
+    db.tables.jumia_qc_required = [];
+  });
+  afterAll(() => { db.tables.app_settings = []; db.tables.jumia_qc_required = []; });
+
+  it("an FDA number in the category's own field: Held, and asked", async () => {
+    db.tables.jumia_category_attributes = [attr("fda", "FDA")];
+    db.tables.jumia_qc_required = [need("fda", "value", "FDA")];
+    seedListing();
+    const result = await assessListingPushReadiness("user_1", "listing-1");
+    expect(result.ready).toBe(false);
+    expect(result.reasons).toEqual(["FDA registration number: Jumia's quality check asks for it in this category"]);
+    expect(result.missingFields).toEqual([expect.objectContaining({ name: "fda", qc: { kind: "value", where: "it's on the label or the pack", inCategory: true, description: false } })]);
+    // Given (by the seller, or read off the label), it goes.
+    seedListing({ dynamic_attributes: { fda: "FDA/SD.255-112170" } });
+    expect(await assessListingPushReadiness("user_1", "listing-1")).toEqual({ ready: true, reasons: [] });
+  });
+
+  it("an FDA number with no field of its own (the owner's shower cream, 1019709): asked for the description", async () => {
+    db.tables.jumia_category_attributes = [attr("certifications", "Certifications")];
+    db.tables.jumia_qc_required = [need("fda", "value", "FDA registration number")];
+    seedListing();
+    expect((await assessListingPushReadiness("user_1", "listing-1")).missingFields)
+      .toEqual([expect.objectContaining({ name: "fda", label: "FDA registration number", qc: expect.objectContaining({ inCategory: false, description: true }) })]);
+    seedListing({ field_sources: { "qc_given.fda": "user" } });
+    expect((await assessListingPushReadiness("user_1", "listing-1")).ready).toBe(true);
+  });
+
+  it("a warranty: N/A or drafting's own words don't count; the seller's do", async () => {
+    db.tables.jumia_category_attributes = [attr("product_warranty", "Product warranty")];
+    db.tables.jumia_qc_required = [need("product_warranty", "value", "Warranty")];
+    seedListing({ warranty_text: "N/A" });
+    expect((await assessListingPushReadiness("user_1", "listing-1")).reasons).toEqual(["warranty: Jumia's quality check asks for it in this category"]);
+    seedListing({ warranty_text: "This product comes with a 1-year manufacturer's warranty.", field_sources: { warranty_text: "ai" } });
+    expect((await assessListingPushReadiness("user_1", "listing-1")).ready).toBe(false);
+    seedListing({ warranty_text: "1 year, repair by vendor", field_sources: { warranty_text: "user" } });
+    expect((await assessListingPushReadiness("user_1", "listing-1")).ready).toBe(true);
+  });
+
+  it("a real brand: Generic or Fashion is Held; a brand Jumia has goes", async () => {
+    db.tables.jumia_qc_required = [need("brand", "brand", "Brand")];
+    previewResult = { ...previewResult, products: [{ brand: { code: 1045133, name: "Generic" } }] } as PreviewMock;
+    seedListing({ brand: "Generic" });
+    const held = await assessListingPushReadiness("user_1", "listing-1");
+    expect(held.reasons).toEqual(["brand: Jumia's quality check asks for it in this category"]);
+    expect(held.missingFields).toEqual([expect.objectContaining({ name: "brand", qc: expect.objectContaining({ kind: "brand" }) })]);
+    previewResult = { ...previewResult, products: [{ brand: { code: 7, name: "Oraimo" } }] } as PreviewMock;
+    seedListing({ brand: "Oraimo" });
+    expect((await assessListingPushReadiness("user_1", "listing-1")).ready).toBe(true);
+  });
+
+  it("skipped: sent as it is", async () => {
+    db.tables.jumia_category_attributes = [attr("fda", "FDA")];
+    db.tables.jumia_qc_required = [need("fda", "value", "FDA")];
+    seedListing({ field_sources: { "qc_skipped.fda": "user" } });
+    expect(await assessListingPushReadiness("user_1", "listing-1")).toEqual({ ready: true, reasons: [] });
+  });
+
+  it("switched off, or nothing learned for the category: as before", async () => {
+    db.tables.jumia_category_attributes = [attr("fda", "FDA")];
+    db.tables.jumia_qc_required = [need("fda", "value", "FDA")];
+    db.tables.app_settings = [];
+    seedListing();
+    expect(await assessListingPushReadiness("user_1", "listing-1")).toEqual({ ready: true, reasons: [] });
+    db.tables.app_settings = [{ key: "assistant_followup", value: "all" }];
+    db.tables.jumia_qc_required = [{ ...need("fda", "value", "FDA"), category_code: 9999 }];
+    _resetQcRequiredCache();
+    expect(await assessListingPushReadiness("user_1", "listing-1")).toEqual({ ready: true, reasons: [] });
   });
 });

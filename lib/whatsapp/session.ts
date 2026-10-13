@@ -11,7 +11,11 @@ import type { ResearchNeed } from "@/lib/whatsapp/shop-research";
 
 
 /** A missing-value question the bot is waiting on (WhatsAppSession.awaitingValueFor). */
-export type ValueQuestion = { listingId: string; field: string; resubmit?: boolean };
+export type ValueQuestion = {
+  listingId: string; field: string; resubmit?: boolean;
+  /** What its category's quality check asks for (lib/whatsapp/qc-asks.ts), not a field it requires. */
+  qc?: true;
+};
 
 /**
  * The assistant's "Which product do you mean?" question

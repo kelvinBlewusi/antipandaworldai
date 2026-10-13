@@ -27,7 +27,8 @@ import { refillAttributesForCategory } from "@/lib/jumia/refill-attributes";
 import { classifyJumiaRejection, isAutoFixable, extractRejectionText, rejectionFingerprint, shouldBlockRepeatedAutoFix, extractNotVisibleAttributeNames, isStaleCategoryError, type Remedy, isPriceRejection, priceLimitInRejection } from "@/lib/jumia/rejection-remedy";
 import { decideQcAction, type QcContext } from "@/lib/jumia/qc-remedy";
 import { answerQcLive, fixRejected, keptQc, parseFixTap } from "@/lib/whatsapp/fix-rejected";
-import { escapeHtml, parseWeightKg } from "@/lib/jumia/qc-answers";
+import { escapeHtml, parseWeightKg, valueFromReply } from "@/lib/jumia/qc-answers";
+import { qcFieldLabel, qcMayAsk, type MissingField } from "@/lib/whatsapp/qc-asks";
 import { learnQcRequirement } from "@/lib/jumia/qc-required";
 import { answerAddPhotos } from "@/lib/whatsapp/live-photos";
 import { featureAccess, featureMinPackName } from "@/lib/billing/features";
@@ -3116,7 +3117,11 @@ const VALUE_SKIP_RE = /^skip( value| for now| it)?[.!]?$/i;
 async function assessFillingMissing(userId: string, listingId: string): Promise<ListingReadinessResult> {
   const first = await assessListingPushReadiness(userId, listingId);
   if (first.ready || !first.missingFields?.length) return first;
-  const filled = await autoFillMissingFields(userId, listingId, first.missingFields);
+  // What the quality check asks for is filled only from its own field, off a
+  // label (an FDA number): never a brand or a warranty made up (plan step 6).
+  const fillable = first.missingFields.filter((f) => !f.qc || (f.qc.inCategory && !f.qc.description && f.qc.kind === "value"));
+  if (fillable.length === 0) return first;
+  const filled = await autoFillMissingFields(userId, listingId, fillable);
   return filled.length > 0 ? assessListingPushReadiness(userId, listingId) : first;
 }
 
@@ -3137,7 +3142,7 @@ async function askForNextMissingValue(
   batchId:     string,
   opts: {
     from?: string; after?: string; prefix?: string;
-    known?: Map<string, JumiaCategoryAttribute[]>;
+    known?: Map<string, MissingField[]>;
     /** Readiness reasons already worked out, to spot a variation block without asking Jumia again. */
     reasons?: Map<string, string[]>;
     /** Products whose submit Jumia's rules just stopped over their variation. */
@@ -3190,7 +3195,7 @@ async function askBlockingValue(
   phoneNumber: string,
   l:           ListingRow,
   who:         string,
-  opts: { prefix?: string; known?: JumiaCategoryAttribute[]; reasons?: string[]; variationBlocked?: boolean; resubmit?: boolean; named?: boolean } = {},
+  opts: { prefix?: string; known?: MissingField[]; reasons?: string[]; variationBlocked?: boolean; resubmit?: boolean; named?: boolean } = {},
 ): Promise<boolean> {
   const code = Number(l.category_code);
   // Live, 2026-10-07: "✅ Product drafted: X." then "*X*" on the next line.
@@ -3203,7 +3208,8 @@ async function askBlockingValue(
   let reasons = opts.reasons;
   let fields = opts.known;
   if (!fields) {
-    const mayLack = (await getCategoryAttributes(code)).some((a) => a.required && !readAttributeValue(l, a.name).trim());
+    const mayLack = (await getCategoryAttributes(code)).some((a) => a.required && !readAttributeValue(l, a.name).trim())
+      || (await qcMayAsk(l.user_id as string, code));
     if (mayLack) {
       const assessment = await assessListingPushReadiness(l.user_id as string, l.id).catch(() => null);
       fields = assessment?.missingFields ?? [];
@@ -3213,7 +3219,7 @@ async function askBlockingValue(
 
   const attr = fields?.[0];
   if (attr) {
-    await updateSession(phoneNumber, { awaitingValueFor: { listingId: l.id, field: attr.name, ...resubmit } });
+    await updateSession(phoneNumber, { awaitingValueFor: { listingId: l.id, field: attr.name, ...resubmit, ...(attr.qc ? { qc: true as const } : {}) } });
     const question = missingValueQuestion(attr, who);
     const body = await prefixedBody(phoneNumber, opts.prefix, unnamed(question.body));
     if (question.options.length <= 3) {
@@ -3252,6 +3258,7 @@ async function answerMissingValue(
   text:        string,
 ): Promise<boolean> {
   const submitAll = { id: "submit all", title: "Submit all ✅" };
+  if (question.qc) return answerQcValue(userId, phoneNumber, batchId, batchSize, question, text);
 
   if (VALUE_SKIP_RE.test(text)) {
     const asked = await askForNextMissingValue(phoneNumber, batchId, { after: question.listingId, resubmit: question.resubmit });
@@ -3312,6 +3319,104 @@ async function answerMissingValue(
   }
   const unit = columnFor(attr.name) === "weight_kg" ? " kg" : "";
   return finishValueAnswer(userId, phoneNumber, batchId, batchSize, row, question, `✅ ${attr.label || attr.name} set to ${parsed.value}${unit} for ${label}`);
+}
+
+/**
+ * The reply to what a category's quality check asks for before a draft is
+ * sent (plan step 6; lib/whatsapp/qc-asks.ts): its brand (one Jumia has),
+ * or a value (an FDA number with its digits, a warranty), put in its field
+ * and, for a warranty or an FDA number with no field of its own, the
+ * description. Skip is kept on the draft, so it's sent as it is. False when
+ * the reply isn't an answer at all, like answerMissingValue.
+ */
+async function answerQcValue(
+  userId:      string,
+  phoneNumber: string,
+  batchId:     string,
+  batchSize:   number,
+  question:    ValueQuestion,
+  text:        string,
+): Promise<boolean> {
+  const skipButtons = [{ id: "skip value", title: "Skip for now" }, RESTART_BUTTON];
+  const db = createServerClient();
+  const { data } = await db.from("listings")
+    .select("id, user_id, whatsapp_seq, title, category_code, description, field_sources")
+    .eq("id", question.listingId).eq("user_id", userId).maybeSingle();
+  if (!data) return false;
+  const row = data as { id: string; whatsapp_seq: number | null; title: string | null; category_code: string | null; description: string | null; field_sources: Record<string, string> | null };
+  const label = batchSize > 1 && row.whatsapp_seq != null ? `product ${row.whatsapp_seq}` : (row.title ?? "your product");
+  const sources = { ...(row.field_sources ?? {}) };
+  const attr = question.field === "brand" ? undefined
+    : (await getCategoryAttributes(Number(row.category_code)).catch(() => [])).find((a) => a.name === question.field);
+  const field = question.field === "brand" ? "brand" : qcFieldLabel({ field: question.field, label: attr?.label ?? null, kind: "value" }, attr);
+  const t = text.trim();
+
+  const skip = async (said: string) => {
+    sources[`qc_skipped.${question.field}`] = "user";
+    await db.from("listings").update({ field_sources: sources, updated_at: new Date().toISOString() }).eq("id", row.id);
+    return finishValueAnswer(userId, phoneNumber, batchId, batchSize, row, question, said);
+  };
+  if (VALUE_SKIP_RE.test(t)) return skip(`OK, ${label} goes without its ${field}: Jumia's quality check will likely turn it down`);
+  // An edit to a product ("2: change the price to 150"), or a question, isn't an answer.
+  if (/^\s*\d{1,2}\s*:\s*\S/.test(t) || /\?\s*$/.test(t)) return false;
+
+  if (question.field === "brand") {
+    if (t.split(/\s+/).length > 5) return false;
+    const said = t.replace(/^(?:the\s+)?brand(?:\s+name)?\s*(?:is|:)?\s*/i, "").replace(/[.!]+$/, "").trim().slice(0, 80);
+    if (!said) return false;
+    if (/^(generic|none|no brand|unbranded|n\/?a)$/i.test(said)) return skip(`OK, ${label} stays Generic: Jumia's quality check will likely turn it down`);
+    // Checked against Jumia's brand list when it's been read (an empty cache takes it as written).
+    const listed = (await getBrandCount().catch(() => 0)) > 0;
+    const exact = listed ? await findBrandExact(said).catch(() => null) : null;
+    if (listed && !exact) {
+      const near = Array.from(new Set([
+        ...(await searchBrandsFromDB(said, 5).catch(() => [])), ...(await searchBrandsFromDB(said.slice(0, 3), 5).catch(() => [])),
+      ].map((b) => b.name))).slice(0, 6);
+      await replyButtons(phoneNumber,
+        `"${said}" isn't in Jumia's brand list, so Jumia would refuse it.` + (near.length > 0 ? ` Close ones: ${near.join(", ")}.` : "") +
+        " Reply with the brand exactly as Jumia has it. A brand Jumia doesn't have yet needs Jumia's brand form first.", skipButtons);
+      return true;
+    }
+    const brand = exact?.name ?? said;
+    sources.brand = "user";
+    await db.from("listings").update({ brand, field_sources: sources, updated_at: new Date().toISOString() }).eq("id", row.id);
+    return finishValueAnswer(userId, phoneNumber, batchId, batchSize, row, question, `✅ Brand set to ${brand} for ${label}`);
+  }
+
+  // An FDA number has digits; a sentence about something else isn't one.
+  const fda = /fda|registration/i.test(`${question.field} ${field}`);
+  if (fda && !/\d/.test(t)) {
+    if (t.split(/\s+/).length > 6) return false;
+    await replyButtons(phoneNumber, `An FDA registration number has digits, e.g. *FDA/SD.255-112170*. Reply with it as it's printed, or tap Skip.`, skipButtons);
+    return true;
+  }
+  const value = (fda ? valueFromReply(t) : t).slice(0, attr?.max_length ?? 200);
+  if (attr) {
+    const parsed = parseMissingValue(attr, value);
+    if (!parsed.ok) {
+      await replyButtons(phoneNumber, `⚠️ ${parsed.hint}`, skipButtons);
+      return true;
+    }
+    if (!(await saveMissingValue(row.id, attr, parsed.value, "user"))) {
+      await replyError(phoneNumber, "⚠️ I couldn't save that just now — send it again in a moment.");
+      return true;
+    }
+  }
+  // A warranty is asked for in the description too; an FDA number with no field of its own goes there.
+  if (!attr || /warrant/i.test(question.field)) {
+    const line = `<p><strong>${escapeHtml(field.charAt(0).toUpperCase() + field.slice(1))}:</strong> ${escapeHtml(value)}</p>`;
+    const { data: fresh } = await db.from("listings").select("description, field_sources").eq("id", row.id).maybeSingle();
+    const now = { ...(((fresh as { field_sources?: Record<string, string> } | null)?.field_sources) ?? sources), [`qc_given.${question.field}`]: "user" };
+    const { error } = await db.from("listings").update({
+      description: `${(fresh as { description?: string | null } | null)?.description ?? row.description ?? ""}${line}`,
+      field_sources: now, updated_at: new Date().toISOString(),
+    }).eq("id", row.id);
+    if (error) {
+      await replyError(phoneNumber, "⚠️ I couldn't save that just now — send it again in a moment.");
+      return true;
+    }
+  }
+  return finishValueAnswer(userId, phoneNumber, batchId, batchSize, row, question, `✅ ${field.charAt(0).toUpperCase() + field.slice(1)} set to ${value} for ${label}`);
 }
 
 /**
@@ -3626,7 +3731,7 @@ export async function finalizeBatch(
   // and most of a batch is typically still missing basic fields anyway —
   // assessListingPushReadiness only reaches Jumia once those are filled.
   const ASSESS_CONCURRENCY = 3;
-  const assessments: { ready: boolean; reasons: string[]; needsReconnect?: boolean; missingFields?: JumiaCategoryAttribute[] }[] = new Array(drafted.length);
+  const assessments: { ready: boolean; reasons: string[]; needsReconnect?: boolean; missingFields?: MissingField[] }[] = new Array(drafted.length);
   {
     let cursor = 0;
     const assessWorker = async (): Promise<void> => {

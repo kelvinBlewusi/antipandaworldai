@@ -30,6 +30,17 @@ export function parseWeightKg(text: string): { kg: string } | { unit: number } |
   return { kg: String(Math.round(kg * 1000) / 1000) };
 }
 
+/**
+ * A number Jumia asked for (an FDA registration number, a certificate), as
+ * the seller replied it: "FDA number is …" loses its lead-in; "FDA/SD.255-
+ * 112170" (a seller's, 2026-10-11) is the number itself and keeps its
+ * "FDA". Pure.
+ */
+export function valueFromReply(text: string): string {
+  const t = text.trim();
+  return t.replace(/^(?:(?:the|its|it'?s|my)\s+)?(?:fda\b(?!\s*[/.-])\s*)?(?:reg(?:istration)?\.?\s*)?(?:no\.?|number|num)?\s*(?:is|:|=)?\s*/i, "").trim() || t;
+}
+
 const GENERIC = /^(generic|none|no brand|unbranded|no name|n\/?a)[.!]*$/i;
 
 /**

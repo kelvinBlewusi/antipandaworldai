@@ -13,6 +13,7 @@ import { createServerClient } from "@/lib/supabase/server";
 import { extractAttributesForCategory } from "@/lib/actions/ai";
 import { columnFor, fieldChangeToUpdate } from "@/lib/jumia/attribute-mapping";
 import type { JumiaCategoryAttribute } from "@/lib/jumia/categories";
+import { qcFieldLabel, type MissingField } from "@/lib/whatsapp/qc-asks";
 
 /** Columns holding a measurement: a weight in kg, sizes in cm. */
 const MEASUREMENT_COLUMNS = new Set(["weight_kg", "size_l", "size_w", "size_h"]);
@@ -81,13 +82,28 @@ export function parseMissingValue(
 
 /** The question for one missing field, with taps for its allowed values when they fit. */
 export function missingValueQuestion(
-  attr: JumiaCategoryAttribute,
+  attr: MissingField,
   who:  string,
 ): { body: string; options: { id: string; title: string }[] } {
   const label = attr.label || attr.name;
   const allowed = attr.allowed_values ?? [];
-  const intro = `📝 *${who}*\n\nJumia needs its *${label}* before it can be listed.`;
   const skip = { id: "skip value", title: "Skip for now" };
+  // What its category's quality check asks for (plan step 6): why, where to
+  // find it, and that Skip sends it as it is.
+  if (attr.qc) {
+    const what = attr.qc.kind === "brand" ? "a real brand" : `its *${qcFieldLabel({ field: attr.name, label: attr.label, kind: "value" })}*`;
+    const listed = allowed.length > 0 && allowed.length <= MAX_LISTED_VALUES;
+    const ask = attr.qc.kind === "brand"
+      ? ` What brand is it? Reply with ${attr.qc.where}.`
+      : ` ${listed ? "Pick one below" : "Reply with it"}${attr.qc.where ? ` (${attr.qc.where})` : ""}.`;
+    const none = attr.qc.kind === "brand" ? "No brand?" : "Don't have it?";
+    return {
+      body: `📝 *${who}*\n\nJumia's quality check turns down products in this category without ${what}.${ask}\n\n` +
+        `${none} Tap *Skip for now*: it's sent as it is, but Jumia will likely turn it down.`,
+      options: listed ? [...allowed.map((v, i) => ({ id: `value:${i}`, title: v })), skip] : [skip],
+    };
+  }
+  const intro = `📝 *${who}*\n\nJumia needs its *${label}* before it can be listed.`;
 
   if (allowed.length > 0 && allowed.length <= MAX_LISTED_VALUES) {
     return {
