@@ -513,6 +513,23 @@ describe("agent mode (the pilot, owner 2026-10-10)", () => {
     expect(sent[0]).toMatchObject({ kind: "buttons", body: "Which kettle?", rows: ["answer:Nasco 1.7L", "answer:Binatone 2L"] });
   });
 
+  // docs/plan-2026-10-13-ask-what-jumia-needs.md step 3: the switch is read per seller.
+  it("a change with no value goes back to the agent once where assistant_followup is on; elsewhere the fixed question", async () => {
+    db.tables.app_settings = [{ key: "assistant_agent", value: "all" }, { key: "assistant_followup", value: ["seller"] }];
+    toolReplies.push(
+      [{ name: "content_change", args: { product: "Collagen Boosters", details: [{ detail: "weight", value: "0.2 kg" }] } }],
+      [{ name: "clarify", args: { question: "What does the collagen weigh, packed as it ships?" } }],
+    );
+    expect(await runAssistant("seller", "233", session(), "update the weight of the collagen boosters", "idle")).toBe("handled");
+    expect(sent).toEqual([expect.objectContaining({ kind: "text", body: "What does the collagen weigh, packed as it ships?" })]);
+    expect(toolTurns.at(-1)).toContain("not sent: no value for weight");
+
+    sent.length = 0;
+    toolReplies.push([{ name: "content_change", args: { product: "Collagen Boosters", details: [{ detail: "weight", value: "0.2 kg" }] } }]);
+    expect(await runAssistant("other", "234", { ...session(), userId: "other", phoneNumber: "234" }, "update the weight of the collagen boosters", "idle")).toBe("handled");
+    expect(sent.at(-1)?.body).toContain("What should I change on it?");
+  });
+
   it("the front door reads what it found nothing to do with", async () => {
     db.tables.app_settings = [{ key: "assistant_agent", value: "all" }];
     toolReplies.push([{ name: "capability", args: { what: "teleport" } }]);

@@ -41,7 +41,7 @@
  */
 
 import { createServerClient } from "@/lib/supabase/server";
-import { switchedOnFor } from "@/lib/whatsapp/switches";
+import { followupFor, switchedOnFor } from "@/lib/whatsapp/switches";
 import { availableCredits, isUnmetered, listingCreditCost } from "@/lib/billing/extension-credits";
 import { LABEL_CREDIT_COST, LIVE_CHANGE_CREDIT_COST, LIVE_LISTING_CREDIT_COST, NOTICE_CREDIT_COST, POLISH_CREDIT_COST, REPORT_CREDIT_COST } from "@/lib/billing/credit-packs";
 
@@ -244,6 +244,14 @@ export type AssistantAction =
    * can't, stopped (claimsInability).
    */
   | { type: "not_yet"; what: string; outside: boolean; text?: string; blocked?: string }
+  /**
+   * A change the checks couldn't send (no product named, no value said):
+   * `why` goes back to agent mode once (switch assistant_followup), which
+   * asks the seller or calls it again; `text` is today's fixed question, sent
+   * when it can't (lib/assistant-v2/agent.ts agentRead). Only parseAction
+   * with `needs` makes one; the AI can't choose it.
+   */
+  | { type: "needs"; text: string; why: string }
   | { type: "unclear" };
 
 /**
@@ -255,7 +263,7 @@ export const ACTION_TYPES = [
   "edit", "submit", "list", "restart", "review", "orders", "credits", "help", "reply", "live_change", "product_info", "product_text",
   "draft_text", "product_photos", "fix_rejected", "add_size", "add_photos", "fees", "stock", "shop", "order_status", "sales", "listings", "payouts",
   "payout_detail", "report", "bulk", "content_change", "brand_check", "category_info", "shops", "warehouse_stock", "warehouse_order",
-  "warehouse_shipped", "polish", "health_report", "research", "note", "not_yet", "unclear",
+  "warehouse_shipped", "polish", "health_report", "research", "note", "not_yet", "needs", "unclear",
 ] as const satisfies readonly AssistantAction["type"][];
 const everyTypeListed: [Exclude<AssistantAction["type"], (typeof ACTION_TYPES)[number]>] extends [never] ? true : false = true;
 void everyTypeListed;
@@ -1162,11 +1170,13 @@ const CHANGE_WORDS = /\b(change|update|edit|modify|new|another|remove|delete|tak
 const REWRITE_WORDS = /\b(rewrite|re-write|improve|better|write|redo|re-do|optimi[sz]e|polish|fix|make (it|the \w+) (better|nicer|attractive|catchy|professional))\b/i;
 
 /** A live product's content change, checked: its text copied from the message, or a rewrite they asked for. */
-export function contentAction(parsed: Record<string, unknown>, message: string, context: string): AssistantAction {
-  const ask = (text: string): AssistantAction => ({ type: "reply", text, link: null });
+export function contentAction(parsed: Record<string, unknown>, message: string, context: string, needs = false): AssistantAction {
+  // With `needs` (agent mode, switch assistant_followup), what's missing goes
+  // back to the model once, with today's question as the fallback.
+  const ask = (text: string, why?: string): AssistantAction => needs && why ? { type: "needs", text, why } : { type: "reply", text, link: null };
   const product = typeof parsed.product === "string" ? parsed.product.trim().slice(0, 120) : "";
   if (!namesAProduct(product) || !(productBacked(product, message) || productBacked(product, context))) {
-    return ask("Which product? Tell me its name as it shows on Jumia, e.g. \"rewrite the description of the Hisense fridge\".");
+    return ask("Which product? Tell me its name as it shows on Jumia, e.g. \"rewrite the description of the Hisense fridge\".", NEEDS_PRODUCT);
   }
   const request: ContentRequest = {};
   for (const key of ["name", "description", "highlights", "brand"] as const) {
@@ -1244,9 +1254,29 @@ export function contentAction(parsed: Record<string, unknown>, message: string, 
     request.size = { from, to: size.to.trim().slice(0, 40) };
   }
   if (Object.keys(request).length === 0) {
-    return ask("What should I change on it? Write the new name, or say \"rewrite its description\", e.g. \"change the blender's name to Silver Crest 3 in 1 Blender 1.5L\" or \"set the fan's colour to black\".");
+    return ask("What should I change on it? Write the new name, or say \"rewrite its description\", e.g. \"change the blender's name to Silver Crest 3 in 1 Blender 1.5L\" or \"set the fan's colour to black\".",
+      needsValue(product, parsed));
   }
   return { type: "content_change", product, request };
+}
+
+/** What agent mode is told when a content change names no product it can find in their words (switch assistant_followup). */
+export const NEEDS_PRODUCT = "content_change not sent: the product isn't named in their message or the conversation. If the bot's open question is about a product, call content_change again with that product's name as the open question gives it; otherwise ask them which product with clarify.";
+
+/**
+ * What agent mode is told when a content change has no value the seller
+ * said (owner's web chat, 2026-10-12: "That is the weight listed", then
+ * "Update it for me on my JUMIA shop", got the fixed "What should I change
+ * on it?" twice). Pure.
+ */
+export function needsValue(product: string, parsed: Record<string, unknown>): string {
+  const details = parsed.details && typeof parsed.details === "object" && !Array.isArray(parsed.details) ? Object.keys(parsed.details as Record<string, unknown>) : [];
+  const which = details.length > 0 ? `for ${details.slice(0, 3).join(", ")} ` : "";
+  return [
+    `content_change for "${product.slice(0, 80)}" not sent: no value ${which}was in the seller's message (a value counts only when they wrote it; each detail needs its name and the value as they wrote it).`,
+    "Ask them with clarify (no options needed) what to put in, quoting what Jumia has now when the bot's open question says it,",
+    "or call content_change again with the value as they wrote it. Never send them to Vendor Center or the website for it.",
+  ].join(" ");
 }
 
 const NAME_STOP = new Set(["the", "a", "an", "of", "and", "with", "for", "in", "to", "my"]);
@@ -1259,6 +1289,8 @@ export interface ParseOpts {
   now?: Date;
   /** The bot listed products for them in the last 30 minutes (session.lastListed): "those" can mean them. */
   listed?: boolean;
+  /** A content change that can't be sent comes back as `needs` (agent mode, switch assistant_followup). */
+  needs?: boolean;
 }
 
 // ─── Honest "can't" ───────────────────────────────────────────────────────
@@ -1513,7 +1545,7 @@ function parseActionRaw(
     case "bulk":
       return bulkAction(parsed, message, now, currency, { listed: opts.listed, previous: lastSellerLine(context) });
     case "content_change":
-      return contentAction(parsed, message, context);
+      return contentAction(parsed, message, context, opts.needs === true);
     case "brand_check": {
       const brand = typeof parsed.brand === "string" ? parsed.brand.trim().slice(0, 60) : "";
       if (!brand || !saidInMessage(brand, message)) return ask("Which brand? e.g. \"is Lattafa a brand on Jumia?\".");
@@ -1816,7 +1848,7 @@ export async function interpretThroughFrontDoor(
   message: string,
   opts: {
     batchId?: string | null; conversation?: string[]; web?: boolean; position?: string; waitingFor?: string; waitingStays?: boolean;
-    listed?: { count: number; what: string } | null; listedSids?: string[]; answered?: { area?: string };
+    listed?: { count: number; what: string } | null; listedSids?: string[]; answered?: { area?: string }; followup?: boolean;
   } = {},
 ): Promise<{ area: string; action: AssistantAction | Clarify; links: Record<string, AssistantLink>; raw: string }> {
   const [currency, seller, reader, listingCost, memory, shop] = await Promise.all([
@@ -1847,7 +1879,7 @@ export async function interpretThroughAgent(
   message: string,
   opts: {
     batchId?: string | null; conversation?: string[]; web?: boolean; position?: string; waitingFor?: string; waitingStays?: boolean;
-    listed?: { count: number; what: string } | null; listedSids?: string[]; answered?: { area?: string };
+    listed?: { count: number; what: string } | null; listedSids?: string[]; answered?: { area?: string }; followup?: boolean;
   } = {},
 ): Promise<{ actions: AssistantAction[]; clarify: Clarify | null; links: Record<string, AssistantLink>; raw: string }> {
   const [currency, seller, model, listingCost, memory, shop] = await Promise.all([
@@ -1868,7 +1900,7 @@ export async function interpretThroughAgent(
   };
   const read = await agentRead(input, geminiAgentCall(model, agentSystem(listingCost), { feature: "assistant", userId }), {
     ...catalogLookups(shop), productDetails: productDetailsLookup(userId),
-  });
+  }, {}, { followup: opts.followup === true });
   return { actions: read.actions, clarify: read.clarify, links, raw: `[agent ${model}] ${read.raw}` };
 }
 
@@ -2251,6 +2283,8 @@ export async function runAssistant(
   // its automatic backup"); the front door reads what it can't. The old
   // one-call reader and its word rules are gone (step 2 of the plan).
   const viaAgent = await agentFor(userId);
+  // What's missing goes back to the agent once (switch assistant_followup).
+  const followup = viaAgent && await followupFor(userId);
   let actions: AssistantAction[];
   let links: Record<string, AssistantLink>;
   let raw: string;
@@ -2263,7 +2297,7 @@ export async function runAssistant(
       ...(opts.waitingStays ? { waitingStays: true } : {}),
       listed: listedFresh(session),
     };
-    const more = { ...facts, listedSids: session.lastListed?.sids, ...(opts.answered ? { answered: opts.answered } : {}) };
+    const more = { ...facts, listedSids: session.lastListed?.sids, ...(opts.answered ? { answered: opts.answered } : {}), ...(followup ? { followup: true } : {}) };
     let agentNote = "";
     let read: { actions: AssistantAction[]; links: Record<string, AssistantLink>; raw: string } | null = null;
     if (viaAgent) {
@@ -2570,6 +2604,9 @@ async function carryOut(
       await carryOut(userId, phone, stage, batchId, products, { type: "reply", text: answer, link: null }, text, links, session);
       return `${action.outside ? "outside" : "not yet"}: ${action.what}${action.blocked ? " (its reply said it can't)" : ""}`.slice(0, 300);
     }
+    case "needs":
+      // agentRead never lets one out; if one ever gets here, today's question is sent.
+      return carryOut(userId, phone, stage, batchId, products, { type: "reply", text: action.text, link: null }, text, links, session);
     case "unclear":
       return "default";
   }

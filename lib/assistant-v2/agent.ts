@@ -308,9 +308,20 @@ export const CANT_NOT_SENT = "Not sent: that reply says PandaWorld can't do some
  */
 export async function agentRead(
   input: FrontDoorInput, call: AgentCall, lookups: AgentLookups, limits: Partial<typeof AGENT_LIMITS> = {},
+  opts: { followup?: boolean } = {},
 ): Promise<AgentResult> {
   const lim = { ...AGENT_LIMITS, ...limits };
   const t0 = Date.now();
+  // The same checks as the front door's reading: values from the message,
+  // products named. The bot's open question names a product too (switch
+  // assistant_followup: a rejected product's question that stays open).
+  const context = [
+    ...input.conversation, ...(input.listed?.items ?? []).map((l) => `Bot: ${l}`),
+    ...(opts.followup && input.waitingFor ? [`Bot: ${input.waitingFor}`] : []),
+  ].join("\n");
+  const asked = input.answered ? [...input.conversation].reverse().find((l) => l.startsWith("Bot:"))?.slice(4).trim() : undefined;
+  const said = asked ? `${asked}\n${input.message}` : input.message;
+  let needsAsked = false;
   // contextText ends with their new message.
   const turns: GeminiTurn[] = [{ role: "user", parts: [{ text: agentContext(input) }] }];
   const log: string[] = [];
@@ -320,14 +331,22 @@ export async function agentRead(
   let renamed = false;
   const tokens = { prompt: 0, cached: 0 };
   for (let round = 0; ; round++) {
-    const last = round >= MAX_LOOKUP_ROUNDS || cant || renamed;
+    const last = round >= MAX_LOOKUP_ROUNDS || cant || renamed || needsAsked;
     const left = lim.totalMs - (Date.now() - t0);
     if (left <= 1000) {
       // Out of time after a reply that said it can't: it isn't sent (not_yet).
-      if (cant) break;
+      // After a change it couldn't send: today's question (below).
+      if (cant || needsAsked) break;
       throw new Error(`agent ran out of time after ${calls} calls`);
     }
-    const r = await timed(call(turns, last, cant), Math.min(lim.callMs, left), "agent call");
+    let r: Awaited<ReturnType<AgentCall>>;
+    try {
+      r = await timed(call(turns, last, cant), Math.min(lim.callMs, left), "agent call");
+    } catch (e) {
+      // The second try failed: the first one's change gets today's question.
+      if (needsAsked) { log.push(`(asked again: ${e instanceof Error ? e.message : "failed"})`); break; }
+      throw e;
+    }
     calls++;
     tokens.prompt += r.usage?.prompt ?? 0;
     tokens.cached += r.usage?.cached ?? 0;
@@ -357,6 +376,23 @@ export async function agentRead(
         log.push("(cannot with a key that isn't on Not possible: asked again)");
         turns.push(r.turn, { role: "user", parts: [{ functionResponse: { ...(cannot.id ? { id: cannot.id } : {}), name: "cannot", response: { result: misnamed } } }] });
         continue;
+      }
+      // A change the checks can't send (no product named, no value said):
+      // the model is told why and called once more, instead of the fixed
+      // question going out (owner's web chat, 2026-10-12; switch
+      // assistant_followup). Only a turn of that one call, so its answer is
+      // the turn's only one.
+      const change = opts.followup && !needsAsked && r.calls.length === 1 && finals.length === 1 && finals[0].name === "content_change" ? finals[0] : null;
+      if (change) {
+        const checked = parseAction(JSON.stringify(actionJson(change.name, change.args)), said, input.drafts, input.links, input.currency, {
+          context, stage: input.stage, listed: !!input.listed, needs: true,
+        });
+        if (checked.type === "needs") {
+          needsAsked = true;
+          log.push("(content_change not sent: asked again)");
+          turns.push(r.turn, { role: "user", parts: [{ functionResponse: { ...(change.id ? { id: change.id } : {}), name: "content_change", response: { result: checked.why } } }] });
+          continue;
+        }
       }
       // A message of several parts: asked once whether any part is left
       // (owner's WhatsApp, 2026-10-11: brand, weight, warranty, title and
@@ -392,10 +428,6 @@ export async function agentRead(
     return { actions: [], clarify: { type: "clarify", question: String(ask.question ?? "").slice(0, 300), options }, raw, calls };
   }
 
-  // The same checks as the front door's reading: values from the message, products named.
-  const context = [...input.conversation, ...(input.listed?.items ?? []).map((l) => `Bot: ${l}`)].join("\n");
-  const asked = input.answered ? [...input.conversation].reverse().find((l) => l.startsWith("Bot:"))?.slice(4).trim() : undefined;
-  const said = asked ? `${asked}\n${input.message}` : input.message;
   const many = finals.length > 1;
   const actions: AssistantAction[] = [];
   const seen = new Set<string>();

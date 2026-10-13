@@ -254,6 +254,92 @@ describe("reading a message", () => {
     expect(r.actions.some((a) => a.type === "live_change" && JSON.stringify(a).includes("50"))).toBe(false);
   });
 
+  // Owner's web chat, 2026-10-12 17:06-17:10: "That is the weight listed" and
+  // "Update it for me on my JUMIA shop" each got the fixed "What should I
+  // change on it?" (docs/plan-2026-10-13-ask-what-jumia-needs.md step 3).
+  describe("a change the checks can't send goes back to the model once (switch assistant_followup)", () => {
+    const OPEN = "Jumia's quality check rejected their product \"Collagen Boosters\" (SKU PA-MUTE4CYI) and needs its weight (in kg, packed as it ships); Jumia has 0.2 kg for it now";
+    const msg = (m: string) => input(m, {
+      conversation: ["Bot: 🔍 *Collagen Boosters*: Jumia's quality check needs something only you have. What does it weigh, packed as it ships?", "Seller: That is the weight listed"],
+      waitingFor: OPEN, waitingStays: true,
+    });
+    const noValue = { name: "content_change", args: { product: "Collagen Boosters", details: [{ detail: "weight", value: "0.2 kg" }] }, id: "c1" };
+
+    it("told why, it asks the seller instead of the fixed question", async () => {
+      const { call, seen } = scripted([
+        { calls: [noValue] },
+        { calls: [{ name: "clarify", args: { question: "Jumia has 0.2 kg for it and turned that down. Send 0.2 kg again, or what does it weigh packed?" } }] },
+      ]);
+      const r = await agentRead(msg("Update it for me on my JUMIA shop"), call, noLookups, {}, { followup: true });
+      expect(r.clarify).toEqual({ type: "clarify", question: expect.stringContaining("Send 0.2 kg again"), options: [] });
+      expect(r.actions).toEqual([]);
+      expect(r.calls).toBe(2);
+      expect(seen[1].onlyAct).toBe(true);
+      expect(seen[1].turns[2]).toEqual({ role: "user", parts: [{ functionResponse: { id: "c1", name: "content_change", response: { result: expect.stringContaining("no value for weight was in the seller's message") } } }] });
+      expect(r.raw).toContain("content_change not sent: asked again");
+    });
+
+    it("a value as they wrote it is the change at once; one written its own way is sent back, then called as they wrote it", async () => {
+      const once = scripted([{ calls: [{ name: "content_change", args: { product: "Collagen Boosters", details: [{ detail: "weight", value: "0.1kg" }] } }] }]);
+      const r1 = await agentRead(msg("it's 0.1kg"), once.call, noLookups, {}, { followup: true });
+      expect(r1.calls).toBe(1);
+      expect(r1.actions).toEqual([expect.objectContaining({ type: "content_change", product: "Collagen Boosters", request: { details: { weight: "0.1kg" } } })]);
+
+      const twice = scripted([
+        { calls: [{ name: "content_change", args: { product: "Collagen Boosters", details: [{ detail: "weight", value: "0.1 kg" }] } }] },
+        { calls: [{ name: "content_change", args: { product: "Collagen Boosters", details: [{ detail: "weight", value: "0.1kg" }] } }] },
+      ]);
+      const r2 = await agentRead(msg("it's 0.1kg"), twice.call, noLookups, {}, { followup: true });
+      expect(r2.calls).toBe(2);
+      expect(r2.actions).toEqual([expect.objectContaining({ type: "content_change", request: { details: { weight: "0.1kg" } } })]);
+    });
+
+    it("the product named only by the bot's open question counts", async () => {
+      const lone = input("that is the weight of the collagen booster", { waitingFor: OPEN, waitingStays: true });
+      const { call } = scripted([
+        { calls: [{ name: "content_change", args: { product: "Collagen Boosters", details: [{ detail: "weight", value: "0.2 kg" }] } }] },
+        { calls: [{ name: "clarify", args: { question: "Send 0.2 kg again?" } }] },
+      ]);
+      const r = await agentRead(lone, call, noLookups, {}, { followup: true });
+      expect(r.clarify?.question).toBe("Send 0.2 kg again?");
+    });
+
+    it("when the second call fails or is slow, the fixed question goes out", async () => {
+      const slow: AgentCall = (() => {
+        let n = 0;
+        return async () => {
+          if (n++ === 0) return { calls: [noValue], text: "", turn: { role: "model", parts: [{ functionCall: { name: noValue.name, args: noValue.args } }] } };
+          return new Promise(() => {});
+        };
+      })() as AgentCall;
+      const r = await agentRead(msg("Update it for me on my JUMIA shop"), slow, noLookups, { callMs: 30, totalMs: 5_000 }, { followup: true });
+      expect(r.actions).toEqual([{ type: "reply", text: expect.stringContaining("What should I change on it?"), link: null }]);
+      expect(r.raw).toContain("(asked again: agent call took over");
+    });
+
+    it("asked again, it still sends no value: the fixed question, never a second retry", async () => {
+      const { call } = scripted([{ calls: [noValue] }, { calls: [{ ...noValue, id: "c2" }] }]);
+      const r = await agentRead(msg("Update it for me on my JUMIA shop"), call, noLookups, {}, { followup: true });
+      expect(r.calls).toBe(2);
+      expect(r.actions).toEqual([{ type: "reply", text: expect.stringContaining("What should I change on it?"), link: null }]);
+    });
+
+    it("switched off: as before, one call and the fixed question", async () => {
+      const { call } = scripted([{ calls: [noValue] }]);
+      const r = await agentRead(msg("Update it for me on my JUMIA shop"), call, noLookups);
+      expect(r.calls).toBe(1);
+      expect(r.actions).toEqual([{ type: "reply", text: expect.stringContaining("What should I change on it?"), link: null }]);
+    });
+
+    it("needs comes only from the agent's own check, never from the model or the front door", () => {
+      expect(parseAction('{"type":"needs","text":"x","why":"y"}', "hello", [], assistantLinks())).toEqual({ type: "unclear" });
+      expect(parseAction(JSON.stringify(actionJson(noValue.name, noValue.args)), "update it", [], assistantLinks(), "GHS", { context: OPEN }))
+        .toMatchObject({ type: "reply", text: expect.stringContaining("What should I change on it?") });
+      expect(parseAction(JSON.stringify(actionJson(noValue.name, noValue.args)), "update it", [], assistantLinks(), "GHS", { context: OPEN, needs: true }))
+        .toMatchObject({ type: "needs", text: expect.stringContaining("What should I change on it?"), why: expect.stringContaining("Ask them with clarify") });
+    });
+  });
+
   it("throws when the model is slow, so the front door reads it instead", async () => {
     const call: AgentCall = () => new Promise(() => {});
     await expect(agentRead(input("hello"), call, noLookups, { callMs: 30, totalMs: 5_000 })).rejects.toThrow(/took over/);
