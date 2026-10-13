@@ -1270,6 +1270,15 @@ export const NEEDS_PRODUCT = "content_change not sent: the product isn't named i
  * on it?" twice). Pure.
  */
 export function needsValue(product: string, parsed: Record<string, unknown>): string {
+  // A rewrite asked without their words for it: never their sentence as the new text (reviewing step 3).
+  const rewrite = (Array.isArray(parsed.rewrite) ? parsed.rewrite : []).filter((f): f is string => typeof f === "string");
+  if (rewrite.length > 0) {
+    return [
+      `content_change for "${product.slice(0, 80)}" not sent: a rewrite of its ${rewrite.join(" and ")} needs their own words asking for it.`,
+      `If they asked for it, call content_change again with rewrite and asked: {"<field>": "<their words asking for it, copied from the message>"}.`,
+      "If they didn't, ask them with clarify what to change. Never put their sentence in as the new text.",
+    ].join(" ");
+  }
   const details = parsed.details && typeof parsed.details === "object" && !Array.isArray(parsed.details) ? Object.keys(parsed.details as Record<string, unknown>) : [];
   const which = details.length > 0 ? `for ${details.slice(0, 3).join(", ")} ` : "";
   return [

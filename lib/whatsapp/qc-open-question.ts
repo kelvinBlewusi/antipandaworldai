@@ -13,6 +13,18 @@ import type { QcLiveAsk } from "@/lib/whatsapp/session";
  * its SKU, the field, what Jumia has now and its words, and that "it" means
  * this product. Pure.
  */
+/**
+ * The product a rejected product's open question is about, as a line the
+ * checks may count as naming it ("*Collagen Boosters* (SKU PA-…)"), from the
+ * text qcOpenQuestion wrote; null for any other open question. Only the
+ * product: never Jumia's words, which aren't the seller's (reviewing step 3).
+ * Pure.
+ */
+export function qcOpenProduct(waitingFor: string | undefined): string | null {
+  const m = /^Jumia's quality check rejected their product "(.+?)" \(SKU ([^)]+)\)/.exec(waitingFor ?? "");
+  return m ? `*${m[1]}* (SKU ${m[2]})` : null;
+}
+
 export function qcOpenQuestion(q: Pick<QcLiveAsk, "name" | "sku" | "ask" | "about" | "field" | "fieldLabel" | "current" | "jumiaSaid">): string {
   const field = q.ask === "brand" ? "brand" : q.about === "weight" ? "weight (in kg, packed as it ships)" : q.fieldLabel;
   return [

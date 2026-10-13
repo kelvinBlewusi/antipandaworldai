@@ -78,6 +78,12 @@ describe("recording and reading it", () => {
     expect(await qcRequiredFor(1018796)).toEqual([]);
   });
 
+  it("a row learned from a wrong-category rejection is never read", async () => {
+    db.tables.jumia_qc_required = [{ category_code: 1005104, field: "fda", label: "FDA", kind: "value", seen: 4,
+      example: "Wrong Category: The product is a hot wax for hair removal, which does not fit in the body groomers category.; Kindly Provide Product's Health/Food Regulation Registration Number" }];
+    expect(await qcRequiredFor(1005104)).toEqual([]);
+  });
+
   it("a new one is read at once, not after the cache", async () => {
     expect(await qcRequiredFor(1000279)).toEqual([]);
     await learnQcRequirement(1000279, act(GENERIC), GENERIC);
@@ -99,9 +105,44 @@ describe("recording and reading it", () => {
 
 // Seeding from the live rejections (2026-10-13): Jumia often gives several reasons in one.
 describe("every reason in a rejection", () => {
-  it("an FDA number asked beside a wrong category and a promotional word is learned", () => {
-    const said = "Wrong Category: The product is a hot wax for hair removal, which does not fit in the body groomers category.; Product title contains forbidden promotional word: 'Hot'; Kindly Provide Product's Health/Food Regulation Registration Number";
-    expect(requirementsFromRejections([{ categoryCode: 1005104, said, fields: [{ name: "fda", label: "FDA" }] }]).map((r) => r.field)).toEqual(["fda"]);
+  it("an FDA number asked beside a promotional word is learned", () => {
+    const said = "Restricted Brand: Product title contains forbidden promotional word: 'Quality'; Kindly Provide Product's Health/Food Regulation Registration Number";
+    expect(requirementsFromRejections([{ categoryCode: 1005580, said, fields: [] }]).map((r) => r.field)).toEqual(["fda"]);
+  });
+
+  // Reviewing step 5: what a wrong-category rejection asks belongs to the right category.
+  it("nothing is learned for a category Jumia says is wrong", () => {
+    const hotWax = "Wrong Category: The product is a hot wax for hair removal, which does not fit in the body groomers category.; Product title contains forbidden promotional word: 'Hot'; Kindly Provide Product's Health/Food Regulation Registration Number";
+    const watch = "Wrong Category: The product is a men's watch from a luxury brand, which does not fit in the wall clocks category.; AI suggests Fashion / Watches (x)";
+    const mismatch = "Category mismatch: AI suggests Grocery / Beverages / Soft Drinks\nKindly Provide Product's Health/Food Regulation Registration Number";
+    expect(requirementsFromRejections([hotWax, watch, mismatch].map((said, i) => ({ categoryCode: 1000 + i, said, fields: [{ name: "fda", label: "FDA" }] })))).toEqual([]);
+  });
+
+  it("a licence or a standards mark isn't an FDA number; \"regulations\" alone asks for nothing", () => {
+    const fields = [{ name: "certifications", label: "Certifications" }];
+    expect(act("Kindly provide the product licence number", fields)).toMatchObject({ kind: "ask_value", field: "certifications" });
+    expect(requirementsFromRejections([
+      { categoryCode: 1, said: "KEBS standardization mark is missing on the image", fields },
+      { categoryCode: 2, said: "Images do not comply with our content regulations; please use a white background", fields: [] },
+    ]).filter((r) => r.field === "fda")).toEqual([]);
+  });
+
+  it("a warranty only when one is asked for, not taken out or put right", () => {
+    const fields = [{ name: "product_warranty", label: "Product warranty" }];
+    expect(requirementsFromRejections([
+      { categoryCode: 1, said: "Kindly remove warranty claims from the product name", fields },
+      { categoryCode: 2, said: "Warranty details in the description do not match the warranty fields; kindly correct the description", fields },
+      { categoryCode: 3, said: WARRANTY, fields },
+    ]).map((r) => [r.categoryCode, r.field])).toEqual([[3, "product_warranty"]]);
+  });
+
+  it("\"don't use Generic, use the actual brand\" is a real brand; nothing is learned with no words to check", () => {
+    expect(requirementsFromRejections([
+      { categoryCode: 1, said: "Please don't use Generic, use the actual brand name printed on the product", fields: [] },
+      { categoryCode: 2, said: "Do not use Generic as brand for electronics. Use the actual brand name on the package.", fields: [] },
+    ]).map((r) => [r.categoryCode, r.field])).toEqual([[1, "brand"], [2, "brand"]]);
+    expect(qcRequirementOf({ kind: "ask_brand", why: "" }, null)).toBeNull();
+    expect(qcRequirementOf({ kind: "ask_brand", why: "" }, "")).toBeNull();
   });
 
   it("a real brand asked however the fix read it; a placeholder fix in any part of it is never one", () => {

@@ -86,10 +86,11 @@ function regulatoryField(fields: QcContext["fields"], text: string): { field: st
   // An FDA number never goes in a certifications field: there it's a list of
   // eco labels (ASTM, FSC…) that won't take it (2026-10-13: the owner's
   // shower cream, massager and perfume). With no field of its own, it goes
-  // in the description.
+  // in the description. A licence or a standards mark (KEBS, GSA) still may.
+  const fda = /\b(?:fda|fdb|nafdac)\b|registration|regulat/i.test(text);
   const hit = wantsCert
     ? find(/certif/i)
-    : find(/\bfda\b|^fda$/i) ?? find(/regist/i) ?? find(/licen/i);
+    : find(/\bfda\b|^fda$/i) ?? find(/regist/i) ?? find(/licen/i) ?? (fda ? undefined : find(/certif/i));
   if (hit) return { field: hit.name, fieldLabel: hit.label ?? hit.name };
   return { field: null, fieldLabel: wantsCert ? "Certification" : "FDA registration number" };
 }

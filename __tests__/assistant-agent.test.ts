@@ -18,7 +18,7 @@ import {
   ACTION_TOOLS, AGENT_TOOLS, AGENT_TOOLS_FOLLOWUP, LOOKUP_TOOLS, NO_MATCH, actionJson, agentContext, agentModelSpec, agentPrompt, agentRead, agentSystem, catalogLookups, lookupLine, type AgentCall,
 } from "@/lib/assistant-v2/agent";
 import type { FrontDoorInput } from "@/lib/assistant-v2/front-door";
-import { assistantLinks, parseAction } from "@/lib/whatsapp/assistant";
+import { assistantLinks, needsValue, parseAction } from "@/lib/whatsapp/assistant";
 import { fromRow } from "@/lib/jumia/shop";
 import type { GeminiTurn } from "@/lib/ai/gemini-client";
 
@@ -344,6 +344,49 @@ describe("reading a message", () => {
       const r = await agentRead(msg("Update it for me on my JUMIA shop"), call, noLookups, {}, { followup: true });
       expect(r.calls).toBe(2);
       expect(r.actions).toEqual([{ type: "reply", text: expect.stringContaining("What should I change on it?"), link: null }]);
+    });
+
+    // Reviewing step 3.
+    it("Jumia's words in the open question are never the seller's: a rewrite quoting them isn't taken", async () => {
+      const said = input("ok do it", {
+        conversation: ["Bot: 🔍 *Collagen Boosters*: Jumia's quality check needs something only you have. What does it weigh, packed as it ships?"],
+        waitingFor: `${OPEN}; Jumia said: "Wrong weight. Please provide the correct packaged weight"`, waitingStays: true,
+      });
+      const { call } = scripted([
+        { calls: [{ name: "content_change", args: { product: "Collagen Boosters", rewrite: ["description"], asked: { description: "provide the correct packaged weight" } } }] },
+        { calls: [{ name: "clarify", args: { question: "What does it weigh, packed as it ships? Jumia has 0.2 kg." } }] },
+      ]);
+      const r = await agentRead(said, call, noLookups, {}, { followup: true });
+      expect(r.actions).toEqual([]);
+      expect(r.clarify?.question).toContain("0.2 kg");
+    });
+
+    it("a second try that comes to nothing, or says it can't and then fails, gives today's question", async () => {
+      const cant: AgentCall = (() => {
+        let n = 0;
+        return async () => {
+          n++;
+          if (n === 1) return { calls: [noValue], text: "", turn: { role: "model", parts: [{ functionCall: { name: noValue.name, args: noValue.args } }] } };
+          if (n === 2) {
+            const reply = { name: "reply", args: { text: "I can't change the weight from here, please update it in Vendor Center." } };
+            return { calls: [reply], text: "", turn: { role: "model", parts: [{ functionCall: reply }] } };
+          }
+          throw new Error("503");
+        };
+      })() as AgentCall;
+      const r1 = await agentRead(msg("Update it for me on my JUMIA shop"), cant, noLookups, {}, { followup: true });
+      expect(r1.actions).toEqual([{ type: "reply", text: expect.stringContaining("What should I change on it?"), link: null }]);
+
+      const { call } = scripted([{ calls: [noValue] }, { calls: [{ name: "capability", args: { what: "teleport" } }] }]);
+      const r2 = await agentRead(msg("Update it for me on my JUMIA shop"), call, noLookups, {}, { followup: true });
+      expect(r2.actions).toEqual([{ type: "reply", text: expect.stringContaining("What should I change on it?"), link: null }]);
+    });
+
+    it("a rewrite asked without their words is sent back for their words, never their sentence as the text", () => {
+      const why = needsValue("Collagen Boosters", { rewrite: ["description"] });
+      expect(why).toContain('asked: {"<field>": "<their words asking for it, copied from the message>"}');
+      expect(why).toContain("Never put their sentence in as the new text");
+      expect(needsValue("Collagen Boosters", { details: { weight: "0.2 kg" } })).toContain("call content_change again with the value as they wrote it");
     });
 
     it("switched off: as before, one call and the fixed question", async () => {

@@ -30,6 +30,7 @@ import { answerQcLive, fixRejected, keptQc, parseFixTap } from "@/lib/whatsapp/f
 import { qcOpenQuestion } from "@/lib/whatsapp/qc-open-question";
 import { escapeHtml, parseWeightKg, valueFromReply } from "@/lib/jumia/qc-answers";
 import { qcFieldLabel, qcMayAsk, type MissingField } from "@/lib/whatsapp/qc-asks";
+import { followupFor } from "@/lib/whatsapp/switches";
 import { learnQcRequirement } from "@/lib/jumia/qc-required";
 import { answerAddPhotos } from "@/lib/whatsapp/live-photos";
 import { featureAccess, featureMinPackName } from "@/lib/billing/features";
@@ -611,7 +612,7 @@ async function aiReadable(
   // A number answering the assistant's own question is the AI's to read with
   // it: "0" after "What should their stock be?" was read as draft 1's price
   // (owner's web chat, 2026-10-08 19:25: "Updated product 1's price to GH₵0").
-  if (PLAIN_NUMBER_RE.test(text) && (await answersAssistantQuestion(phoneNumber, session))) return { text };
+  if (PLAIN_NUMBER_RE.test(text) && (await answersAssistantQuestion(userId, phoneNumber, session))) return { text };
   if (/^[a-z_]+:\S+$/i.test(text) || PLAIN_NUMBER_RE.test(text) || EXACT_SUBMIT_RE.test(text)) return null;
   const cmd = parseGlobalCommand(text);
   // Sentences the commands only guess at go to the AI; the regexes stay as the fallback.
@@ -650,12 +651,31 @@ async function pickedFromList(phoneNumber: string, text: string): Promise<boolea
  * listing flow waiting for a value, and not the flow's own "how many
  * products" or "Start a new batch?" (a count there).
  */
-async function answersAssistantQuestion(phoneNumber: string, session: WhatsAppSession): Promise<boolean> {
+async function answersAssistantQuestion(userId: string, phoneNumber: string, session: WhatsAppSession): Promise<boolean> {
+  // The agent's own question with no buttons ("What does it weigh?", switch
+  // assistant_followup): a bare number is its answer, whatever else is
+  // waiting (reviewing step 4: "0.3" became a draft's weight).
+  if (await answersAgentQuestion(userId, phoneNumber)) return true;
   if (session.state !== "awaiting_confirmation" && session.state !== "awaiting_count") return false;
   if (session.awaitingPriceFor || session.awaitingValueFor || session.awaitingCategoryFor || session.awaitingQcAnswer || session.assistantPending) return false;
   const bot = await lastBotMessage(phoneNumber);
   if (!bot || !bot.body.includes("?") || /how many products/i.test(bot.body) || bot.body.startsWith(NEW_BATCH_OFFER)) return false;
   return true;
+}
+
+/** Whether the bot's last message is the agent's own question back (logged "asked: …"), where assistant_followup is on. */
+async function answersAgentQuestion(userId: string, phoneNumber: string): Promise<boolean> {
+  if (!(await followupFor(userId))) return false;
+  const bot = await lastBotMessage(phoneNumber);
+  if (!bot) return false;
+  try {
+    const { data } = await createServerClient().from("whatsapp_assistant_log").select("outcome")
+      .eq("user_id", userId).order("created_at", { ascending: false }).limit(1).maybeSingle();
+    const asked = String((data as { outcome?: string } | null)?.outcome ?? "");
+    return asked.startsWith("asked: ") && bot.body.includes(asked.slice(7, 67).trim());
+  } catch {
+    return false;
+  }
 }
 
 /** "product 2 of 3", while a batch's photos come in. */

@@ -6,6 +6,8 @@
  * real brand), read the same way the chat reads a rejection
  * (lib/jumia/qc-required.ts requirementsFromRejections, no AI).
  *
+ * Rows already in the table are kept as they are (the chat counts them).
+ *
  * Sources: jumia_products rejected by Jumia's quality check (one per
  * product, its sizes counted once; deleted ones too, since what Jumia asked
  * for still holds for the category) and PandaWorld listings Jumia rejected
@@ -48,11 +50,15 @@ async function main() {
     }
     if ((data ?? []).length < PAGE_SIZE) break;
   }
-  const { data: listings, error: le } = await db.from("listings").select("category_code, jumia_qc_reason, jumia_qc_comment").eq("jumia_qc_status", "rejected");
-  if (le) { console.error("✗ listings:", le.message); process.exit(2); }
-  for (const r of (listings ?? []) as Record<string, string | null>[]) {
-    const text = [r.jumia_qc_reason, r.jumia_qc_comment].filter(Boolean).join(": ");
-    if (text && r.category_code) said.push({ code: parseInt(r.category_code, 10), text });
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const { data: listings, error: le } = await db.from("listings").select("category_code, jumia_qc_reason, jumia_qc_comment")
+      .eq("jumia_qc_status", "rejected").range(from, from + PAGE_SIZE - 1);
+    if (le) { console.error("✗ listings:", le.message); process.exit(2); }
+    for (const r of (listings ?? []) as Record<string, string | null>[]) {
+      const text = [r.jumia_qc_reason, r.jumia_qc_comment].filter(Boolean).join(": ");
+      if (text && r.category_code) said.push({ code: parseInt(r.category_code, 10), text });
+    }
+    if ((listings ?? []).length < PAGE_SIZE) break;
   }
 
   const codes = Array.from(new Set(said.map((s) => s.code).filter(Number.isFinite)));
@@ -71,9 +77,10 @@ async function main() {
   if (!WRITE) { console.log("(dry run: add --write to save them)"); return; }
 
   const now = new Date().toISOString();
+  // Rows already there are left as they are: the chat has been counting them since.
   const { error } = await db.from("jumia_qc_required").upsert(rows.map((r) => ({
     category_code: r.categoryCode, field: r.field, label: r.label, kind: r.kind, example: r.example, seen: r.seen, last_seen: now,
-  })), { onConflict: "category_code,field" });
+  })), { onConflict: "category_code,field", ignoreDuplicates: true });
   if (error) { console.error("✗ jumia_qc_required:", error.message); process.exit(2); }
   console.log(`✓ wrote ${rows.length}`);
 }

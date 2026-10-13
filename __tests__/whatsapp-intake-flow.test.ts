@@ -1091,6 +1091,26 @@ describe("what the category's quality check asks for, before a draft is sent", (
     expect(sent[0].body).toContain("ready to submit");
   });
 
+  // Reviewing step 4: a question with no buttons leaves nothing pending, so "0.3" went to the draft's question.
+  it("a bare number after the agent's own question back goes to the agent, not to the draft's open question", async () => {
+    db.tables.listings = [{ ...SHOWER }];
+    requiredFieldsFor.set("listing-1", [FDA]);
+    seedSession({ state: "awaiting_confirmation", batch_size: 1, batch_seq: null, awaiting_value_for: { listingId: "listing-1", field: "fda", qc: true } });
+    db.tables.app_settings = [{ key: "assistant_followup", value: "all" }];
+    db.tables.whatsapp_assistant_log = [{ user_id: USER, outcome: "asked: What does the Collagen Boosters weigh, packed as it ships?", created_at: new Date().toISOString() }];
+    db.tables.whatsapp_message_log = [{ phone_number: PHONE, direction: "outbound", message_type: "text", body_text: "What does the Collagen Boosters weigh, packed as it ships?" }];
+    db.tables.jumia_connections = [{ user_id: USER, status: "active", access_token: "real-token" }];
+    aiReplies.push('{"type":"reply","text":"Got it."}');
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "0.3" });
+
+    expect(aiPrompts.some((p) => p.includes("What does the Collagen Boosters weigh"))).toBe(true);
+    expect(listings()[0].dynamic_attributes).toEqual({});
+    db.tables.app_settings = [];
+    db.tables.jumia_connections = [];
+  });
+
   it("a real brand: one Jumia has, or the close ones; never filled by the AI", async () => {
     db.tables.jumia_brands = [{ code: 7, name: "Oraimo" }, { code: 8, name: "Oraimo Pro" }];
     await drafted(BRAND, { brand: "Generic" });

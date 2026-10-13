@@ -38,6 +38,7 @@ import { capabilities, claimsInability, parseAction, type AssistantAction } from
 import { findProducts, type ShopProduct } from "@/lib/jumia/shop";
 import { EXAMPLES, NEVER_CANT, NOT_YET_EXAMPLES, contextText, type Clarify, type FrontDoorInput, type FrontDoorUsage } from "@/lib/assistant-v2/front-door";
 import { actionJson, actionTools } from "@/lib/assistant-v2/actions";
+import { qcOpenProduct } from "@/lib/whatsapp/qc-open-question";
 
 // ─── Tools ───────────────────────────────────────────────────────────────────
 
@@ -319,11 +320,13 @@ export async function agentRead(
   // assistant_followup: a rejected product's question that stays open).
   const context = [
     ...input.conversation, ...(input.listed?.items ?? []).map((l) => `Bot: ${l}`),
-    ...(opts.followup && input.waitingFor ? [`Bot: ${input.waitingFor}`] : []),
+    ...(opts.followup && qcOpenProduct(input.waitingFor) ? [`Bot: ${qcOpenProduct(input.waitingFor)}`] : []),
   ].join("\n");
   const asked = input.answered ? [...input.conversation].reverse().find((l) => l.startsWith("Bot:"))?.slice(4).trim() : undefined;
   const said = asked ? `${asked}\n${input.message}` : input.message;
   let needsAsked = false;
+  /** The first change's own question: what the seller gets if the second try comes to nothing. */
+  let needsText = "";
   // contextText ends with their new message.
   const turns: GeminiTurn[] = [{ role: "user", parts: [{ text: agentContext(input) }] }];
   const log: string[] = [];
@@ -391,6 +394,7 @@ export async function agentRead(
         });
         if (checked.type === "needs") {
           needsAsked = true;
+          needsText = checked.text;
           log.push("(content_change not sent: asked again)");
           turns.push(r.turn, { role: "user", parts: [{ functionResponse: { ...(change.id ? { id: change.id } : {}), name: "content_change", response: { result: checked.why } } }] });
           continue;
@@ -445,6 +449,12 @@ export async function agentRead(
     if (action.type === "unclear" || seen.has(key)) continue;
     seen.add(key);
     actions.push(action);
+  }
+  // Sent back once and the second try came to nothing (nothing to do, or its
+  // reply said it can't and the third call failed): today's question, as
+  // the first change would have had (reviewing step 3).
+  if (needsText && actions.every((a) => a.type === "unclear" || (a.type === "not_yet" && !!a.blocked))) {
+    return { actions: [{ type: "reply", text: needsText, link: null }], clarify: null, raw, calls };
   }
   return { actions: actions.length > 0 ? actions : [{ type: "unclear" }], clarify: null, raw, calls };
 }

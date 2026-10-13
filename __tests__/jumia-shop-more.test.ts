@@ -694,6 +694,15 @@ describe("rejected products, fixed from what Jumia's quality check said", () => 
     expect(updated().attributes).toContainEqual({ name: "fda", value: "FDA/CS/24-1234" });
   });
 
+  // Reviewing step 5: learned from the words the fix was decided from, a pasted reason included.
+  it("a reason pasted from Vendor Center is learned from; a placeholder brand never as a real one", async () => {
+    reject(2, ""); // Jumia's API sent no reason with it.
+    await fixRejected(USER, PHONE, "wellington boot", "Kindly avoid using Fashion on non-Fashion items instead use Generic as brand");
+    expect(db.tables.jumia_qc_required ?? []).toEqual([]);
+    await fixRejected(USER, PHONE, "wellington boot", "Kindly Provide Product's Health/Food Regulation Registration Number");
+    expect(db.tables.jumia_qc_required).toEqual([expect.objectContaining({ category_code: 1000844, field: "fda" })]);
+  });
+
   // A seller, 2026-10-11: "FDA/SD.255-112170" is the number itself; its "FDA" isn't a lead-in to strip.
   it("an FDA number that starts with FDA keeps it", async () => {
     reject(2, "Kindly Provide Product's Health/Food Regulation Registration Number. (Mandatory FDA registration number is missing.)");
