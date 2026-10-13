@@ -112,6 +112,30 @@ describe("a live product's other details", () => {
     expect(checkDetailValue(ATTRS[3], "heavy")).toMatchObject({ ok: false });
   });
 
+  // Owner's web chat, 2026-10-12: "Change the weight to 0.1kg" went to Jumia
+  // as the text "0.1kg". Jumia's weight is a text field ("string") in every
+  // category, so the number check above never ran on it.
+  it("a weight goes in as the number in kg, whatever the field's type", () => {
+    const weight = attr("product_weight", "Weight (kg)", { required: true });
+    expect(checkDetailValue(weight, "0.1kg")).toEqual({ ok: true, value: "0.1" });
+    expect(checkDetailValue(weight, "0.1 kg")).toEqual({ ok: true, value: "0.1" });
+    expect(checkDetailValue(weight, "200g")).toEqual({ ok: true, value: "0.2" });
+    expect(checkDetailValue(weight, "350 grams")).toEqual({ ok: true, value: "0.35" });
+    expect(checkDetailValue(weight, "1.5")).toEqual({ ok: true, value: "1.5" });
+    // A bare big number could be grams or kilos: asked, never guessed.
+    expect(checkDetailValue(weight, "350")).toEqual({ ok: false, why: "Is that 350 g or 350 kg?" });
+    expect(checkDetailValue(weight, "That is the weight listed")).toEqual({ ok: false, why: expect.stringContaining("in kg") });
+    // The same through the change itself.
+    expect(resolveDetails({ details: { weight: "0.1kg" } }, SET, [weight], null))
+      .toEqual({ ok: true, fields: { attributes: [{ name: "product_weight", label: "Weight (kg)", value: "0.1" }] } });
+  });
+
+  it("other text details are left as they were said", () => {
+    expect(checkDetailValue(attr("model", "Model"), "X200 0.5kg edition")).toEqual({ ok: true, value: "X200 0.5kg edition" });
+    expect(checkDetailValue(attr("net_weight", "Net Weight"), "500 g")).toEqual({ ok: true, value: "500 g" });
+    expect(checkDetailValue(attr("main_material", "Main Material"), "Cotton")).toEqual({ ok: true, value: "Cotton" });
+  });
+
   it("details, a barcode and a size's name as the update takes them", () => {
     expect(resolveDetails({ details: { colour: "blue", material: "satin" } }, SET, ATTRS, null)).toEqual({
       ok: true, fields: { attributes: [{ name: "color", label: "Color", value: "Blue" }, { name: "main_material", label: "Main Material", value: "satin" }] },

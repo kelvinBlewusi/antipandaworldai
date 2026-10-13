@@ -14,6 +14,7 @@
 
 import { getCategoryAttributes, getCategoryByCode, fetchAttributesFromJumia, upsertAttributes, type JumiaCategoryAttribute } from "@/lib/jumia/categories";
 import { allowedValueFor, checkNumericConstraint } from "@/lib/jumia/preflight";
+import { parseWeightKg } from "@/lib/jumia/qc-answers";
 import type { ContentFields, ProductSet } from "@/lib/jumia/shop";
 
 /** What the chat changes elsewhere, or Jumia doesn't take here: never a "detail". */
@@ -53,11 +54,30 @@ export function matchAttribute(word: string, attrs: JumiaCategoryAttribute[]): J
   return best?.attr ?? null;
 }
 
+/**
+ * The shipping weight: Jumia's `product_weight`, "Weight (kg)", a text field
+ * in every category (2026-10-13: 1,251 of them), so a number check never ran
+ * on it. Not a net weight or a volume. Pure.
+ */
+export function isShippingWeight(attr: Pick<JumiaCategoryAttribute, "name" | "label">): boolean {
+  if (attr.name.toLowerCase() === "product_weight") return true;
+  const words = `${attr.name.replace(/_/g, " ")} ${attr.label ?? ""}`;
+  return /\bweight\b/i.test(words) && !/\b(net|volume)\b/i.test(words);
+}
+
 /** Their value as the detail takes it (an allowed option's spelling, a number in bounds), or why not. Pure. */
 export function checkDetailValue(attr: JumiaCategoryAttribute, value: string): { ok: true; value: string } | { ok: false; why: string } {
   const label = attr.label || attr.name.replace(/_/g, " ");
   const raw = value.trim();
   if (!raw) return { ok: false, why: `What should its ${label.toLowerCase()} be?` };
+  // A weight goes in as the number in kg (owner's web chat, 2026-10-12:
+  // "Change the weight to 0.1kg" went to Jumia as the text "0.1kg").
+  if (attr.allowed_values.length === 0 && isShippingWeight(attr)) {
+    const w = parseWeightKg(raw);
+    if (!w) return { ok: false, why: `The weight goes on Jumia in kg, packed as it ships, e.g. "0.35 kg" or "350 g".` };
+    if ("unit" in w) return { ok: false, why: `Is that ${w.unit} g or ${w.unit} kg?` };
+    return { ok: true, value: w.kg };
+  }
   if (attr.allowed_values.length > 0) {
     const v = allowedValueFor(raw, attr);
     if (v) return { ok: true, value: v };
